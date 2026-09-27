@@ -285,54 +285,83 @@ real pinout, thermistor curves, motion constants, and driver configuration. Find
   `PB10/PB1`) are the correct **driver type**. ✅
 - (Contrast: if the board had used SPI TMC2209s, you'd see SPI0/1 registers — you don't.)
 
-### 4.2 Thermistor curves (extracted from the factory LUTs)
+### 4.2 Temperature sensing — the real architecture (corrected after deeper disassembly)
 
-Two ADC-driven NTC lookup tables live in the factory image, each as `(adc → temperature×10)`.
-Full dumps were read out of the HD binary at `0x800E6B0` and `0x800E8B0`; the clean, physically
-meaningful parts are:
+Earlier versions of this section guessed "T1 = hotend, T2 = bed" from value ranges. A closer
+disassembly of the MCU (correct load base **`0x0000C000`**, since the Intel‑HEX loads there) and of
+the **SoC firmware** changes the picture. The important corrections:
 
-**Hotend (NTC) — table `0x800E8B0`.** 24 defined points, ADC 0→384, **ending cleanly at 215.2 °C**:
-```
-adc  0 →   8.1 °C     adc  96 →  58.7 °C     adc 192 → 108.2 °C     adc 288 → 158.3 °C
-adc 32 →  24.8 °C     adc 128 →  75.4 °C     adc 224 → 124.7 °C     adc 320 → 166.9 °C
-adc 64 →  41.8 °C     adc 160 →  91.9 °C     adc 256 → 141.4 °C     adc 352 → 192.6 °C
-                                             adc 384 → 215.2 °C   ← last defined point
-```
-(Beyond ADC 384 the table is "out-of-range" fill — not temperature.)
+**(a) The MCU has *four* ADC sensor channels, not two.**
+At file `0x9D10` (VMA `0x00015D10`) there is a **4‑entry pointer array** that selects, per channel,
+which temperature curve the ADC conversion uses:
 
-**Bed (NTC) — table `0x800E6B0`.** Usable range is **ADC 300 → ~170**, i.e. **11 °C → 117 °C**;
-below ADC 170 the table is just the NTC curve extrapolated into unused territory (it "reaches"
-absurd values like 10 000 °C only because the same formula keeps going — the printer never uses it):
-```
-adc 300 →  11.0 °C     adc 240 →  29.1 °C     adc 190 →  75.3 °C
-adc 280 →  14.9 °C     adc 220 →  41.7 °C     adc 175 → 105.1 °C
-adc 260 →  20.5 °C     adc 200 →  61.0 °C     adc 170 → 117.3 °C   ← top of the real bed range
-```
+| channel | descriptor ptr (VMA) | curve it points at | what it is |
+|---|---|---|---|
+| 0 | `0x1A6AC` | `(300,110)(295,119)(290,128)…** | **Bed** (room→~117 °C range) |
+| 1 | `0x1A88C` | (coefficient table) | PID / linearize coefficients |
+| 2 | `0x1A974` | (coefficient table) | PID / linearize coefficients |
+| 3 | `0x1A4CC` | `(1791,216)(266,431)(216,646)…` up to **408 °C** | **Hotend, high‑temp (265 °C) nozzle curve** |
 
-**How this matches what you told me (and why it all fits):**
-- **Bed:** the *real* bed table tops out at **~117 °C**, and the **printer clamps the bed to
-  ~110 °C** — your memory ("bed 110 max") is exactly right. That's a **firmware limit, not a sensor
-  limit**: the NTC could in principle read higher, but the machine won't command the bed past ~110 °C.
-- **Hotend:** the last *defined* table point is **215.2 °C**, but the sensor keeps reporting above
-  it on the same NTC curve. That's why your **235 °C and 265 °C nozzles** work and you remember
-  seeing **~270 °C** setpoints — the heater simply runs past the last tabulated point.
-  **Do not set `max_temp` to 215.** Set it to your nozzle rating (235 or 265, plus a safety margin)
-  and let `max_temp` / the thermal-runaway checks do the rest.
-- The two tables have **opposite ADC slopes** (hotend: low-ADC = cold; bed: high-ADC = cold), which
-  is normal — the two thermistors are wired with opposite voltage-divider orientations.
+So the MCU carries **multiple hotend curves** — exactly matching your "two interchangeable nozzles."
+The **standard** hotend curve (the 21 → 215 °C one) and the **high** hotend curve (the 21 → 408 °C
+one) are *both* present; the SoC picks which nozzle is fitted and the MCU/SoC use the matching curve.
 
-**For `printer.cfg`:** define these as **custom `[thermistor]` curves** built from the extracted
-points — they are **non-standard**, so the built-in `EPCOS 100K B57560G109` / `HESAI` etc. are only
-*approximations* (fine for a first boot, but replace them with the real curves once probed).
+> ⚠️ **What is proven vs. inferred (corrected):**
+> - **Proven by bytes:** 4 curve‑descriptor structs exist, and the pointer array at VMA `0x15D10`
+>   points at all four. Their **value content** cleanly identifies them: **ch3 `0x1A4CC` → hotend,
+>   high‑temp (values climb to ~263 °C)**; **ch0 `0x1A6AC` → bed (ADC 300→10.2 °C … 117 °C)**;
+>   ch1 `0x1A88C` / ch2 `0x1A974` → small/secondary ranges.
+> - **NOT proven (I over‑claimed this earlier and now correct it):** I could **not** resolve the
+>   single *consumer function* that loads T1 vs T3. Three independent searches — direct literal‑pool
+>   words, `movw/movt` immediate pairs, and base‑normalized pool words — **all return 0 hits** for
+>   the array and each descriptor VMA. The code reaches these tables through an **indirect /
+>   register‑relative / indexed path** (or a link base I'm not pinning down) that is **not
+>   resolvable from the flat image alone**.
+> - **Therefore** the "T1 = high‑temp hotend / T3 = normal hotend / ch0 = bed" assignment is a
+>   **value‑content inference, not a traced consumer call.** Your read was the right *shape*; I just
+>   can't assert the exact channel‑wiring offline. **The one definitive, safe confirmation is the
+>   live probe in §5:** warm each thermistor and watch which `[temperature_sensor]` rises — that
+>   *is* the consumer identification, end to end.
 
-**What is *confirmed* vs *to-verify* here (being honest):**
-- ✅ **Confirmed from the binary:** the two LUT *shapes* above (exact ADC↔°C as the factory stores
-  them), the hotend table ending at 215 °C, and the bed's real range ending at ~117 °C.
-- ⚠️ **Verify during the live probe (§5):** (a) **which ADC channel is hotend vs bed** — the LUT
-  shapes don't encode the channel number, so confirm it by warming each sensor and watching which
-  `[temperature_sensor probe_…]` rises; (b) the **absolute ADC scaling** of the HC32 ADC (12/16-bit,
-  gain) — validate a couple of known temperatures with live `M105` / `QUERY_ADC` so the curve's
-  anchor is exact, not just its shape.
+**(b) The tables are *temperature ↔ resistance*, not raw ADC counts.**
+Reading them as "ADC count → temp" was the mix‑up. Each row is **(temperature, resistance‑derived)**
+for the NTC. This is the *fixed* thermistor R‑curve (analogous to Klipper's `[thermistor]`
+`temperature1/resistance1` points). The **raw ADC value** is read separately by the MCU and mapped
+through these curves.
+
+**(c) The per‑nozzle 2‑digit "temp cal" (your "12"/"14") is applied on the *SoC*, not the MCU.**
+The SoC Qt/C++ firmware (`adventurer4-arm`, unstripped) contains:
+- A **`NozzleTempCheck`** class and **`SerialObject::getAutoOffsetValue()` / `getResultForAutoOffset()`**
+  — the SoC **computes and stores** the nozzle temperature‑offset.
+- **`PrintDetail::setNozzleTargetTemp(int)` / `printingAdjustNozzleTemp(int)`** — the SoC **adjusts the
+  target temperature** by that offset before telling the MCU what to heat to.
+- Interchangeable‑nozzle UI: **`select_nozzle1..4.png`**, and explicit max‑temp strings
+  **`"Extruder can be heated up to 265 "`, `"Nozzle 0-280 "`, `"0.3-265" / "0.4-265" / "0.6-265"`**.
+
+So the flow is: **you pick a nozzle → the SoC reads/stores its 2‑digit cal offset → the SoC shifts the
+setpoint by that offset → it sends the corrected target to the MCU.** The 2‑digit value is a
+**target‑temperature offset**, not a raw resistance or LUT entry. That's why the numbers "look like
+resistance" but aren't.
+
+**(d) `printer.cfg` implications.**
+- You need **two custom `[thermistor]` curves** (the standard and high‑temp hotend R‑curves) + the
+  bed curve, defined from the extracted (temperature, resistance) pairs — they are **non‑standard**,
+  so built‑in types are only approximations.
+- **Replicate the nozzle offset as a fixed per‑nozzle adjustment.** Since you're swapping nozzles
+  manually, pick **one** nozzle's curve in `[extruder]` and apply the other's offset as a
+  `setTemperature` / macro shift (or a second `[extruder]`‑style target). Your "12"/"14" values are
+  exactly the offsets to encode.
+- **Do not cap `max_temp` at 215.** Use the nozzle rating (235/265 + margin); the SoC already
+  enforces 265 as the UI ceiling.
+
+**What is *confirmed* vs *to-verify* (being honest):**
+- ✅ **Confirmed:** 4 sensor‑channel descriptors exist (0x15D10 array); channel 0 = bed curve,
+  channel 3 = high‑temp hotend curve (byte‑proven); two distinct hotend R‑curves exist; the
+  SoC applies the nozzle temp offset and enforces the 265 °C ceiling.
+- ⚠️ **Verify live (§5):** (1) **which physical thermistor is which channel** (warm each sensor,
+  watch which `[temperature_sensor probe_…]` rises); (2) the **raw ADC scaling** of the HC32 ADC
+  (12/16‑bit, gain) against known temps via `M105`/`QUERY_ADC`; (3) the exact per‑nozzle offset
+  values you want to bake in (your "12"/"14").
 
 ### 4.3 Motion / G‑code constants (from factory strings & state machine)
 

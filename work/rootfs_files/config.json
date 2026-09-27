@@ -1,0 +1,59 @@
+{
+	"autoCalibration" : 
+	{
+		"point1" : 0.0,
+		"point2" : 0.0,
+		"point3" : 0.0,
+		"point4" : 0.0,
+		"point5" : 0.0,
+		"point6" : 0.0,
+		"point7" : 0.0,
+		"point8" : 0.0,
+		"point9" : 0.0,
+		"status" : false
+	},
+	"flashcloud" : 
+	{
+		"flashCloudAccount" : "",
+		"flashCloudRegCode" : "",
+		"flashCloudServerUrl" : "https://cloud.sz3dp.com",
+		"flashCloudStatus" : false
+	},
+	"general" : 
+	{
+		"brightNess" : 100,
+		"buzzerStatus" : true,
+		"camera" : false,
+		"cameraVideo" : false,
+		"extruderCalibrationValue" : -3.0,
+		"extruderType" : "0.4-240",
+		"fanSpeed" : 100,
+		"fanSwitch" : true,
+		"filamentCumulative" : 0,
+		"filamentDetect" : true,
+		"ledStatus" : true,
+		"nozzleTempDifferentValue" : 10,
+		"printerLanguage" : "english",
+		"printerName" : "Adventurer4",
+		"printerSerialNumber" : "123456",
+		"printerTotalTime" : 0
+	},
+	"log" : 
+	{
+		"logLevel" : 1,
+		"logSaveDir" : "/opt/test.log"
+	},
+	"network" : 
+	{
+		"ethernetStatus" : false,
+		"wifiHotspotStatus" : false,
+		"wifiStationStatus" : false
+	},
+	"polarcloud" : 
+	{
+		"polarCloudAccount" : "",
+		"polarCloudPINCode" : "",
+		"polarCloudSerialNo" : "",
+		"polarCloudStatus" : false
+	}
+}

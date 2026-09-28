@@ -1,0 +1,455 @@
+# Flashforge Adventurer 4 — Firmware Exploration Report
+
+Facts extracted from the official firmware package (V2.2.4 / control 2.3.0, build
+`20230216`) and the eMMC backup. Target board: **HC32F460 (HD revision)**.
+
+---
+
+## 1. System architecture
+
+| Layer | Hardware | Software |
+|---|---|---|
+| Motion / thermistor / driver MCU | **HC32F460** (HDSC / Huatong, Cortex-M4), HD rev | Proprietary bare-metal app, vendor BSP |
+| Host / UI / G-code parser | Sunxi SoC (armv7l), kernel `3.4.39+` | Qt/C++ app `adventurer4-arm` v2.2.4, launched by a Go supervisor `ffstartup-arm` |
+
+- The **MCU has no G-code engine**. It receives motion/temperature commands over serial
+  (`/dev/ttyS1` at 115200 on the SoC) and runs a state machine plus embedded power-loss G-code.
+- The **SoC owns**: G-code parsing, UI, file management, the nozzle-calibration model,
+  and the MCU's **NRST / BOOT0 GPIO strapping** (required for flashing).
+- Neither binary contains Marlin, Repetier, or any third-party firmware signature
+  (verified by string scan: 0 hits).
+
+### 1.1 MCU firmware identification
+
+- Built on **HDSC's official HC32F460 standard peripheral driver library**. Source paths
+  embedded in the binary (`hd.bin`, 60 416 bytes, load base `0x0800C000`):
+
+```
+source\driver\src\hc32f460_adc.c
+source\driver\src\hc32f460_clk.c
+source\driver\src\hc32f460_dmac.c
+source\driver\src\hc32f460_efm.c
+source\driver\src\hc32f460_exint_nmi_swi.c
+source\driver\src\hc32f460_gpio.c
+source\driver\src\hc32f460_interrupts.c
+source\driver\src\hc32f460_pwc.c
+source\driver\src\hc32f460_timer0.c
+source\driver\src\hc32f460_timera.c
+source\driver\src\hc32f460_usart.c
+source\driver\src\hc32f460_wdt.c
+```
+
+- No RTOS, no G-code parser, no company/developer signature inside the MCU image.
+- The vendor (Flashforge) signs the **SoC** layer: `"Flashforge Adventurer 4"`,
+  `"Machine Type: Flashforge Adventurer 4"`, `support@flashforge.com`, version `2.2.4 20230216`.
+- SoC app: **Qt (4.8.6-era toolchain), armv7l, glibc 2.19, dynamically linked, unstripped
+  with full debug info** — its complete symbol table is readable (class names listed in §6).
+
+---
+
+## 2. Flash memory map (HD revision)
+
+| Region | Address | Content |
+|---|---|---|
+| ROM bootloader / ISP | `0x00000000`–… | ROM-resident; **never written**. Entry condition: NRST pulse with BOOT0 held HIGH |
+| Application (HD) | **`0x0800C000`** | Factory `Adventurer4-HD-IAP-2.3.0-20230216.hex`, app 60 416 B |
+| Application (NA rev) | `0x08010000` | Factory `Adventurer4-NA-IAP-2.3.0-20230216.hex` |
+
+Rules:
+
+- **Write only the app window** (`0x0800C000` for HD). Never `0x00000000`.
+- A corrupted app is **always recoverable**: the ISP bootloader lives in ROM, so the next
+  reset/BOOT0 pulse re-enters ISP and the factory image can be re-flashed in one command.
+- Klipper hex: `arm-none-eabi-objcopy -I binary -O ihex --change-address=0xC000 klipper.bin klipper.hex`
+  (round-trip verified byte-identical).
+
+### 2.1 ISP entry — the GPIO dance (decoded from `IAPCommand`)
+
+`IAPCommand` is a fork of `stm32isp`. Its `main()` sequence:
+
+```text
+stm32Unexport()                     # reset sysfs GPIO state
+port = /dev/ttyS1 ; baud = 115200
+gpio_out(35, 1)                     # BOOT0 / ISP-select = HIGH          (SoC GPIO 35)
+sleep(1)                            # hold 1 s
+r = stm32Init(port, baud)
+      └─ stm32Sync loop:
+           send 0x43 ('C'), read reply
+           reply 6  => HD revision, connected
+           reply 7  => NA revision, connected
+           no reply => gpio_out(34,0); usleep(15680);
+                       gpio_out(34,1); usleep(15680);   # NRST pulse, SoC GPIO 34
+                       retry until timeout
+           ("Can not connect to board, Serial port ... timed-out." = strapping failed)
+if r == 6:  flash HD hex
+if r == 7:  flash NA hex
+# after a verified write:
+gpio_out(35, 0)                     # release BOOT0 -> normal app boot
+touch /root/<status-flag>           # HD or NA flag file
+sync()
+```
+
+Exact `stm32Reboot()` (exit ISP, run new app):
+
+```text
+gpio_out(34, 0)                     # assert NRST (LOW)
+usleep(15680)                       # 15.68 ms
+gpio_out(34, 1)                     # release NRST (HIGH)
+usleep(15680)
+```
+
+Key facts:
+
+- **BOOT0 (GPIO 35) must be HIGH before and during the NRST pulse (GPIO 34).**
+  NRST pulse width: **15.68 ms LOW, then 15.68 ms HIGH**. The 1 s hold after setting
+  BOOT0 is part of the required timing.
+- Serial sync byte `0x43`; reply `6` (HD) / `7` (NA) also performs **revision auto-detection** —
+  which is why the factory `run.sh` passes **both** hex files:
+  `IAPCommand Adventurer4-NA-IAP-….hex Adventurer4-HD-IAP-….hex`.
+- The GPIOs are driven via Linux sysfs (`/sys/class/gpio`), which is why the tool must run
+  **on the SoC as root** — a generic `stm32isp` on another board has no access to these lines
+  and times out.
+
+---
+
+## 3. Verified pins
+
+### 3.1 HC32F460 ADC capability (from the chip HAL `adc.c`)
+
+- Valid ADC pins: **PA0–PA7, PB0, PB1, PC0–PC5** (16 channels).
+- **PB7 is NOT an ADC pin** — the stock-template `sensor_pin: PB7` (hotend) cannot work on this
+  chip; Klipper aborts with "Not a valid ADC pin".
+
+### 3.2 Klipper port serial pin options (from `src/hc32f460/Kconfig`)
+
+| Option | Pins | Status in current config |
+|---|---|---|
+| `HC32F460_SERIAL_PA7_PA8` | PA7 / PA8 | **selected — CONFLICTS with X `step_pin: PA8`** |
+| `HC32F460_SERIAL_PA13_PA14` | PA13 / PA14 | free (SWD pins — avoid unless SWD unused) |
+| `HC32F460_SERIAL_PA3_PA2` | PA3 / PA2 | **free — recommended** |
+| `HC32F460_SERIAL_PH2_PB10` | PH2 / PB10 | PB10 = TMC mux select A — no |
+| `HC32F460_SERIAL_PA15_PA9` | PA15 / PA9 | PA15 = Z step — no |
+| `HC32F460_SERIAL_PC0_PC1` | PC0 / PC1 | PC1 = Y endstop — no |
+
+Port clock: `CONFIG_CLOCK_FREQ=200000000` (200 MHz). `CONFIG_WANT_TMCUART=y` (TMC2209-over-UART
+supported by the port, `tmcuart.c`). The port does **not** implement `temperature_mcu`.
+
+### 3.3 Board-traced pins (traced on the physical mainboard, kept as authoritative)
+
+| Function | Pin | Note |
+|---|---|---|
+| X step / dir / enable | PA8 / !PC9 / !PA11 | |
+| Y step / dir / enable | PB14 / !PB13 / !PB15 | |
+| Z step / dir / enable | PA15 / !PA12 / !PC11 | |
+| E step / dir / enable | PC7 / PC6 / !PC8 | |
+| X endstop | ^PC3 | |
+| Y endstop | ^PC1 | |
+| Z endstop | !PB5 | |
+| Hotend heater | PA1 | |
+| Bed heater | PC4 | |
+| Bed thermistor | PA0 | valid ADC ✅ |
+| Hotend thermistor | **unknown — probe** | must be one of the valid ADC pins; PB7 (stock template) is invalid |
+| Hotend fan | PC2 (`heater_fan`) | |
+| Part fan | PA5 | |
+| Controller fan | PC5 | |
+| Chamber fan | PB9 | |
+| LED | **unknown — probe** | stock template: PB12 (unconfirmed) |
+| TMC2209 UART (shared) | PC10 | 4:1 analog mux, COM = PC10 |
+| Mux select A / B | PB10 / PB1 | |
+| Mux channel map | X = ch0, E = ch1, Y = ch2, Z = ch3 | `select_pins` per axis as in the config |
+| MCU ↔ SoC UART | SoC `/dev/ttyS1` @ 115200 | uses MCU USART0; becomes **inactive for Klipper** after the serial move to PA3/PA2 |
+
+---
+
+## 4. Temperature system
+
+### 4.1 MCU side — four sensor curve descriptors
+
+A 4-entry pointer array at VMA `0x08015D10` (file `0x9D10`) selects the per-channel conversion
+table. The descriptors (VMA → content):
+
+| VMA | Content | Interpretation |
+|---|---|---|
+| `0x0801A4CC` | pair list climbing to ≈ 263 °C | **hotend, high-temp nozzle curve** |
+| `0x0801A6AC` | (10.2 °C, 300), (11.0, 295), (11.9, 290), (12.8, 285) … (≈117 °C, 170) | **bed** |
+| `0x0801A88C` | small/secondary range | secondary sensor |
+| `0x0801A974` | small/secondary range | secondary sensor |
+
+Two distinct hotend curves exist in the image (standard: ADC 0→384, 8.1 °C → 215.2 °C;
+high-temp up to ≈ 408 °C tabulated), matching the interchangeable nozzles (0.3/0.4/0.6 mm,
+rated up to 265 °C).
+
+Facts and limits of this section:
+
+- The **existence** of the four descriptors and their **value content** are byte-verified.
+- The **consumer function** that loads a given table was **not resolvable from the flat image**
+  (literal-pool, `movw/movt`, and base-normalized searches all return zero references — the
+  code reaches the tables through an indirect/indexed path). The table→physical-thermistor
+  mapping is therefore **value-based inference**, to be confirmed by the live probe
+  (warm each sensor, observe which `[temperature_sensor]` rises).
+- The tables are **temperature ↔ ADC-value** LUTs, not resistance curves; the absolute ADC
+  scaling (gain, Vref) must be validated live with `QUERY_ADC`.
+
+### 4.2 SoC side — nozzle calibration model (the "12"/"14" values)
+
+The per-nozzle two-digit "nozzle temp cal" value is a **target-temperature offset applied by the
+SoC**, not stored or used by the MCU. Evidence from `adventurer4-arm` symbols:
+
+```
+Config::getExtruderOneTempOffset      Config::getExtruderTwoTempOffset
+Config::getExtruderThreeTempOffset    Config::getExtruderFourTempOffset
+Config::getExtruderCalibrationValue   Config::getNozzleTempDifferentValue
+Config::getAutoCalibrationSwitch      Config::getAutoPoint
+NozzleTempCheck::*
+SerialObject::getAutoOffsetValue      SerialObject::getResultForAutoOffset
+SerialObject::printingAdjustNozzleTemp
+```
+
+Flow: user selects nozzle (UI: `select_nozzle1..4.png`) → SoC reads the stored offset for that
+nozzle → SoC shifts the target temperature by the offset before sending it to the MCU.
+SoC-enforced ceiling strings: `"Extruder can be heated up to 265 "`, `"Nozzle 0-280 "`,
+`"0.3-265"`, `"0.4-265"`, `"0.6-265"`.
+
+**Klipper implication:** encode the offset as a host-side macro (per nozzle), and set
+`max_temp` to the nozzle rating + margin (265–280), not the 215 °C table limit.
+
+### 4.3 What does not exist
+
+There is **no cabin / chamber / board temperature sensor** anywhere in the MCU or SoC firmware
+(verified by full string scan). The four ADC channels are: hotend (standard), hotend (high-temp),
+bed, and one secondary/unused channel.
+
+---
+
+## 5. G-code inventory
+
+### 5.1 SoC parser (`adventurer4-arm`)
+
+```
+G-codes:  G0 G1 G2 G3 G4 G5 G6 G7 G8 G9 G44 G47 G90 G91 G92 G161 G162
+M-codes:  M0 M1 M2 M3 M4 M5 M6 M7 M8 M9 M17 M18 M25 M31 M36 M37 M38 M39
+          M47 M63 M103 M104 M105 M107 M112 M113 M114 M117 M118 M119
+          M121 M122 M140 M144 M145 M652 M653 M654 M901
+```
+
+### 5.2 MCU-embedded G-code (power-loss recovery / state)
+
+| Address (file) | String |
+|---|---|
+| `0x0EB15` | `G90` |
+| `0x0EB19` | `G28` |
+| `0x0EB1D` | `M132 X Y Z A B` (store position) |
+| `0x0EB32` | `G1 Z15 F400` (Z lift) |
+| `0x0EB40` | `M117$` (status string) |
+
+State machine strings: `READY, BUILDING, BUILDING_FROM_SD, BUILDING_ONBOARD, ERROR,
+CANCEL_BUILD, HEAT_SHUTDOWN, MOVING, DELAY, HOMING, WAIT_ON_TOOL, WAIT_ON_PLATFORM,
+WAIT_ON_BUTTON` (the MCU can cut heat autonomously via `HEAT_SHUTDOWN`).
+
+SoC auto-generated moves (calibration/test patterns) are inventoried in `GCODE-STRINGS.md`.
+
+---
+
+## 6. SoC software stack
+
+| Component | Details |
+|---|---|
+| `adventurer4-arm` | Qt/C++ main app; UI, G-code parser, control model; unstripped, debug info |
+| `ffstartup-arm` | Go supervisor; reads `ffstartup.cfg`, launches `./software/%VERSION%/adventurer4-arm` with `-1;-D;-qws` |
+| `ffstartup.cfg` | `LogDir=/opt/finder_rush/log`, `Kernel=kernel`, `Control=control`, `Software=software`, `Library=library`, `Duration=30` |
+| MCU link | `/dev/ttyS1`, 115200 |
+| Network | `eth0` and `wlan0` managed; WiFi AP mode: SSID `Adventurer 4`, password `12345678` (`rtl_hostapd_2G.conf`); DHCP check via `1slt_dhcp_check()` |
+| Vendor updater | `flashforge_init.sh` (disk-based, §8) → `update_control/kernel/software/library` → per-package `run.sh`; `control-2.3.0/run.sh` runs `IAPCommand` on both MCU hexes |
+| Boot guard | updater requires `armv7l` + kernel `3.4.39+`; machine check skipped when a `screwflag` file is present |
+
+Notable `Config` / `SerialObject` symbols (SoC control model): `getExtruder*TempOffset`,
+`getFlashCloud*`, `getPolarCloud*` (cloud accounts), `hostHeartCheckTemperature`,
+`sendPrintLayer`, `readM25`, `printingPersent`, `gpioBufCheckInit`, `ParseXYZEFField`.
+
+---
+
+## 7. Patching `stm32isp` for this board
+
+`IAPCommand` is a `stm32isp` fork; its delta over upstream is small and fully decoded.
+A clean fork needs exactly:
+
+1. **GPIO strapping before serial open** (the part generic `stm32isp` lacks):
+   ```c
+   static void ad4_gpios_init(void) {
+       /* SoC sysfs, root required */
+       sysfs_gpio_export(34);           /* NRST  */
+       sysfs_gpio_export(35);           /* BOOT0 */
+       sysfs_gpio_dir(34, 1);           /* out   */
+       sysfs_gpio_dir(35, 1);           /* out   */
+       sysfs_gpio_set(35, 1);           /* BOOT0 = HIGH */
+       sleep(1);                        /* required hold */
+   }
+   static void ad4_nrst_pulse(void) {
+       sysfs_gpio_set(34, 0);  usleep(15680);
+       sysfs_gpio_set(34, 1);  usleep(15680);
+   }
+   ```
+2. **Sync-with-retry**: send `0x43`; on no reply, call `ad4_nrst_pulse()` and retry
+   (upstream times out after one attempt). Accept replies `6` (HD) or `7` (NA).
+3. **Dual-hex argument model**: `stm32isp-ad4 <na.hex> <hd.hex>` — select the
+   file from the sync reply instead of assuming one chip (the factory `run.sh`
+   passes exactly these two arguments; port/baud are internal defaults).
+4. **Post-write release**: `sysfs_gpio_set(35, 0)` (BOOT0 low) + one `ad4_nrst_pulse()`
+   so the MCU boots the new app.
+5. **Optional**: status flag file + verbose logging (the value of a custom fork over the
+   opaque factory binary).
+
+Everything else (packet framing, flash page writes, verify) is standard `stm32isp` and
+unchanged. Roughly 50–80 lines of added C.
+
+---
+
+## 8. Unattended flashing (USB disk)
+
+The factory updater is a script named **`flashforge_init.sh`** placed at the root of the
+removable disk. The SoC's boot/update path detects and executes it (parameters
+`Adventurer4 0012`). Mirror that layout with our own minimal runner.
+
+### 8.1 Disk layout (FAT32)
+
+```
+/                       ← disk root
+  flashforge_init.sh    ← runner (below)
+  screwflag             ← empty file: skips the machine-type check
+  IAPCommand            ← factory ARM binary (or the stm32isp fork, §7)
+  klipper.hex           ← Klipper @ 0x0800C000
+  factory-HD.hex        ← known-good restore image (never delete)
+  RESTORE               ← if this file exists, the script flashes factory-HD.hex instead
+```
+
+### 8.2 `flashforge_init.sh`
+
+```sh
+#!/bin/sh
+# AD4 Klipper unattended flash — run from USB disk by the SoC boot/update path.
+# Same guard contract as the factory script.
+set -x
+WORK_DIR=`dirname $0`
+
+[ "$(uname -m)"  != "armv7l"   ] && { echo "arch error";  exit 1; }
+[ "$(uname -r)"  != "3.4.39+" ] && { echo "kernel error"; exit 1; }
+
+# 1) Stop the vendor stack so nothing holds /dev/ttyS1 or the GPIOs.
+pkill -f ffstartup-arm  2>/dev/null
+pkill -f adventurer4-arm 2>/dev/null
+sleep 2
+
+# 2) Free the MCU UART (belt and suspenders).
+fuser -k /dev/ttyS1 2>/dev/null
+sleep 1
+
+# 3) Select image: RESTORE flag => factory, else Klipper.
+if [ -f "$WORK_DIR/RESTORE" ]; then
+    IMG="$WORK_DIR/factory-HD.hex"; FLAG=restore
+else
+    IMG="$WORK_DIR/klipper.hex";   FLAG=klipper
+fi
+
+# 4) Flash. Passing the same image in both slots makes it rev-agnostic
+#    (IAPCommand auto-selects HD/NA from the sync reply 6/7).
+"$WORK_DIR/IAPCommand" "$IMG" "$IMG"
+RC=$?
+
+# 5) Record the outcome for later inspection.
+echo "$FLAG rc=$RC" > /root/ad4-flash-status 2>/dev/null || true
+sync
+exit $RC
+```
+
+Safety rules (non-negotiable):
+
+- Write **only** the app window (`0x0800C000`); the ROM ISP keeps every state recoverable.
+- `factory-HD.hex` always travels on the disk; presence of `RESTORE` reverts in one boot.
+- The script never touches flash regions other than the IAP app window.
+
+Open item (verify once on hardware): the exact trigger that makes the SoC execute the disk's
+`flashforge_init.sh` at boot (the bootloader's removable-media update hook). The name and
+argument convention match the factory package, which is the working reference.
+
+---
+
+## 9. RPi-over-Ethernet operation (Klipper host)
+
+### 9.1 Architecture and division of labor
+
+```
+[Raspberry Pi] ── UART (PA2/PA3, 250000) ──> [HC32F460 running Klipper]
+      │
+      └── Ethernet ──> [your LAN] ──> Fluidd/Mainsail (any device)
+
+[Sunxi SoC] ── GPIO 34/35 (NRST/BOOT0) ──> [HC32F460 ISP]   (flashing only)
+[USB disk]  ── flashforge_init.sh ──> [SoC]                  (unattended flash)
+```
+
+- The **RPi is the Klipper host**: klippy + Moonraker + Fluidd, reachable over Ethernet.
+- The **SoC has no role in operation** once the MCU serial is moved off the SoC's USART0.
+  Its only operational role is **flashing** (it alone is wired to NRST/BOOT0) and, later,
+  optionally a UI — which should be a **network UI** (Fluidd/Mainsail pointed at Moonraker)
+  or a small web client on the SoC, not a direct MCU link.
+- The RPi **cannot enter ISP mode itself** — it does not drive GPIO 34/35. All flashing
+  stays on the SoC path (§8). This is a hardware constraint, not a software gap.
+
+### 9.2 MCU-side change required
+
+Rebuild the Klipper firmware with a serial pair that does not collide with board pins:
+
+```
+CONFIG_HC32F460_SERIAL_PA7_PA8  ->  off
+CONFIG_HC32F460_SERIAL_PA3_PA2  ->  on
+```
+
+`PA3_PA2` is the only free, non-SWD pair (§3.2). Wire:
+
+| RPi | MCU | Note |
+|---|---|---|
+| GPIO14 (TXD) | PA2 or PA3 | if Klipper does not connect, swap the two wires |
+| GPIO15 (RXD) | the other of PA2/PA3 | |
+| GND | any GND | **GND only — do not inject 3.3 V/5 V**; the MCU is powered by the printer PSU |
+
+Baud: 250 000 (Klipper default; both sides agree). Logic levels are both 3.3 V — no shifter.
+
+### 9.3 Software on the RPi
+
+1. Raspberry Pi OS 64-bit (any Pi 3B+/4/5; 2B works).
+2. `sudo apt -y install python3-pip python3-venv git build-essential`
+3. `git clone https://github.com/Klipper3d/klipper && cd klipper && ./scripts/install-linux.sh`
+4. Enable the hardware UART and release it from Bluetooth (`/boot/config.txt`:
+   `enable_uart=1`, `dtoverlay=disable-bt`, or the equivalent in raspi-config) → `/dev/serial0`.
+5. `[mcu] serial: /dev/serial0` (see `printer.cfg`).
+6. Moonraker + Fluidd (or Mainsail) for the web UI; static IP or your router's DHCP.
+
+### 9.4 What the SoC must provide (flashing path only)
+
+- Nothing at runtime. For the unattended method: the disk from §8.
+- If a **dedicated flash mode** is wanted (so a stock-booted printer can be flashed without a
+  USB disk every time): a boot flag (e.g. `/data/klipper-mode`) that makes the SoC's rc skip
+  launching `adventurer4-arm` and run `flashforge_init.sh` from a fixed path instead. One
+  small edit to the boot rc; no driver work.
+- For a future SoC UI: run any lightweight web client (or a Chromium kiosk) pointed at
+  Moonraker on the RPi — no SoC↔MCU wiring needed at all.
+
+### 9.5 Conflict notes
+
+- While the vendor app runs, it owns `/dev/ttyS1` and may exercise the GPIO strapping at its
+  own boot. That only matters for the flash path; the RPi↔MCU link on PA2/PA3 is independent.
+- After the serial move, the SoC's old link to the MCU is dead (MCU no longer listens on its
+  USART0). Do not rely on the stock UI for temperature/motion — everything goes through Klipper.
+
+---
+
+## 10. Open items (live-board verification)
+
+| # | Item | Method |
+|---|---|---|
+| 1 | Hotend thermistor pin (and which of the two hotend curves is active) | `probe.cfg`: candidate ADC pins as `[temperature_sensor]`, warm the nozzle |
+| 2 | LED pin | `SET_PIN` sweep over candidates (mA-level, safe) |
+| 3 | Absolute ADC scaling | `QUERY_ADC` at known temperatures (ice bath, room, warm-up) |
+| 4 | Per-nozzle offsets to encode | your "12"/"14" values per fitted nozzle |
+| 5 | PA2/PA3 TX/RX order | swap wires if klippy handshake fails |
+| 6 | Exact SoC boot trigger for disk `flashforge_init.sh` | one hardware test with the §8 disk |
+| 7 | Vendor service name holding `/dev/ttyS1` | `systemctl` / `fuser` on the live SoC |

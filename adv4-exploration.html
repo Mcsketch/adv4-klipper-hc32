@@ -1,0 +1,2231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title></title>
+  <style>
+  .markdown-body {
+  --base-size-16: 1rem;
+  --base-size-24: 1.5rem;
+  --base-size-4: 0.25rem;
+  --base-size-40: 2.5rem;
+  --base-size-8: 0.5rem;
+  --base-text-weight-medium: 500;
+  --base-text-weight-normal: 400;
+  --base-text-weight-semibold: 600;
+  --fontStack-monospace: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace;
+  --fontStack-sansSerif: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  --fgColor-accent: Highlight;
+}
+@media (prefers-color-scheme: dark) {
+  .markdown-body, [data-theme="dark"] {
+    /*dark */
+    --csstools-color-scheme--light:  ;
+    color-scheme: dark;
+    --fgColor-accent: #4493f8;
+    --bgColor-attention-muted: rgba(187,128,9,0.14902);
+    --bgColor-default: #0d1117;
+    --bgColor-muted: #151b23;
+    --bgColor-neutral-muted: rgba(101,108,118,0.2);
+    --borderColor-accent-emphasis: #1f6feb;
+    --borderColor-attention-emphasis: #9e6a03;
+    --borderColor-danger-emphasis: #da3633;
+    --borderColor-default: #3d444d;
+    --borderColor-done-emphasis: #8957e5;
+    --borderColor-success-emphasis: #238636;
+    --color-prettylights-syntax-brackethighlighter-angle: #9198a1;
+    --color-prettylights-syntax-brackethighlighter-unmatched: #f85149;
+    --color-prettylights-syntax-carriage-return-bg: #b62324;
+    --color-prettylights-syntax-carriage-return-text: #f0f6fc;
+    --color-prettylights-syntax-comment: #9198a1;
+    --color-prettylights-syntax-constant: #79c0ff;
+    --color-prettylights-syntax-constant-other-reference-link: #a5d6ff;
+    --color-prettylights-syntax-entity: #d2a8ff;
+    --color-prettylights-syntax-entity-tag: #7ee787;
+    --color-prettylights-syntax-keyword: #ff7b72;
+    --color-prettylights-syntax-markup-bold: #f0f6fc;
+    --color-prettylights-syntax-markup-changed-bg: #5a1e02;
+    --color-prettylights-syntax-markup-changed-text: #ffdfb6;
+    --color-prettylights-syntax-markup-deleted-bg: #67060c;
+    --color-prettylights-syntax-markup-deleted-text: #ffdcd7;
+    --color-prettylights-syntax-markup-heading: #1f6feb;
+    --color-prettylights-syntax-markup-ignored-bg: #1158c7;
+    --color-prettylights-syntax-markup-ignored-text: #f0f6fc;
+    --color-prettylights-syntax-markup-inserted-bg: #033a16;
+    --color-prettylights-syntax-markup-inserted-text: #aff5b4;
+    --color-prettylights-syntax-markup-italic: #f0f6fc;
+    --color-prettylights-syntax-markup-list: #f2cc60;
+    --color-prettylights-syntax-meta-diff-range: #d2a8ff;
+    --color-prettylights-syntax-storage-modifier-import: #f0f6fc;
+    --color-prettylights-syntax-string: #a5d6ff;
+    --color-prettylights-syntax-string-regexp: #7ee787;
+    --color-prettylights-syntax-sublimelinter-gutter-mark: #3d444d;
+    --color-prettylights-syntax-variable: #ffa657;
+    --fgColor-attention: #d29922;
+    --fgColor-danger: #f85149;
+    --fgColor-default: #f0f6fc;
+    --fgColor-done: #ab7df8;
+    --fgColor-muted: #9198a1;
+    --fgColor-success: #3fb950;
+    --borderColor-muted: rgba(61,68,77,0.70196);
+    --color-prettylights-syntax-invalid-illegal-bg: var(--bgColor-danger-muted);
+    --color-prettylights-syntax-invalid-illegal-text: var(--fgColor-danger);
+    --focus-outlineColor: var(--borderColor-accent-emphasis);
+    --borderColor-neutral-muted: var(--borderColor-muted);
+  }
+}
+@media (prefers-color-scheme: light) {
+  .markdown-body, [data-theme="light"] {
+    /*light */
+    --csstools-color-scheme--light: initial;
+    color-scheme: light;
+    --fgColor-danger: #d1242f;
+    --bgColor-attention-muted: #fff8c5;
+    --bgColor-muted: #f6f8fa;
+    --bgColor-neutral-muted: rgba(129,139,152,0.12157);
+    --borderColor-accent-emphasis: #0969da;
+    --borderColor-attention-emphasis: #9a6700;
+    --borderColor-danger-emphasis: #cf222e;
+    --borderColor-default: #d1d9e0;
+    --borderColor-done-emphasis: #8250df;
+    --borderColor-success-emphasis: #1a7f37;
+    --color-prettylights-syntax-brackethighlighter-angle: #59636e;
+    --color-prettylights-syntax-brackethighlighter-unmatched: #82071e;
+    --color-prettylights-syntax-carriage-return-bg: #cf222e;
+    --color-prettylights-syntax-carriage-return-text: #f6f8fa;
+    --color-prettylights-syntax-comment: #59636e;
+    --color-prettylights-syntax-constant: #0550ae;
+    --color-prettylights-syntax-constant-other-reference-link: #0a3069;
+    --color-prettylights-syntax-entity: #6639ba;
+    --color-prettylights-syntax-entity-tag: #0550ae;
+    --color-prettylights-syntax-invalid-illegal-text: var(--fgColor-danger);
+    --color-prettylights-syntax-keyword: #cf222e;
+    --color-prettylights-syntax-markup-changed-bg: #ffd8b5;
+    --color-prettylights-syntax-markup-changed-text: #953800;
+    --color-prettylights-syntax-markup-deleted-bg: #ffebe9;
+    --color-prettylights-syntax-markup-deleted-text: #82071e;
+    --color-prettylights-syntax-markup-heading: #0550ae;
+    --color-prettylights-syntax-markup-ignored-bg: #0550ae;
+    --color-prettylights-syntax-markup-ignored-text: #d1d9e0;
+    --color-prettylights-syntax-markup-inserted-bg: #dafbe1;
+    --color-prettylights-syntax-markup-inserted-text: #116329;
+    --color-prettylights-syntax-markup-list: #3b2300;
+    --color-prettylights-syntax-meta-diff-range: #8250df;
+    --color-prettylights-syntax-string: #0a3069;
+    --color-prettylights-syntax-string-regexp: #116329;
+    --color-prettylights-syntax-sublimelinter-gutter-mark: #818b98;
+    --color-prettylights-syntax-variable: #953800;
+    --fgColor-accent: #0969da;
+    --fgColor-attention: #9a6700;
+    --fgColor-done: #8250df;
+    --fgColor-muted: #59636e;
+    --fgColor-success: #1a7f37;
+    --bgColor-default: #ffffff;
+    --borderColor-muted: rgba(209,217,224,0.70196);
+    --color-prettylights-syntax-invalid-illegal-bg: var(--bgColor-danger-muted);
+    --color-prettylights-syntax-markup-bold: #1f2328;
+    --color-prettylights-syntax-markup-italic: #1f2328;
+    --color-prettylights-syntax-storage-modifier-import: #1f2328;
+    --fgColor-default: #1f2328;
+    --focus-outlineColor: var(--borderColor-accent-emphasis);
+    --borderColor-neutral-muted: var(--borderColor-muted);
+  }
+}
+
+.markdown-body {
+  /** CSS default easing. Use for hover state changes and micro-interactions. */
+  /** Accelerating motion. Use for elements exiting the viewport (moving off-screen). */
+  /** Smooth acceleration and deceleration. Use for elements moving or morphing within the viewport. */
+  /** Decelerating motion. Use for elements entering the viewport or appearing on screen. */
+  /** Constant motion with no acceleration. Use for continuous animations like progress bars or loaders. */
+  -ms-text-size-adjust: 100%;
+  -webkit-text-size-adjust: 100%;
+  margin: 0;
+  font-weight: 400;
+  font-weight: var(--base-text-weight-normal, 400);
+  color: var(--fgColor-default);
+  background-color: var(--bgColor-default);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  font-family: var(--fontStack-sansSerif, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji");
+  font-size: 16px;
+  line-height: 1.5;
+  word-wrap: break-word;
+}
+
+.markdown-body a {
+  -webkit-text-decoration: underline;
+  text-decoration: underline;
+  text-underline-offset: .2rem;
+}
+
+.markdown-body .octicon {
+  display: inline-block;
+  fill: currentColor;
+  vertical-align: text-bottom;
+}
+
+.markdown-body h1:hover .anchor .octicon-link:before,
+.markdown-body h2:hover .anchor .octicon-link:before,
+.markdown-body h3:hover .anchor .octicon-link:before,
+.markdown-body h4:hover .anchor .octicon-link:before,
+.markdown-body h5:hover .anchor .octicon-link:before,
+.markdown-body h6:hover .anchor .octicon-link:before {
+  width: 16px;
+  height: 16px;
+  content: ' ';
+  display: inline-block;
+  background-color: currentColor;
+  -webkit-mask-image: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' version='1.1' aria-hidden='true'><path fill-rule='evenodd' d='M7.775 3.275a.75.75 0 001.06 1.06l1.25-1.25a2 2 0 112.83 2.83l-2.5 2.5a2 2 0 01-2.83 0 .75.75 0 00-1.06 1.06 3.5 3.5 0 004.95 0l2.5-2.5a3.5 3.5 0 00-4.95-4.95l-1.25 1.25zm-4.69 9.64a2 2 0 010-2.83l2.5-2.5a2 2 0 012.83 0 .75.75 0 001.06-1.06 3.5 3.5 0 00-4.95 0l-2.5 2.5a3.5 3.5 0 004.95 4.95l1.25-1.25a.75.75 0 00-1.06-1.06l-1.25 1.25a2 2 0 01-2.83 0z'></path></svg>");
+  mask-image: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' version='1.1' aria-hidden='true'><path fill-rule='evenodd' d='M7.775 3.275a.75.75 0 001.06 1.06l1.25-1.25a2 2 0 112.83 2.83l-2.5 2.5a2 2 0 01-2.83 0 .75.75 0 00-1.06 1.06 3.5 3.5 0 004.95 0l2.5-2.5a3.5 3.5 0 00-4.95-4.95l-1.25 1.25zm-4.69 9.64a2 2 0 010-2.83l2.5-2.5a2 2 0 012.83 0 .75.75 0 001.06-1.06 3.5 3.5 0 00-4.95 0l-2.5 2.5a3.5 3.5 0 004.95 4.95l1.25-1.25a.75.75 0 00-1.06-1.06l-1.25 1.25a2 2 0 01-2.83 0z'></path></svg>");
+}
+
+.markdown-body details,
+.markdown-body figcaption,
+.markdown-body figure {
+  display: block;
+}
+
+.markdown-body summary {
+  display: list-item;
+}
+
+.markdown-body [hidden] {
+  display: none !important;
+}
+
+.markdown-body a {
+  background-color: rgba(0,0,0,0);
+  color: var(--fgColor-accent);
+  -webkit-text-decoration: none;
+  text-decoration: none;
+}
+
+.markdown-body abbr[title] {
+  border-bottom: none;
+  -webkit-text-decoration: underline dotted;
+  text-decoration: underline;
+  text-decoration: underline dotted;
+}
+
+.markdown-body b,
+.markdown-body strong {
+  font-weight: 600;
+  font-weight: var(--base-text-weight-semibold, 600);
+}
+
+.markdown-body dfn {
+  font-style: italic;
+}
+
+.markdown-body h1 {
+  margin: .67em 0;
+  font-weight: 600;
+  font-weight: var(--base-text-weight-semibold, 600);
+  padding-bottom: .3em;
+  font-size: 2em;
+  border-bottom: 1px solid var(--borderColor-muted);
+}
+
+.markdown-body mark {
+  background-color: var(--bgColor-attention-muted);
+  color: var(--fgColor-default);
+}
+
+.markdown-body small {
+  font-size: 90%;
+}
+
+.markdown-body sub,
+.markdown-body sup {
+  font-size: 75%;
+  line-height: 0;
+  position: relative;
+  vertical-align: baseline;
+}
+
+.markdown-body sub {
+  bottom: -0.25em;
+}
+
+.markdown-body sup {
+  top: -0.5em;
+}
+
+.markdown-body img {
+  border-style: none;
+  max-width: 100%;
+  box-sizing: content-box;
+}
+
+.markdown-body code,
+.markdown-body kbd,
+.markdown-body pre,
+.markdown-body samp {
+  font-family: monospace;
+  font-size: 1em;
+}
+
+.markdown-body figure {
+  margin: 1em var(--base-size-40);
+}
+
+.markdown-body hr {
+  box-sizing: content-box;
+  overflow: hidden;
+  background: rgba(0,0,0,0);
+  border-bottom: 1px solid var(--borderColor-muted);
+  height: .25em;
+  padding: 0;
+  margin: var(--base-size-24) 0;
+  background-color: var(--borderColor-default);
+  border: 0;
+}
+
+.markdown-body input {
+  font: inherit;
+  margin: 0;
+  overflow: visible;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.markdown-body [type=button],
+.markdown-body [type=reset],
+.markdown-body [type=submit] {
+  -webkit-appearance: button;
+  -moz-appearance: button;
+       appearance: button;
+}
+
+.markdown-body [type=checkbox],
+.markdown-body [type=radio] {
+  box-sizing: border-box;
+  padding: 0;
+}
+
+.markdown-body [type=number]::-webkit-inner-spin-button,
+.markdown-body [type=number]::-webkit-outer-spin-button {
+  height: auto;
+}
+
+.markdown-body [type=search]::-webkit-search-cancel-button,
+.markdown-body [type=search]::-webkit-search-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.markdown-body ::-webkit-input-placeholder {
+  color: inherit;
+  opacity: .54;
+}
+
+.markdown-body ::-webkit-file-upload-button {
+  -webkit-appearance: button;
+  appearance: button;
+  font: inherit;
+}
+
+.markdown-body a:hover {
+  -webkit-text-decoration: underline;
+  text-decoration: underline;
+}
+
+.markdown-body ::-moz-placeholder {
+  color: var(--fgColor-muted);
+  opacity: 1;
+}
+
+.markdown-body ::placeholder {
+  color: var(--fgColor-muted);
+  opacity: 1;
+}
+
+.markdown-body hr::before {
+  display: table;
+  content: "";
+}
+
+.markdown-body hr::after {
+  display: table;
+  clear: both;
+  content: "";
+}
+
+.markdown-body table {
+  border-spacing: 0;
+  border-collapse: collapse;
+  display: block;
+  width: -moz-max-content;
+  width: max-content;
+  max-width: 100%;
+  overflow: auto;
+  font-feature-settings: "tnum";
+  font-variant: tabular-nums;
+}
+
+.markdown-body td,
+.markdown-body th {
+  padding: 0;
+}
+
+.markdown-body details summary {
+  cursor: pointer;
+}
+
+.markdown-body a:focus,
+.markdown-body [role=button]:focus,
+.markdown-body input[type=radio]:focus,
+.markdown-body input[type=checkbox]:focus {
+  outline: 2px solid var(--focus-outlineColor);
+  outline-offset: -2px;
+  box-shadow: none;
+}
+
+.markdown-body a:focus:not(:focus-visible),
+.markdown-body [role=button]:focus:not(:focus-visible),
+.markdown-body input[type=radio]:focus:not(:focus-visible),
+.markdown-body input[type=checkbox]:focus:not(:focus-visible) {
+  outline: solid 1px rgba(0,0,0,0);
+}
+
+.markdown-body a:focus-visible,
+.markdown-body [role=button]:focus-visible,
+.markdown-body input[type=radio]:focus-visible,
+.markdown-body input[type=checkbox]:focus-visible {
+  outline: 2px solid var(--focus-outlineColor);
+  outline-offset: -2px;
+  box-shadow: none;
+}
+
+.markdown-body a:not([class]):focus,
+.markdown-body a:not([class]):focus-visible,
+.markdown-body input[type=radio]:focus,
+.markdown-body input[type=radio]:focus-visible,
+.markdown-body input[type=checkbox]:focus,
+.markdown-body input[type=checkbox]:focus-visible {
+  outline-offset: 0;
+}
+
+.markdown-body kbd {
+  display: inline-block;
+  padding: var(--base-size-4);
+  font: 11px ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace;
+  font: 11px var(--fontStack-monospace, ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace);
+  line-height: 10px;
+  color: var(--fgColor-default);
+  vertical-align: middle;
+  background-color: var(--bgColor-muted);
+  border: solid 1px var(--borderColor-neutral-muted);
+  border-bottom-color: var(--borderColor-neutral-muted);
+  border-radius: 6px;
+  box-shadow: inset 0 -1px 0 var(--borderColor-neutral-muted);
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+  margin-top: var(--base-size-24);
+  margin-bottom: var(--base-size-16);
+  font-weight: 600;
+  font-weight: var(--base-text-weight-semibold, 600);
+  line-height: 1.25;
+}
+
+.markdown-body h2 {
+  font-weight: 600;
+  font-weight: var(--base-text-weight-semibold, 600);
+  padding-bottom: .3em;
+  font-size: 1.5em;
+  border-bottom: 1px solid var(--borderColor-muted);
+}
+
+.markdown-body h3 {
+  font-weight: 600;
+  font-weight: var(--base-text-weight-semibold, 600);
+  font-size: 1.25em;
+}
+
+.markdown-body h4 {
+  font-weight: 600;
+  font-weight: var(--base-text-weight-semibold, 600);
+  font-size: 1em;
+}
+
+.markdown-body h5 {
+  font-weight: 600;
+  font-weight: var(--base-text-weight-semibold, 600);
+  font-size: .875em;
+}
+
+.markdown-body h6 {
+  font-weight: 600;
+  font-weight: var(--base-text-weight-semibold, 600);
+  font-size: .85em;
+  color: var(--fgColor-muted);
+}
+
+.markdown-body p {
+  margin-top: 0;
+  margin-bottom: 10px;
+}
+
+.markdown-body blockquote {
+  margin: 0;
+  padding: 0 1em;
+  color: var(--fgColor-muted);
+  border-left: .25em solid var(--borderColor-default);
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  margin-top: 0;
+  margin-bottom: 0;
+  padding-left: 2em;
+}
+
+.markdown-body ol ol,
+.markdown-body ul ol {
+  list-style-type: lower-roman;
+}
+
+.markdown-body ul ul ol,
+.markdown-body ul ol ol,
+.markdown-body ol ul ol,
+.markdown-body ol ol ol {
+  list-style-type: lower-alpha;
+}
+
+.markdown-body dd {
+  margin-left: 0;
+}
+
+.markdown-body tt,
+.markdown-body code,
+.markdown-body samp {
+  font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace;
+  font-family: var(--fontStack-monospace, ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace);
+  font-size: 12px;
+}
+
+.markdown-body pre {
+  margin-top: 0;
+  margin-bottom: 0;
+  font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace;
+  font-family: var(--fontStack-monospace, ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace);
+  font-size: 12px;
+  word-wrap: normal;
+}
+
+.markdown-body .octicon {
+  display: inline-block;
+  overflow: visible !important;
+  vertical-align: text-bottom;
+  fill: currentColor;
+}
+
+.markdown-body input::-webkit-outer-spin-button,
+.markdown-body input::-webkit-inner-spin-button {
+  margin: 0;
+  -webkit-appearance: none;
+          appearance: none;
+}
+
+.markdown-body .mr-2 {
+  margin-right: 8px !important;
+  margin-right: var(--base-size-8, 8px) !important;
+}
+
+.markdown-body::before {
+  display: table;
+  content: "";
+}
+
+.markdown-body::after {
+  display: table;
+  clear: both;
+  content: "";
+}
+
+.markdown-body>*:first-child {
+  margin-top: 0 !important;
+}
+
+.markdown-body>*:last-child {
+  margin-bottom: 0 !important;
+}
+
+.markdown-body a:not([href]) {
+  color: inherit;
+  -webkit-text-decoration: none;
+  text-decoration: none;
+}
+
+.markdown-body .absent {
+  color: var(--fgColor-danger);
+}
+
+.markdown-body .anchor {
+  float: left;
+  padding-right: var(--base-size-4);
+  margin-left: -20px;
+  line-height: 1;
+}
+
+.markdown-body .anchor:focus {
+  outline: none;
+}
+
+.markdown-body p,
+.markdown-body blockquote,
+.markdown-body ul,
+.markdown-body ol,
+.markdown-body dl,
+.markdown-body table,
+.markdown-body pre,
+.markdown-body details {
+  margin-top: 0;
+  margin-bottom: var(--base-size-16);
+}
+
+.markdown-body blockquote>:first-child {
+  margin-top: 0;
+}
+
+.markdown-body blockquote>:last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body h1 .octicon-link,
+.markdown-body h2 .octicon-link,
+.markdown-body h3 .octicon-link,
+.markdown-body h4 .octicon-link,
+.markdown-body h5 .octicon-link,
+.markdown-body h6 .octicon-link {
+  color: var(--fgColor-default);
+  vertical-align: middle;
+  visibility: hidden;
+}
+
+.markdown-body h1:hover .anchor,
+.markdown-body h2:hover .anchor,
+.markdown-body h3:hover .anchor,
+.markdown-body h4:hover .anchor,
+.markdown-body h5:hover .anchor,
+.markdown-body h6:hover .anchor {
+  -webkit-text-decoration: none;
+  text-decoration: none;
+}
+
+.markdown-body h1:hover .anchor .octicon-link,
+.markdown-body h2:hover .anchor .octicon-link,
+.markdown-body h3:hover .anchor .octicon-link,
+.markdown-body h4:hover .anchor .octicon-link,
+.markdown-body h5:hover .anchor .octicon-link,
+.markdown-body h6:hover .anchor .octicon-link {
+  visibility: visible;
+}
+
+.markdown-body h1 tt,
+.markdown-body h1 code,
+.markdown-body h2 tt,
+.markdown-body h2 code,
+.markdown-body h3 tt,
+.markdown-body h3 code,
+.markdown-body h4 tt,
+.markdown-body h4 code,
+.markdown-body h5 tt,
+.markdown-body h5 code,
+.markdown-body h6 tt,
+.markdown-body h6 code {
+  padding: 0 .2em;
+  font-size: inherit;
+}
+
+.markdown-body summary h1,
+.markdown-body summary h2,
+.markdown-body summary h3,
+.markdown-body summary h4,
+.markdown-body summary h5,
+.markdown-body summary h6 {
+  display: inline-block;
+}
+
+.markdown-body summary h1 .anchor,
+.markdown-body summary h2 .anchor,
+.markdown-body summary h3 .anchor,
+.markdown-body summary h4 .anchor,
+.markdown-body summary h5 .anchor,
+.markdown-body summary h6 .anchor {
+  margin-left: -40px;
+}
+
+.markdown-body summary h1,
+.markdown-body summary h2 {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.markdown-body ul.no-list,
+.markdown-body ol.no-list {
+  padding: 0;
+  list-style-type: none;
+}
+
+.markdown-body ol[type="a s"] {
+  list-style-type: lower-alpha;
+}
+
+.markdown-body ol[type="A s"] {
+  list-style-type: upper-alpha;
+}
+
+.markdown-body ol[type="i s"] {
+  list-style-type: lower-roman;
+}
+
+.markdown-body ol[type="I s"] {
+  list-style-type: upper-roman;
+}
+
+.markdown-body ol[type="1"] {
+  list-style-type: decimal;
+}
+
+.markdown-body div>ol:not([type]) {
+  list-style-type: decimal;
+}
+
+.markdown-body ul ul,
+.markdown-body ul ol,
+.markdown-body ol ol,
+.markdown-body ol ul {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.markdown-body li>p {
+  margin-top: var(--base-size-16);
+}
+
+.markdown-body li+li {
+  margin-top: .25em;
+}
+
+.markdown-body dl {
+  padding: 0;
+}
+
+.markdown-body dl dt {
+  padding: 0;
+  margin-top: var(--base-size-16);
+  font-size: 1em;
+  font-style: italic;
+  font-weight: 600;
+  font-weight: var(--base-text-weight-semibold, 600);
+}
+
+.markdown-body dl dd {
+  padding: 0 var(--base-size-16);
+  margin-bottom: var(--base-size-16);
+}
+
+.markdown-body table th {
+  font-weight: 600;
+  font-weight: var(--base-text-weight-semibold, 600);
+}
+
+.markdown-body table th,
+.markdown-body table td {
+  padding: 6px 13px;
+  border: 1px solid var(--borderColor-default);
+}
+
+.markdown-body table td>:last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body table tr {
+  background-color: var(--bgColor-default);
+  border-top: 1px solid var(--borderColor-muted);
+}
+
+.markdown-body table tr:nth-child(2n) {
+  background-color: var(--bgColor-muted);
+}
+
+.markdown-body table img {
+  background-color: rgba(0,0,0,0);
+}
+
+.markdown-body img[align=right] {
+  padding-left: 20px;
+}
+
+.markdown-body img[align=left] {
+  padding-right: 20px;
+}
+
+.markdown-body .emoji {
+  max-width: none;
+  vertical-align: text-top;
+  background-color: rgba(0,0,0,0);
+}
+
+.markdown-body span.frame {
+  display: block;
+  overflow: hidden;
+}
+
+.markdown-body span.frame>span {
+  display: block;
+  float: left;
+  width: auto;
+  padding: 7px;
+  margin: 13px 0 0;
+  overflow: hidden;
+  border: 1px solid var(--borderColor-default);
+}
+
+.markdown-body span.frame span img {
+  display: block;
+  float: left;
+}
+
+.markdown-body span.frame span span {
+  display: block;
+  padding: 5px 0 0;
+  clear: both;
+  color: var(--fgColor-default);
+}
+
+.markdown-body span.align-center {
+  display: block;
+  overflow: hidden;
+  clear: both;
+}
+
+.markdown-body span.align-center>span {
+  display: block;
+  margin: 13px auto 0;
+  overflow: hidden;
+  text-align: center;
+}
+
+.markdown-body span.align-center span img {
+  margin: 0 auto;
+  text-align: center;
+}
+
+.markdown-body span.align-right {
+  display: block;
+  overflow: hidden;
+  clear: both;
+}
+
+.markdown-body span.align-right>span {
+  display: block;
+  margin: 13px 0 0;
+  overflow: hidden;
+  text-align: right;
+}
+
+.markdown-body span.align-right span img {
+  margin: 0;
+  text-align: right;
+}
+
+.markdown-body span.float-left {
+  display: block;
+  float: left;
+  margin-right: 13px;
+  overflow: hidden;
+}
+
+.markdown-body span.float-left span {
+  margin: 13px 0 0;
+}
+
+.markdown-body span.float-right {
+  display: block;
+  float: right;
+  margin-left: 13px;
+  overflow: hidden;
+}
+
+.markdown-body span.float-right>span {
+  display: block;
+  margin: 13px auto 0;
+  overflow: hidden;
+  text-align: right;
+}
+
+.markdown-body code,
+.markdown-body tt {
+  padding: .2em .4em;
+  margin: 0;
+  font-size: 85%;
+  white-space: break-spaces;
+  background-color: var(--bgColor-neutral-muted);
+  border-radius: 6px;
+}
+
+.markdown-body code br,
+.markdown-body tt br {
+  display: none;
+}
+
+.markdown-body del code {
+  text-decoration: inherit;
+}
+
+.markdown-body samp {
+  font-size: 85%;
+}
+
+.markdown-body pre code {
+  font-size: 100%;
+}
+
+.markdown-body pre>code {
+  padding: 0;
+  margin: 0;
+  word-break: normal;
+  white-space: pre;
+  background: rgba(0,0,0,0);
+  border: 0;
+}
+
+.markdown-body .highlight {
+  margin-bottom: var(--base-size-16);
+}
+
+.markdown-body .highlight pre {
+  margin-bottom: 0;
+  word-break: normal;
+}
+
+.markdown-body .highlight pre,
+.markdown-body pre {
+  padding: var(--base-size-16);
+  overflow: auto;
+  font-size: 85%;
+  line-height: 1.45;
+  color: var(--fgColor-default);
+  background-color: var(--bgColor-muted);
+  border-radius: 6px;
+}
+
+.markdown-body pre code,
+.markdown-body pre tt {
+  display: inline;
+  padding: 0;
+  margin: 0;
+  overflow: visible;
+  line-height: inherit;
+  word-wrap: normal;
+  background-color: rgba(0,0,0,0);
+  border: 0;
+}
+
+.markdown-body .csv-data td,
+.markdown-body .csv-data th {
+  padding: 5px;
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 1;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.markdown-body .csv-data .blob-num {
+  padding: 10px var(--base-size-8) 9px;
+  text-align: right;
+  background: var(--bgColor-default);
+  border: 0;
+}
+
+.markdown-body .csv-data tr {
+  border-top: 0;
+}
+
+.markdown-body .csv-data th {
+  font-weight: 600;
+  font-weight: var(--base-text-weight-semibold, 600);
+  background: var(--bgColor-muted);
+  border-top: 0;
+}
+
+.markdown-body [data-footnote-ref]::before {
+  content: "[";
+}
+
+.markdown-body [data-footnote-ref]::after {
+  content: "]";
+}
+
+.markdown-body .footnotes {
+  font-size: 12px;
+  color: var(--fgColor-muted);
+  border-top: 1px solid var(--borderColor-default);
+}
+
+.markdown-body .footnotes ol {
+  padding-left: var(--base-size-16);
+}
+
+.markdown-body .footnotes ol ul {
+  display: inline-block;
+  padding-left: var(--base-size-16);
+  margin-top: var(--base-size-16);
+}
+
+.markdown-body .footnotes li {
+  position: relative;
+}
+
+.markdown-body .footnotes li:target::before {
+  position: absolute;
+  top: calc(var(--base-size-8)*-1);
+  right: calc(var(--base-size-8)*-1);
+  bottom: calc(var(--base-size-8)*-1);
+  left: calc(var(--base-size-24)*-1);
+  pointer-events: none;
+  content: "";
+  border: 2px solid var(--borderColor-accent-emphasis);
+  border-radius: 6px;
+}
+
+.markdown-body .footnotes li:target {
+  color: var(--fgColor-default);
+}
+
+.markdown-body .footnotes .data-footnote-backref g-emoji {
+  font-family: monospace;
+}
+
+.markdown-body .pl-c {
+  color: var(--color-prettylights-syntax-comment);
+}
+
+.markdown-body .pl-c1,
+.markdown-body .pl-s .pl-v {
+  color: var(--color-prettylights-syntax-constant);
+}
+
+.markdown-body .pl-e,
+.markdown-body .pl-en {
+  color: var(--color-prettylights-syntax-entity);
+}
+
+.markdown-body .pl-smi,
+.markdown-body .pl-s .pl-s1 {
+  color: var(--color-prettylights-syntax-storage-modifier-import);
+}
+
+.markdown-body .pl-ent {
+  color: var(--color-prettylights-syntax-entity-tag);
+}
+
+.markdown-body .pl-k {
+  color: var(--color-prettylights-syntax-keyword);
+}
+
+.markdown-body .pl-s,
+.markdown-body .pl-pds,
+.markdown-body .pl-s .pl-pse .pl-s1,
+.markdown-body .pl-sr,
+.markdown-body .pl-sr .pl-cce,
+.markdown-body .pl-sr .pl-sre,
+.markdown-body .pl-sr .pl-sra {
+  color: var(--color-prettylights-syntax-string);
+}
+
+.markdown-body .pl-v,
+.markdown-body .pl-smw {
+  color: var(--color-prettylights-syntax-variable);
+}
+
+.markdown-body .pl-bu {
+  color: var(--color-prettylights-syntax-brackethighlighter-unmatched);
+}
+
+.markdown-body .pl-ii {
+  color: var(--color-prettylights-syntax-invalid-illegal-text);
+  background-color: var(--color-prettylights-syntax-invalid-illegal-bg);
+}
+
+.markdown-body .pl-c2 {
+  color: var(--color-prettylights-syntax-carriage-return-text);
+  background-color: var(--color-prettylights-syntax-carriage-return-bg);
+}
+
+.markdown-body .pl-sr .pl-cce {
+  font-weight: bold;
+  color: var(--color-prettylights-syntax-string-regexp);
+}
+
+.markdown-body .pl-ml {
+  color: var(--color-prettylights-syntax-markup-list);
+}
+
+.markdown-body .pl-mh,
+.markdown-body .pl-mh .pl-en,
+.markdown-body .pl-ms {
+  font-weight: bold;
+  color: var(--color-prettylights-syntax-markup-heading);
+}
+
+.markdown-body .pl-mi {
+  font-style: italic;
+  color: var(--color-prettylights-syntax-markup-italic);
+}
+
+.markdown-body .pl-mb {
+  font-weight: bold;
+  color: var(--color-prettylights-syntax-markup-bold);
+}
+
+.markdown-body .pl-md {
+  color: var(--color-prettylights-syntax-markup-deleted-text);
+  background-color: var(--color-prettylights-syntax-markup-deleted-bg);
+}
+
+.markdown-body .pl-mi1 {
+  color: var(--color-prettylights-syntax-markup-inserted-text);
+  background-color: var(--color-prettylights-syntax-markup-inserted-bg);
+}
+
+.markdown-body .pl-mc {
+  color: var(--color-prettylights-syntax-markup-changed-text);
+  background-color: var(--color-prettylights-syntax-markup-changed-bg);
+}
+
+.markdown-body .pl-mi2 {
+  color: var(--color-prettylights-syntax-markup-ignored-text);
+  background-color: var(--color-prettylights-syntax-markup-ignored-bg);
+}
+
+.markdown-body .pl-mdr {
+  font-weight: bold;
+  color: var(--color-prettylights-syntax-meta-diff-range);
+}
+
+.markdown-body .pl-ba {
+  color: var(--color-prettylights-syntax-brackethighlighter-angle);
+}
+
+.markdown-body .pl-sg {
+  color: var(--color-prettylights-syntax-sublimelinter-gutter-mark);
+}
+
+.markdown-body .pl-corl {
+  -webkit-text-decoration: underline;
+  text-decoration: underline;
+  color: var(--color-prettylights-syntax-constant-other-reference-link);
+}
+
+.markdown-body [role=button]:focus:not(:focus-visible),
+.markdown-body [role=tabpanel][tabindex="0"]:focus:not(:focus-visible),
+.markdown-body button:focus:not(:focus-visible),
+.markdown-body summary:focus:not(:focus-visible),
+.markdown-body a:focus:not(:focus-visible) {
+  outline: none;
+  box-shadow: none;
+}
+
+.markdown-body [tabindex="0"]:focus:not(:focus-visible),
+.markdown-body details-dialog:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.markdown-body g-emoji {
+  display: inline-block;
+  min-width: 1ch;
+  font-family: "Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol";
+  font-size: 1em;
+  font-style: normal !important;
+  font-weight: 400;
+  font-weight: var(--base-text-weight-normal, 400);
+  line-height: 1;
+  vertical-align: -0.075em;
+}
+
+.markdown-body g-emoji img {
+  width: 1em;
+  height: 1em;
+}
+
+.markdown-body a:has(>p,>div,>pre,>blockquote) {
+  display: block;
+}
+
+.markdown-body a:has(>p,>div,>pre,>blockquote):not(:has(.snippet-clipboard-content,>pre)) {
+  width: -moz-fit-content;
+  width: fit-content;
+}
+
+.markdown-body a:has(>p,>div,>pre,>blockquote):has(.snippet-clipboard-content,>pre):focus-visible {
+  outline: 2px solid var(--focus-outlineColor);
+  outline-offset: 2px;
+}
+
+.markdown-body .task-list-item {
+  list-style-type: none;
+}
+
+.markdown-body .task-list-item label {
+  font-weight: 400;
+  font-weight: var(--base-text-weight-normal, 400);
+}
+
+.markdown-body .task-list-item.enabled label {
+  cursor: pointer;
+}
+
+.markdown-body .task-list-item+.task-list-item {
+  margin-top: var(--base-size-4);
+}
+
+.markdown-body .task-list-item .handle {
+  display: none;
+}
+
+.markdown-body .task-list-item-checkbox {
+  margin: 0 .2em .25em -1.4em;
+  vertical-align: middle;
+}
+
+[dir="rtl"] .markdown-body ul .task-list-item-checkbox {
+  margin: 0 -1.6em .25em .2em;
+}
+
+[dir="rtl"] .markdown-body ol .task-list-item-checkbox {
+  margin: 0 -1.6em .25em .2em;
+}
+
+.markdown-body .contains-task-list:hover .task-list-item-convert-container,
+.markdown-body .contains-task-list:focus-within .task-list-item-convert-container {
+  display: block;
+  width: auto;
+  height: 24px;
+  overflow: visible;
+  clip-path: none;
+}
+
+.markdown-body ::-webkit-calendar-picker-indicator {
+  filter: invert(50%);
+}
+
+.markdown-body .markdown-alert {
+  padding: var(--base-size-8) var(--base-size-16);
+  margin-bottom: var(--base-size-16);
+  color: inherit;
+  border-left: .25em solid var(--borderColor-default);
+}
+
+.markdown-body .markdown-alert>:first-child {
+  margin-top: 0;
+}
+
+.markdown-body .markdown-alert>:last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body .markdown-alert .markdown-alert-title {
+  display: flex;
+  font-weight: 500;
+  font-weight: var(--base-text-weight-medium, 500);
+  align-items: center;
+  line-height: 1;
+}
+
+.markdown-body .markdown-alert.markdown-alert-note {
+  border-left-color: var(--borderColor-accent-emphasis);
+}
+
+.markdown-body .markdown-alert.markdown-alert-note .markdown-alert-title {
+  color: var(--fgColor-accent);
+}
+
+.markdown-body .markdown-alert.markdown-alert-important {
+  border-left-color: var(--borderColor-done-emphasis);
+}
+
+.markdown-body .markdown-alert.markdown-alert-important .markdown-alert-title {
+  color: var(--fgColor-done);
+}
+
+.markdown-body .markdown-alert.markdown-alert-warning {
+  border-left-color: var(--borderColor-attention-emphasis);
+}
+
+.markdown-body .markdown-alert.markdown-alert-warning .markdown-alert-title {
+  color: var(--fgColor-attention);
+}
+
+.markdown-body .markdown-alert.markdown-alert-tip {
+  border-left-color: var(--borderColor-success-emphasis);
+}
+
+.markdown-body .markdown-alert.markdown-alert-tip .markdown-alert-title {
+  color: var(--fgColor-success);
+}
+
+.markdown-body .markdown-alert.markdown-alert-caution {
+  border-left-color: var(--borderColor-danger-emphasis);
+}
+
+.markdown-body .markdown-alert.markdown-alert-caution .markdown-alert-title {
+  color: var(--fgColor-danger);
+}
+
+.markdown-body>*:first-child>.heading-element:first-child {
+  margin-top: 0 !important;
+}
+
+.markdown-body .highlight pre:has(+.zeroclipboard-container) {
+  min-height: 52px;
+}
+
+
+  </style>
+  <style>
+  /**
+ * prism.js default theme for JavaScript, CSS and HTML
+ * Based on dabblet (http://dabblet.com)
+ * @author Lea Verou
+ */
+
+code[class*="language-"],
+pre[class*="language-"] {
+	color: black;
+	background: none;
+	text-shadow: 0 1px white;
+	font-family: Consolas, Monaco, 'Andale Mono', 'Ubuntu Mono', monospace;
+	font-size: 1em;
+	text-align: left;
+	white-space: pre;
+	word-spacing: normal;
+	word-break: normal;
+	word-wrap: normal;
+	line-height: 1.5;
+
+	-moz-tab-size: 4;
+	-o-tab-size: 4;
+	tab-size: 4;
+	hyphens: none;
+}
+
+pre[class*="language-"]::-moz-selection, pre[class*="language-"] ::-moz-selection,
+code[class*="language-"]::-moz-selection, code[class*="language-"] ::-moz-selection {
+	text-shadow: none;
+	background: #b3d4fc;
+}
+
+pre[class*="language-"]::-moz-selection, pre[class*="language-"] ::-moz-selection, code[class*="language-"]::-moz-selection, code[class*="language-"] ::-moz-selection {
+	text-shadow: none;
+	background: #b3d4fc;
+}
+
+pre[class*="language-"]::selection, pre[class*="language-"] ::selection,
+code[class*="language-"]::selection, code[class*="language-"] ::selection {
+	text-shadow: none;
+	background: #b3d4fc;
+}
+
+@media print {
+	code[class*="language-"],
+	pre[class*="language-"] {
+		text-shadow: none;
+	}
+}
+
+/* Code blocks */
+pre[class*="language-"] {
+	padding: 1em;
+	margin: .5em 0;
+	overflow: auto;
+}
+
+:not(pre) > code[class*="language-"],
+pre[class*="language-"] {
+	background: #f5f2f0;
+}
+
+/* Inline code */
+:not(pre) > code[class*="language-"] {
+	padding: .1em;
+	border-radius: .3em;
+	white-space: normal;
+}
+
+.token.comment,
+.token.prolog,
+.token.doctype,
+.token.cdata {
+	color: slategray;
+}
+
+.token.punctuation {
+	color: #999;
+}
+
+.token.namespace {
+	opacity: .7;
+}
+
+.token.property,
+.token.tag,
+.token.boolean,
+.token.number,
+.token.constant,
+.token.symbol,
+.token.deleted {
+	color: #905;
+}
+
+.token.selector,
+.token.attr-name,
+.token.string,
+.token.char,
+.token.builtin,
+.token.inserted {
+	color: #690;
+}
+
+.token.operator,
+.token.entity,
+.token.url,
+.language-css .token.string,
+.style .token.string {
+	color: #9a6e3a;
+	/* This background color was intended by the author of this theme. */
+	background: hsla(0, 0%, 100%, .5);
+}
+
+.token.atrule,
+.token.attr-value,
+.token.keyword {
+	color: #07a;
+}
+
+.token.function,
+.token.class-name {
+	color: #DD4A68;
+}
+
+.token.regex,
+.token.important,
+.token.variable {
+	color: #e90;
+}
+
+.token.important,
+.token.bold {
+	font-weight: bold;
+}
+.token.italic {
+	font-style: italic;
+}
+
+.token.entity {
+	cursor: help;
+}
+
+  </style>
+  <style>
+  
+  </style>
+  <style>
+    .markdown-body {
+      font-family: -apple-system,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI Emoji;
+      box-sizing: border-box;
+      min-width: 200px;
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 45px;
+    }
+
+    @media not print {
+      .markdown-body {
+        padding: 45px;
+      }
+
+      @media (max-width: 767px) {
+        .markdown-body {
+          padding: 15px;
+        }
+      }
+    }
+
+    .hf-container {
+      color: #24292e;
+      line-height: 1.3;
+    }
+
+    .markdown-body .highlight pre,
+    .markdown-body pre {
+      white-space: pre-wrap;
+    }
+    .markdown-body table {
+      display: table;
+    }
+    .markdown-body img[data-align="center"] {
+      display: block;
+      margin: 0 auto;
+    }
+    .markdown-body img[data-align="right"] {
+      display: block;
+      margin: 0 0 0 auto;
+    }
+    .markdown-body li.task-list-item {
+      list-style-type: none;
+    }
+    .markdown-body li > [type=checkbox] {
+      margin: 0 0 0 -1.3em;
+    }
+    .markdown-body input[type="checkbox"] ~ p {
+      margin-top: 0;
+      display: inline-block;
+    }
+    .markdown-body ol ol,
+    .markdown-body ul ol {
+      list-style-type: decimal;
+    }
+    .markdown-body ol ol ol,
+    .markdown-body ol ul ol,
+    .markdown-body ul ol ol,
+    .markdown-body ul ul ol {
+      list-style-type: decimal;
+    }
+  </style>
+  <style>.markdown-body a.footnote-ref {
+  -webkit-text-decoration: none;
+  text-decoration: none;
+}
+
+.footnotes {
+  font-size: .85em;
+  opacity: .8;
+}
+
+.footnotes li[role="doc-endnote"] {
+  position: relative;
+}
+
+.footnotes .footnote-back {
+  position: absolute;
+  font-family: serif;
+  font-family: initial;
+  top: .2em;
+  right: 1em;
+  -webkit-text-decoration: none;
+  text-decoration: none;
+}
+
+.inline-math.invalid,
+.multiple-math.invalid {
+  color: rgb(255, 105, 105);
+}
+
+.toc-container {
+  width: 100%;
+}
+
+.toc-container .toc-title {
+  font-weight: 700;
+  font-size: 1.2em;
+  margin-bottom: 0;
+}
+
+.toc-container li,
+.toc-container ul,
+.toc-container ul li {
+  list-style: none !important;
+}
+
+.toc-container > ul {
+  padding-left: 0;
+}
+
+.toc-container ul li span {
+  display : flex;
+}
+
+.toc-container ul li span a {
+  color: inherit;
+  -webkit-text-decoration: none;
+  text-decoration: none;
+}
+.toc-container ul li span a:hover {
+  color: inherit;
+  -webkit-text-decoration: none;
+  text-decoration: none;
+}
+
+.toc-container ul li span span.dots {
+  flex: 1;
+  height: 0.65em;
+  margin: 0 10px;
+  border-bottom: 2px dotted black;
+}
+</style>
+  <style>.markdown-body{}pre.front-matter{display:none!important;}</style>
+</head>
+<body>
+  <article class="markdown-body"><h1 id="flashforge-adventurer-4--firmware-exploration-report" class="atx">Flashforge Adventurer 4 — Firmware Exploration Report</h1>
+<p>Facts extracted from the official firmware package (V2.2.4 / control 2.3.0, build
+<code>20230216</code>) and the eMMC backup. Target board: <strong>HC32F460 (HD revision)</strong>.</p>
+<hr>
+<h2 id="1-system-architecture" class="atx">1. System architecture</h2>
+<table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>Hardware</th>
+<th>Software</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Motion / thermistor / driver MCU</td>
+<td><strong>HC32F460</strong> (HDSC / Huatong, Cortex-M4), HD rev</td>
+<td>Proprietary bare-metal app, vendor BSP</td>
+</tr>
+<tr>
+<td>Host / UI / G-code parser</td>
+<td>Sunxi SoC (armv7l), kernel <code>3.4.39+</code></td>
+<td>Qt/C++ app <code>adventurer4-arm</code> v2.2.4, launched by a Go supervisor <code>ffstartup-arm</code></td>
+</tr>
+</tbody></table>
+<ul>
+<li>The <strong>MCU has no G-code engine</strong>. It receives motion/temperature commands over serial
+(<code>/dev/ttyS1</code> at 115200 on the SoC) and runs a state machine plus embedded power-loss G-code.</li>
+<li>The <strong>SoC owns</strong>: G-code parsing, UI, file management, the nozzle-calibration model,
+and the MCU's <strong>NRST / BOOT0 GPIO strapping</strong> (required for flashing).</li>
+<li>Neither binary contains Marlin, Repetier, or any third-party firmware signature
+(verified by string scan: 0 hits).</li>
+</ul>
+<h3 id="11-mcu-firmware-identification" class="atx">1.1 MCU firmware identification</h3>
+<ul>
+<li>Built on <strong>HDSC's official HC32F460 standard peripheral driver library</strong>. Source paths
+embedded in the binary (<code>hd.bin</code>, 60 416 bytes, load base <code>0x0800C000</code>):</li>
+</ul>
+<pre><code class="fenced-code-block">source\driver\src\hc32f460_adc.c
+source\driver\src\hc32f460_clk.c
+source\driver\src\hc32f460_dmac.c
+source\driver\src\hc32f460_efm.c
+source\driver\src\hc32f460_exint_nmi_swi.c
+source\driver\src\hc32f460_gpio.c
+source\driver\src\hc32f460_interrupts.c
+source\driver\src\hc32f460_pwc.c
+source\driver\src\hc32f460_timer0.c
+source\driver\src\hc32f460_timera.c
+source\driver\src\hc32f460_usart.c
+source\driver\src\hc32f460_wdt.c</code></pre>
+<ul>
+<li>No RTOS, no G-code parser, no company/developer signature inside the MCU image.</li>
+<li>The vendor (Flashforge) signs the <strong>SoC</strong> layer: <code>"Flashforge Adventurer 4"</code>,
+<code>"Machine Type: Flashforge Adventurer 4"</code>, <code>support@flashforge.com</code>, version <code>2.2.4 20230216</code>.</li>
+<li>SoC app: <strong>Qt (4.8.6-era toolchain), armv7l, glibc 2.19, dynamically linked, unstripped
+with full debug info</strong> — its complete symbol table is readable (class names listed in §6).</li>
+</ul>
+<hr>
+<h2 id="2-flash-memory-map-hd-revision" class="atx">2. Flash memory map (HD revision)</h2>
+<table>
+<thead>
+<tr>
+<th>Region</th>
+<th>Address</th>
+<th>Content</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>ROM bootloader / ISP</td>
+<td><code>0x00000000</code>–…</td>
+<td>ROM-resident; <strong>never written</strong>. Entry condition: NRST pulse with BOOT0 held HIGH</td>
+</tr>
+<tr>
+<td>Application (HD)</td>
+<td><strong><code>0x0800C000</code></strong></td>
+<td>Factory <code>Adventurer4-HD-IAP-2.3.0-20230216.hex</code>, app 60 416 B</td>
+</tr>
+<tr>
+<td>Application (NA rev)</td>
+<td><code>0x08010000</code></td>
+<td>Factory <code>Adventurer4-NA-IAP-2.3.0-20230216.hex</code></td>
+</tr>
+</tbody></table>
+<p>Rules:</p>
+<ul>
+<li><strong>Write only the app window</strong> (<code>0x0800C000</code> for HD). Never <code>0x00000000</code>.</li>
+<li>A corrupted app is <strong>always recoverable</strong>: the ISP bootloader lives in ROM, so the next
+reset/BOOT0 pulse re-enters ISP and the factory image can be re-flashed in one command.</li>
+<li>Klipper hex: <code>arm-none-eabi-objcopy -I binary -O ihex --change-address=0xC000 klipper.bin klipper.hex</code>
+(round-trip verified byte-identical).</li>
+</ul>
+<h3 id="21-isp-entry--the-gpio-dance-decoded-from-iapcommand" class="atx">2.1 ISP entry — the GPIO dance (decoded from <code>IAPCommand</code>)</h3>
+<p><code>IAPCommand</code> is a fork of <code>stm32isp</code>. Its <code>main()</code> sequence:</p>
+<pre><code class="fenced-code-block language-text">stm32Unexport()                     # reset sysfs GPIO state
+port = /dev/ttyS1 ; baud = 115200
+gpio_out(35, 1)                     # BOOT0 / ISP-select = HIGH          (SoC GPIO 35)
+sleep(1)                            # hold 1 s
+r = stm32Init(port, baud)
+      └─ stm32Sync loop:
+           send 0x43 ('C'), read reply
+           reply 6  =&gt; HD revision, connected
+           reply 7  =&gt; NA revision, connected
+           no reply =&gt; gpio_out(34,0); usleep(15680);
+                       gpio_out(34,1); usleep(15680);   # NRST pulse, SoC GPIO 34
+                       retry until timeout
+           ("Can not connect to board, Serial port ... timed-out." = strapping failed)
+if r == 6:  flash HD hex
+if r == 7:  flash NA hex
+# after a verified write:
+gpio_out(35, 0)                     # release BOOT0 -&gt; normal app boot
+touch /root/&lt;status-flag&gt;           # HD or NA flag file
+sync()</code></pre>
+<p>Exact <code>stm32Reboot()</code> (exit ISP, run new app):</p>
+<pre><code class="fenced-code-block language-text">gpio_out(34, 0)                     # assert NRST (LOW)
+usleep(15680)                       # 15.68 ms
+gpio_out(34, 1)                     # release NRST (HIGH)
+usleep(15680)</code></pre>
+<p>Key facts:</p>
+<ul>
+<li><strong>BOOT0 (GPIO 35) must be HIGH before and during the NRST pulse (GPIO 34).</strong>
+NRST pulse width: <strong>15.68 ms LOW, then 15.68 ms HIGH</strong>. The 1 s hold after setting
+BOOT0 is part of the required timing.</li>
+<li>Serial sync byte <code>0x43</code>; reply <code>6</code> (HD) / <code>7</code> (NA) also performs <strong>revision auto-detection</strong> —
+which is why the factory <code>run.sh</code> passes <strong>both</strong> hex files:
+<code>IAPCommand Adventurer4-NA-IAP-….hex Adventurer4-HD-IAP-….hex</code>.</li>
+<li>The GPIOs are driven via Linux sysfs (<code>/sys/class/gpio</code>), which is why the tool must run
+<strong>on the SoC as root</strong> — a generic <code>stm32isp</code> on another board has no access to these lines
+and times out.</li>
+</ul>
+<hr>
+<h2 id="3-verified-pins" class="atx">3. Verified pins</h2>
+<h3 id="31-hc32f460-adc-capability-from-the-chip-hal-adcc" class="atx">3.1 HC32F460 ADC capability (from the chip HAL <code>adc.c</code>)</h3>
+<ul>
+<li>Valid ADC pins: <strong>PA0–PA7, PB0, PB1, PC0–PC5</strong> (16 channels).</li>
+<li><strong>PB7 is NOT an ADC pin</strong> — the stock-template <code>sensor_pin: PB7</code> (hotend) cannot work on this
+chip; Klipper aborts with "Not a valid ADC pin".</li>
+</ul>
+<h3 id="32-klipper-port-serial-pin-options-from-srchc32f460kconfig" class="atx">3.2 Klipper port serial pin options (from <code>src/hc32f460/Kconfig</code>)</h3>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Pins</th>
+<th>Status in current config</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>HC32F460_SERIAL_PA7_PA8</code></td>
+<td>PA7 / PA8</td>
+<td><strong>selected — CONFLICTS with X <code>step_pin: PA8</code></strong></td>
+</tr>
+<tr>
+<td><code>HC32F460_SERIAL_PA13_PA14</code></td>
+<td>PA13 / PA14</td>
+<td>free (SWD pins — avoid unless SWD unused)</td>
+</tr>
+<tr>
+<td><code>HC32F460_SERIAL_PA3_PA2</code></td>
+<td>PA3 / PA2</td>
+<td><strong>free — recommended</strong></td>
+</tr>
+<tr>
+<td><code>HC32F460_SERIAL_PH2_PB10</code></td>
+<td>PH2 / PB10</td>
+<td>PB10 = TMC mux select A — no</td>
+</tr>
+<tr>
+<td><code>HC32F460_SERIAL_PA15_PA9</code></td>
+<td>PA15 / PA9</td>
+<td>PA15 = Z step — no</td>
+</tr>
+<tr>
+<td><code>HC32F460_SERIAL_PC0_PC1</code></td>
+<td>PC0 / PC1</td>
+<td>PC1 = Y endstop — no</td>
+</tr>
+</tbody></table>
+<p>Port clock: <code>CONFIG_CLOCK_FREQ=200000000</code> (200 MHz). <code>CONFIG_WANT_TMCUART=y</code> (TMC2209-over-UART
+supported by the port, <code>tmcuart.c</code>). The port does <strong>not</strong> implement <code>temperature_mcu</code>.</p>
+<h3 id="33-board-traced-pins-traced-on-the-physical-mainboard-kept-as-authoritative" class="atx">3.3 Board-traced pins (traced on the physical mainboard, kept as authoritative)</h3>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Pin</th>
+<th>Note</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>X step / dir / enable</td>
+<td>PA8 / !PC9 / !PA11</td>
+<td></td>
+</tr>
+<tr>
+<td>Y step / dir / enable</td>
+<td>PB14 / !PB13 / !PB15</td>
+<td></td>
+</tr>
+<tr>
+<td>Z step / dir / enable</td>
+<td>PA15 / !PA12 / !PC11</td>
+<td></td>
+</tr>
+<tr>
+<td>E step / dir / enable</td>
+<td>PC7 / PC6 / !PC8</td>
+<td></td>
+</tr>
+<tr>
+<td>X endstop</td>
+<td>^PC3</td>
+<td></td>
+</tr>
+<tr>
+<td>Y endstop</td>
+<td>^PC1</td>
+<td></td>
+</tr>
+<tr>
+<td>Z endstop</td>
+<td>!PB5</td>
+<td></td>
+</tr>
+<tr>
+<td>Hotend heater</td>
+<td>PA1</td>
+<td></td>
+</tr>
+<tr>
+<td>Bed heater</td>
+<td>PC4</td>
+<td></td>
+</tr>
+<tr>
+<td>Bed thermistor</td>
+<td>PA0</td>
+<td>valid ADC ✅</td>
+</tr>
+<tr>
+<td>Hotend thermistor</td>
+<td><strong>unknown — probe</strong></td>
+<td>must be one of the valid ADC pins; PB7 (stock template) is invalid</td>
+</tr>
+<tr>
+<td>Hotend fan</td>
+<td>PC2 (<code>heater_fan</code>)</td>
+<td></td>
+</tr>
+<tr>
+<td>Part fan</td>
+<td>PA5</td>
+<td></td>
+</tr>
+<tr>
+<td>Controller fan</td>
+<td>PC5</td>
+<td></td>
+</tr>
+<tr>
+<td>Chamber fan</td>
+<td>PB9</td>
+<td></td>
+</tr>
+<tr>
+<td>LED</td>
+<td><strong>unknown — probe</strong></td>
+<td>stock template: PB12 (unconfirmed)</td>
+</tr>
+<tr>
+<td>TMC2209 UART (shared)</td>
+<td>PC10</td>
+<td>4:1 analog mux, COM = PC10</td>
+</tr>
+<tr>
+<td>Mux select A / B</td>
+<td>PB10 / PB1</td>
+<td></td>
+</tr>
+<tr>
+<td>Mux channel map</td>
+<td>X = ch0, E = ch1, Y = ch2, Z = ch3</td>
+<td><code>select_pins</code> per axis as in the config</td>
+</tr>
+<tr>
+<td>MCU ↔ SoC UART</td>
+<td>SoC <code>/dev/ttyS1</code> @ 115200</td>
+<td>uses MCU USART0; becomes <strong>inactive for Klipper</strong> after the serial move to PA3/PA2</td>
+</tr>
+</tbody></table>
+<hr>
+<h2 id="4-temperature-system" class="atx">4. Temperature system</h2>
+<h3 id="41-mcu-side--four-sensor-curve-descriptors" class="atx">4.1 MCU side — four sensor curve descriptors</h3>
+<p>A 4-entry pointer array at VMA <code>0x08015D10</code> (file <code>0x9D10</code>) selects the per-channel conversion
+table. The descriptors (VMA → content):</p>
+<table>
+<thead>
+<tr>
+<th>VMA</th>
+<th>Content</th>
+<th>Interpretation</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>0x0801A4CC</code></td>
+<td>pair list climbing to ≈ 263 °C</td>
+<td><strong>hotend, high-temp nozzle curve</strong></td>
+</tr>
+<tr>
+<td><code>0x0801A6AC</code></td>
+<td>(10.2 °C, 300), (11.0, 295), (11.9, 290), (12.8, 285) … (≈117 °C, 170)</td>
+<td><strong>bed</strong></td>
+</tr>
+<tr>
+<td><code>0x0801A88C</code></td>
+<td>small/secondary range</td>
+<td>secondary sensor</td>
+</tr>
+<tr>
+<td><code>0x0801A974</code></td>
+<td>small/secondary range</td>
+<td>secondary sensor</td>
+</tr>
+</tbody></table>
+<p>Two distinct hotend curves exist in the image (standard: ADC 0→384, 8.1 °C → 215.2 °C;
+high-temp up to ≈ 408 °C tabulated), matching the interchangeable nozzles (0.3/0.4/0.6 mm,
+rated up to 265 °C).</p>
+<p>Facts and limits of this section:</p>
+<ul>
+<li>The <strong>existence</strong> of the four descriptors and their <strong>value content</strong> are byte-verified.</li>
+<li>The <strong>consumer function</strong> that loads a given table was <strong>not resolvable from the flat image</strong>
+(literal-pool, <code>movw/movt</code>, and base-normalized searches all return zero references — the
+code reaches the tables through an indirect/indexed path). The table→physical-thermistor
+mapping is therefore <strong>value-based inference</strong>, to be confirmed by the live probe
+(warm each sensor, observe which <code>[temperature_sensor]</code> rises).</li>
+<li>The tables are <strong>temperature ↔ ADC-value</strong> LUTs, not resistance curves; the absolute ADC
+scaling (gain, Vref) must be validated live with <code>QUERY_ADC</code>.</li>
+</ul>
+<h3 id="42-soc-side--nozzle-calibration-model-the-quot12quotquot14quot-values" class="atx">4.2 SoC side — nozzle calibration model (the "12"/"14" values)</h3>
+<p>The per-nozzle two-digit "nozzle temp cal" value is a <strong>target-temperature offset applied by the
+SoC</strong>, not stored or used by the MCU. Evidence from <code>adventurer4-arm</code> symbols:</p>
+<pre><code class="fenced-code-block">Config::getExtruderOneTempOffset      Config::getExtruderTwoTempOffset
+Config::getExtruderThreeTempOffset    Config::getExtruderFourTempOffset
+Config::getExtruderCalibrationValue   Config::getNozzleTempDifferentValue
+Config::getAutoCalibrationSwitch      Config::getAutoPoint
+NozzleTempCheck::*
+SerialObject::getAutoOffsetValue      SerialObject::getResultForAutoOffset
+SerialObject::printingAdjustNozzleTemp</code></pre>
+<p>Flow: user selects nozzle (UI: <code>select_nozzle1..4.png</code>) → SoC reads the stored offset for that
+nozzle → SoC shifts the target temperature by the offset before sending it to the MCU.
+SoC-enforced ceiling strings: <code>"Extruder can be heated up to 265 "</code>, <code>"Nozzle 0-280 "</code>,
+<code>"0.3-265"</code>, <code>"0.4-265"</code>, <code>"0.6-265"</code>.</p>
+<p><strong>Klipper implication:</strong> encode the offset as a host-side macro (per nozzle), and set
+<code>max_temp</code> to the nozzle rating + margin (265–280), not the 215 °C table limit.</p>
+<h3 id="43-what-does-not-exist" class="atx">4.3 What does not exist</h3>
+<p>There is <strong>no cabin / chamber / board temperature sensor</strong> anywhere in the MCU or SoC firmware
+(verified by full string scan). The four ADC channels are: hotend (standard), hotend (high-temp),
+bed, and one secondary/unused channel.</p>
+<hr>
+<h2 id="5-g-code-inventory" class="atx">5. G-code inventory</h2>
+<h3 id="51-soc-parser-adventurer4-arm" class="atx">5.1 SoC parser (<code>adventurer4-arm</code>)</h3>
+<pre><code class="fenced-code-block">G-codes:  G0 G1 G2 G3 G4 G5 G6 G7 G8 G9 G44 G47 G90 G91 G92 G161 G162
+M-codes:  M0 M1 M2 M3 M4 M5 M6 M7 M8 M9 M17 M18 M25 M31 M36 M37 M38 M39
+          M47 M63 M103 M104 M105 M107 M112 M113 M114 M117 M118 M119
+          M121 M122 M140 M144 M145 M652 M653 M654 M901</code></pre>
+<h3 id="52-mcu-embedded-g-code-power-loss-recovery--state" class="atx">5.2 MCU-embedded G-code (power-loss recovery / state)</h3>
+<table>
+<thead>
+<tr>
+<th>Address (file)</th>
+<th>String</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>0x0EB15</code></td>
+<td><code>G90</code></td>
+</tr>
+<tr>
+<td><code>0x0EB19</code></td>
+<td><code>G28</code></td>
+</tr>
+<tr>
+<td><code>0x0EB1D</code></td>
+<td><code>M132 X Y Z A B</code> (store position)</td>
+</tr>
+<tr>
+<td><code>0x0EB32</code></td>
+<td><code>G1 Z15 F400</code> (Z lift)</td>
+</tr>
+<tr>
+<td><code>0x0EB40</code></td>
+<td><code>M117$</code> (status string)</td>
+</tr>
+</tbody></table>
+<p>State machine strings: <code>READY, BUILDING, BUILDING_FROM_SD, BUILDING_ONBOARD, ERROR, CANCEL_BUILD, HEAT_SHUTDOWN, MOVING, DELAY, HOMING, WAIT_ON_TOOL, WAIT_ON_PLATFORM, WAIT_ON_BUTTON</code> (the MCU can cut heat autonomously via <code>HEAT_SHUTDOWN</code>).</p>
+<p>SoC auto-generated moves (calibration/test patterns) are inventoried in <code>GCODE-STRINGS.md</code>.</p>
+<hr>
+<h2 id="6-soc-software-stack" class="atx">6. SoC software stack</h2>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Details</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>adventurer4-arm</code></td>
+<td>Qt/C++ main app; UI, G-code parser, control model; unstripped, debug info</td>
+</tr>
+<tr>
+<td><code>ffstartup-arm</code></td>
+<td>Go supervisor; reads <code>ffstartup.cfg</code>, launches <code>./software/%VERSION%/adventurer4-arm</code> with <code>-1;-D;-qws</code></td>
+</tr>
+<tr>
+<td><code>ffstartup.cfg</code></td>
+<td><code>LogDir=/opt/finder_rush/log</code>, <code>Kernel=kernel</code>, <code>Control=control</code>, <code>Software=software</code>, <code>Library=library</code>, <code>Duration=30</code></td>
+</tr>
+<tr>
+<td>MCU link</td>
+<td><code>/dev/ttyS1</code>, 115200</td>
+</tr>
+<tr>
+<td>Network</td>
+<td><code>eth0</code> and <code>wlan0</code> managed; WiFi AP mode: SSID <code>Adventurer 4</code>, password <code>12345678</code> (<code>rtl_hostapd_2G.conf</code>); DHCP check via <code>1slt_dhcp_check()</code></td>
+</tr>
+<tr>
+<td>Vendor updater</td>
+<td><code>flashforge_init.sh</code> (disk-based, §8) → <code>update_control/kernel/software/library</code> → per-package <code>run.sh</code>; <code>control-2.3.0/run.sh</code> runs <code>IAPCommand</code> on both MCU hexes</td>
+</tr>
+<tr>
+<td>Boot guard</td>
+<td>updater requires <code>armv7l</code> + kernel <code>3.4.39+</code>; machine check skipped when a <code>screwflag</code> file is present</td>
+</tr>
+</tbody></table>
+<p>Notable <code>Config</code> / <code>SerialObject</code> symbols (SoC control model): <code>getExtruder*TempOffset</code>,
+<code>getFlashCloud*</code>, <code>getPolarCloud*</code> (cloud accounts), <code>hostHeartCheckTemperature</code>,
+<code>sendPrintLayer</code>, <code>readM25</code>, <code>printingPersent</code>, <code>gpioBufCheckInit</code>, <code>ParseXYZEFField</code>.</p>
+<hr>
+<h2 id="7-patching-stm32isp-for-this-board" class="atx">7. Patching <code>stm32isp</code> for this board</h2>
+<p><code>IAPCommand</code> is a <code>stm32isp</code> fork; its delta over upstream is small and fully decoded.
+A clean fork needs exactly:</p>
+<ol>
+<li><p><strong>GPIO strapping before serial open</strong> (the part generic <code>stm32isp</code> lacks):</p>
+<pre><code class="fenced-code-block language-c"><span class="token keyword">static</span> <span class="token keyword">void</span> <span class="token function">ad4_gpios_init</span><span class="token punctuation">(</span><span class="token keyword">void</span><span class="token punctuation">)</span> <span class="token punctuation">{</span>
+    <span class="token comment">/* SoC sysfs, root required */</span>
+    <span class="token function">sysfs_gpio_export</span><span class="token punctuation">(</span><span class="token number">34</span><span class="token punctuation">)</span><span class="token punctuation">;</span>           <span class="token comment">/* NRST  */</span>
+    <span class="token function">sysfs_gpio_export</span><span class="token punctuation">(</span><span class="token number">35</span><span class="token punctuation">)</span><span class="token punctuation">;</span>           <span class="token comment">/* BOOT0 */</span>
+    <span class="token function">sysfs_gpio_dir</span><span class="token punctuation">(</span><span class="token number">34</span><span class="token punctuation">,</span> <span class="token number">1</span><span class="token punctuation">)</span><span class="token punctuation">;</span>           <span class="token comment">/* out   */</span>
+    <span class="token function">sysfs_gpio_dir</span><span class="token punctuation">(</span><span class="token number">35</span><span class="token punctuation">,</span> <span class="token number">1</span><span class="token punctuation">)</span><span class="token punctuation">;</span>           <span class="token comment">/* out   */</span>
+    <span class="token function">sysfs_gpio_set</span><span class="token punctuation">(</span><span class="token number">35</span><span class="token punctuation">,</span> <span class="token number">1</span><span class="token punctuation">)</span><span class="token punctuation">;</span>           <span class="token comment">/* BOOT0 = HIGH */</span>
+    <span class="token function">sleep</span><span class="token punctuation">(</span><span class="token number">1</span><span class="token punctuation">)</span><span class="token punctuation">;</span>                        <span class="token comment">/* required hold */</span>
+<span class="token punctuation">}</span>
+<span class="token keyword">static</span> <span class="token keyword">void</span> <span class="token function">ad4_nrst_pulse</span><span class="token punctuation">(</span><span class="token keyword">void</span><span class="token punctuation">)</span> <span class="token punctuation">{</span>
+    <span class="token function">sysfs_gpio_set</span><span class="token punctuation">(</span><span class="token number">34</span><span class="token punctuation">,</span> <span class="token number">0</span><span class="token punctuation">)</span><span class="token punctuation">;</span>  <span class="token function">usleep</span><span class="token punctuation">(</span><span class="token number">15680</span><span class="token punctuation">)</span><span class="token punctuation">;</span>
+    <span class="token function">sysfs_gpio_set</span><span class="token punctuation">(</span><span class="token number">34</span><span class="token punctuation">,</span> <span class="token number">1</span><span class="token punctuation">)</span><span class="token punctuation">;</span>  <span class="token function">usleep</span><span class="token punctuation">(</span><span class="token number">15680</span><span class="token punctuation">)</span><span class="token punctuation">;</span>
+<span class="token punctuation">}</span></code></pre>
+</li>
+<li><p><strong>Sync-with-retry</strong>: send <code>0x43</code>; on no reply, call <code>ad4_nrst_pulse()</code> and retry
+(upstream times out after one attempt). Accept replies <code>6</code> (HD) or <code>7</code> (NA).</p>
+</li>
+<li><p><strong>Dual-hex argument model</strong>: <code>stm32isp-ad4 &lt;na.hex&gt; &lt;hd.hex&gt; [tty] [baud]</code> — select the
+file from the sync reply instead of assuming one chip.</p>
+</li>
+<li><p><strong>Post-write release</strong>: <code>sysfs_gpio_set(35, 0)</code> (BOOT0 low) + one <code>ad4_nrst_pulse()</code>
+so the MCU boots the new app.</p>
+</li>
+<li><p><strong>Optional</strong>: status flag file + verbose logging (the value of a custom fork over the
+opaque factory binary).</p>
+</li>
+</ol>
+<p>Everything else (packet framing, flash page writes, verify) is standard <code>stm32isp</code> and
+unchanged. Roughly 50–80 lines of added C.</p>
+<hr>
+<h2 id="8-unattended-flashing-usb-disk" class="atx">8. Unattended flashing (USB disk)</h2>
+<p>The factory updater is a script named <strong><code>flashforge_init.sh</code></strong> placed at the root of the
+removable disk. The SoC's boot/update path detects and executes it (parameters
+<code>Adventurer4 0012</code>). Mirror that layout with our own minimal runner.</p>
+<h3 id="81-disk-layout-fat32" class="atx">8.1 Disk layout (FAT32)</h3>
+<pre><code class="fenced-code-block">/                       ← disk root
+  flashforge_init.sh    ← runner (below)
+  screwflag             ← empty file: skips the machine-type check
+  IAPCommand            ← factory ARM binary (or the stm32isp fork, §7)
+  klipper.hex           ← Klipper @ 0x0800C000
+  factory-HD.hex        ← known-good restore image (never delete)
+  RESTORE               ← if this file exists, the script flashes factory-HD.hex instead</code></pre>
+<h3 id="82-flashforge_initsh" class="atx">8.2 <code>flashforge_init.sh</code></h3>
+<pre><code class="fenced-code-block language-sh"><span class="token shebang important">#!/bin/sh</span>
+<span class="token comment"># AD4 Klipper unattended flash — run from USB disk by the SoC boot/update path.</span>
+<span class="token comment"># Same guard contract as the factory script.</span>
+<span class="token builtin class-name">set</span> <span class="token parameter variable">-x</span>
+<span class="token assign-left variable">WORK_DIR</span><span class="token operator">=</span><span class="token variable"><span class="token variable">`</span><span class="token function">dirname</span> $0<span class="token variable">`</span></span>
+
+<span class="token punctuation">[</span> <span class="token string">"<span class="token variable"><span class="token variable">$(</span><span class="token function">uname</span> <span class="token parameter variable">-m</span><span class="token variable">)</span></span>"</span>  <span class="token operator">!=</span> <span class="token string">"armv7l"</span>   <span class="token punctuation">]</span> <span class="token operator">&amp;&amp;</span> <span class="token punctuation">{</span> <span class="token builtin class-name">echo</span> <span class="token string">"arch error"</span><span class="token punctuation">;</span>  <span class="token builtin class-name">exit</span> <span class="token number">1</span><span class="token punctuation">;</span> <span class="token punctuation">}</span>
+<span class="token punctuation">[</span> <span class="token string">"<span class="token variable"><span class="token variable">$(</span><span class="token function">uname</span> <span class="token parameter variable">-r</span><span class="token variable">)</span></span>"</span>  <span class="token operator">!=</span> <span class="token string">"3.4.39+"</span> <span class="token punctuation">]</span> <span class="token operator">&amp;&amp;</span> <span class="token punctuation">{</span> <span class="token builtin class-name">echo</span> <span class="token string">"kernel error"</span><span class="token punctuation">;</span> <span class="token builtin class-name">exit</span> <span class="token number">1</span><span class="token punctuation">;</span> <span class="token punctuation">}</span>
+
+<span class="token comment"># 1) Stop the vendor stack so nothing holds /dev/ttyS1 or the GPIOs.</span>
+<span class="token function">pkill</span> <span class="token parameter variable">-f</span> ffstartup-arm  <span class="token operator"><span class="token file-descriptor important">2</span>&gt;</span>/dev/null
+<span class="token function">pkill</span> <span class="token parameter variable">-f</span> adventurer4-arm <span class="token operator"><span class="token file-descriptor important">2</span>&gt;</span>/dev/null
+<span class="token function">sleep</span> <span class="token number">2</span>
+
+<span class="token comment"># 2) Free the MCU UART (belt and suspenders).</span>
+<span class="token function">fuser</span> <span class="token parameter variable">-k</span> /dev/ttyS1 <span class="token operator"><span class="token file-descriptor important">2</span>&gt;</span>/dev/null
+<span class="token function">sleep</span> <span class="token number">1</span>
+
+<span class="token comment"># 3) Select image: RESTORE flag =&gt; factory, else Klipper.</span>
+<span class="token keyword">if</span> <span class="token punctuation">[</span> <span class="token parameter variable">-f</span> <span class="token string">"<span class="token variable">$WORK_DIR</span>/RESTORE"</span> <span class="token punctuation">]</span><span class="token punctuation">;</span> <span class="token keyword">then</span>
+    <span class="token assign-left variable">IMG</span><span class="token operator">=</span><span class="token string">"<span class="token variable">$WORK_DIR</span>/factory-HD.hex"</span><span class="token punctuation">;</span> <span class="token assign-left variable">FLAG</span><span class="token operator">=</span>restore
+<span class="token keyword">else</span>
+    <span class="token assign-left variable">IMG</span><span class="token operator">=</span><span class="token string">"<span class="token variable">$WORK_DIR</span>/klipper.hex"</span><span class="token punctuation">;</span>   <span class="token assign-left variable">FLAG</span><span class="token operator">=</span>klipper
+<span class="token keyword">fi</span>
+
+<span class="token comment"># 4) Flash. Passing the same image in both slots makes it rev-agnostic</span>
+<span class="token comment">#    (IAPCommand auto-selects HD/NA from the sync reply 6/7).</span>
+<span class="token string">"<span class="token variable">$WORK_DIR</span>/IAPCommand"</span> <span class="token string">"<span class="token variable">$IMG</span>"</span> <span class="token string">"<span class="token variable">$IMG</span>"</span> /dev/ttyS1 <span class="token number">115200</span>
+<span class="token assign-left variable">RC</span><span class="token operator">=</span><span class="token variable">$?</span>
+
+<span class="token comment"># 5) Record the outcome for later inspection.</span>
+<span class="token builtin class-name">echo</span> <span class="token string">"<span class="token variable">$FLAG</span> rc=<span class="token variable">$RC</span>"</span> <span class="token operator">&gt;</span> /root/ad4-flash-status <span class="token operator"><span class="token file-descriptor important">2</span>&gt;</span>/dev/null <span class="token operator">||</span> <span class="token boolean">true</span>
+<span class="token function">sync</span>
+<span class="token builtin class-name">exit</span> <span class="token variable">$RC</span></code></pre>
+<p>Safety rules (non-negotiable):</p>
+<ul>
+<li>Write <strong>only</strong> the app window (<code>0x0800C000</code>); the ROM ISP keeps every state recoverable.</li>
+<li><code>factory-HD.hex</code> always travels on the disk; presence of <code>RESTORE</code> reverts in one boot.</li>
+<li>The script never touches flash regions other than the IAP app window.</li>
+</ul>
+<p>Open item (verify once on hardware): the exact trigger that makes the SoC execute the disk's
+<code>flashforge_init.sh</code> at boot (the bootloader's removable-media update hook). The name and
+argument convention match the factory package, which is the working reference.</p>
+<hr>
+<h2 id="9-rpi-over-ethernet-operation-klipper-host" class="atx">9. RPi-over-Ethernet operation (Klipper host)</h2>
+<h3 id="91-architecture-and-division-of-labor" class="atx">9.1 Architecture and division of labor</h3>
+<pre><code class="fenced-code-block">[Raspberry Pi] ── UART (PA2/PA3, 250000) ──&gt; [HC32F460 running Klipper]
+      │
+      └── Ethernet ──&gt; [your LAN] ──&gt; Fluidd/Mainsail (any device)
+
+[Sunxi SoC] ── GPIO 34/35 (NRST/BOOT0) ──&gt; [HC32F460 ISP]   (flashing only)
+[USB disk]  ── flashforge_init.sh ──&gt; [SoC]                  (unattended flash)</code></pre>
+<ul>
+<li>The <strong>RPi is the Klipper host</strong>: klippy + Moonraker + Fluidd, reachable over Ethernet.</li>
+<li>The <strong>SoC has no role in operation</strong> once the MCU serial is moved off the SoC's USART0.
+Its only operational role is <strong>flashing</strong> (it alone is wired to NRST/BOOT0) and, later,
+optionally a UI — which should be a <strong>network UI</strong> (Fluidd/Mainsail pointed at Moonraker)
+or a small web client on the SoC, not a direct MCU link.</li>
+<li>The RPi <strong>cannot enter ISP mode itself</strong> — it does not drive GPIO 34/35. All flashing
+stays on the SoC path (§8). This is a hardware constraint, not a software gap.</li>
+</ul>
+<h3 id="92-mcu-side-change-required" class="atx">9.2 MCU-side change required</h3>
+<p>Rebuild the Klipper firmware with a serial pair that does not collide with board pins:</p>
+<pre><code class="fenced-code-block">CONFIG_HC32F460_SERIAL_PA7_PA8  -&gt;  off
+CONFIG_HC32F460_SERIAL_PA3_PA2  -&gt;  on</code></pre>
+<p><code>PA3_PA2</code> is the only free, non-SWD pair (§3.2). Wire:</p>
+<table>
+<thead>
+<tr>
+<th>RPi</th>
+<th>MCU</th>
+<th>Note</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>GPIO14 (TXD)</td>
+<td>PA2 or PA3</td>
+<td>if Klipper does not connect, swap the two wires</td>
+</tr>
+<tr>
+<td>GPIO15 (RXD)</td>
+<td>the other of PA2/PA3</td>
+<td></td>
+</tr>
+<tr>
+<td>GND</td>
+<td>any GND</td>
+<td><strong>GND only — do not inject 3.3 V/5 V</strong>; the MCU is powered by the printer PSU</td>
+</tr>
+</tbody></table>
+<p>Baud: 250 000 (Klipper default; both sides agree). Logic levels are both 3.3 V — no shifter.</p>
+<h3 id="93-software-on-the-rpi" class="atx">9.3 Software on the RPi</h3>
+<ol>
+<li>Raspberry Pi OS 64-bit (any Pi 3B+/4/5; 2B works).</li>
+<li><code>sudo apt -y install python3-pip python3-venv git build-essential</code></li>
+<li><code>git clone https://github.com/Klipper3d/klipper &amp;&amp; cd klipper &amp;&amp; ./scripts/install-linux.sh</code></li>
+<li>Enable the hardware UART and release it from Bluetooth (<code>/boot/config.txt</code>:
+<code>enable_uart=1</code>, <code>dtoverlay=disable-bt</code>, or the equivalent in raspi-config) → <code>/dev/serial0</code>.</li>
+<li><code>[mcu] serial: /dev/serial0</code> (see <code>printer.cfg</code>).</li>
+<li>Moonraker + Fluidd (or Mainsail) for the web UI; static IP or your router's DHCP.</li>
+</ol>
+<h3 id="94-what-the-soc-must-provide-flashing-path-only" class="atx">9.4 What the SoC must provide (flashing path only)</h3>
+<ul>
+<li>Nothing at runtime. For the unattended method: the disk from §8.</li>
+<li>If a <strong>dedicated flash mode</strong> is wanted (so a stock-booted printer can be flashed without a
+USB disk every time): a boot flag (e.g. <code>/data/klipper-mode</code>) that makes the SoC's rc skip
+launching <code>adventurer4-arm</code> and run <code>flashforge_init.sh</code> from a fixed path instead. One
+small edit to the boot rc; no driver work.</li>
+<li>For a future SoC UI: run any lightweight web client (or a Chromium kiosk) pointed at
+Moonraker on the RPi — no SoC↔MCU wiring needed at all.</li>
+</ul>
+<h3 id="95-conflict-notes" class="atx">9.5 Conflict notes</h3>
+<ul>
+<li>While the vendor app runs, it owns <code>/dev/ttyS1</code> and may exercise the GPIO strapping at its
+own boot. That only matters for the flash path; the RPi↔MCU link on PA2/PA3 is independent.</li>
+<li>After the serial move, the SoC's old link to the MCU is dead (MCU no longer listens on its
+USART0). Do not rely on the stock UI for temperature/motion — everything goes through Klipper.</li>
+</ul>
+<hr>
+<h2 id="10-open-items-live-board-verification" class="atx">10. Open items (live-board verification)</h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Item</th>
+<th>Method</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>1</td>
+<td>Hotend thermistor pin (and which of the two hotend curves is active)</td>
+<td><code>probe.cfg</code>: candidate ADC pins as <code>[temperature_sensor]</code>, warm the nozzle</td>
+</tr>
+<tr>
+<td>2</td>
+<td>LED pin</td>
+<td><code>SET_PIN</code> sweep over candidates (mA-level, safe)</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Absolute ADC scaling</td>
+<td><code>QUERY_ADC</code> at known temperatures (ice bath, room, warm-up)</td>
+</tr>
+<tr>
+<td>4</td>
+<td>Per-nozzle offsets to encode</td>
+<td>your "12"/"14" values per fitted nozzle</td>
+</tr>
+<tr>
+<td>5</td>
+<td>PA2/PA3 TX/RX order</td>
+<td>swap wires if klippy handshake fails</td>
+</tr>
+<tr>
+<td>6</td>
+<td>Exact SoC boot trigger for disk <code>flashforge_init.sh</code></td>
+<td>one hardware test with the §8 disk</td>
+</tr>
+<tr>
+<td>7</td>
+<td>Vendor service name holding <code>/dev/ttyS1</code></td>
+<td><code>systemctl</code> / <code>fuser</code> on the live SoC</td>
+</tr>
+</tbody></table>
+</article>
+</body>
+</html>

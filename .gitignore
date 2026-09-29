@@ -1,0 +1,18 @@
+# OS junk
+.DS_Store
+
+# Large extraction/backup artifacts (live on disk, not in git)
+work/backup/
+work/bkup/
+work/rootfs.ext4
+work/rootfs_files/
+work/fw/
+work/klipper/
+work/piotoolchain/
+work/kv-next/
+work/flashdisk-work/
+
+# Firmware archives (kept on disk; re-downloadable)
+*.zip
+*.tar.xz
+*.tgz

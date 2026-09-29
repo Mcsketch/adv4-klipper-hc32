@@ -47,21 +47,31 @@ source\driver\src\hc32f460_wdt.c
 
 ---
 
-## 2. Flash memory map (HD revision)
+## 2. Flash memory map (HD and NA revisions)
+
+Base addresses were read directly from the two factory hexes (their type-04
+extended-address records), not assumed:
 
 | Region | Address | Content |
 |---|---|---|
 | ROM bootloader / ISP | `0x00000000`–… | ROM-resident; **never written**. Entry condition: NRST pulse with BOOT0 held HIGH |
-| Application (HD) | **`0x0800C000`** | Factory `Adventurer4-HD-IAP-2.3.0-20230216.hex`, app 60 416 B |
-| Application (NA rev) | `0x08010000` | Factory `Adventurer4-NA-IAP-2.3.0-20230216.hex` |
+| Application (**HD / H32**) | **`0x0000C000`** | `Adventurer4-HD-IAP-2.3.0-20230216.hex`, 60 416 B |
+| Application (**NA / N32**) | **`0x08010000`** | `Adventurer4-NA-IAP-2.3.0-20230216.hex`, 44 640 B |
+
+The two revisions live at **different base addresses** (HD low, NA high); the
+flasher selects the right one from the sync reply (6 = HD, 7 = NA).
 
 Rules:
 
-- **Write only the app window** (`0x0800C000` for HD). Never `0x00000000`.
+- **Write only the app window for the detected revision** (HD `0x0000C000`, NA
+  `0x08010000`). Never `0x00000000`. The flasher hard-refuses any image base at
+  or below `0x00008000`, so it can never clobber the reset/ISP region.
 - A corrupted app is **always recoverable**: the ISP bootloader lives in ROM, so the next
   reset/BOOT0 pulse re-enters ISP and the factory image can be re-flashed in one command.
-- Klipper hex: `arm-none-eabi-objcopy -I binary -O ihex --change-address=0xC000 klipper.bin klipper.hex`
-  (round-trip verified byte-identical).
+- Klipper hex for the HD (H32) board: build the firmware for the same window the HD
+  image uses and re-encode the start:
+  `arm-none-eabi-objcopy -I binary -O ihex --change-address=0xC000 klipper.bin klipper.hex`.
+  Verify the result's base (the flasher prints it) matches the HD window before flashing.
 
 ### 2.1 ISP entry — the GPIO dance (decoded from `IAPCommand`)
 
@@ -266,9 +276,43 @@ Notable `Config` / `SerialObject` symbols (SoC control model): `getExtruder*Temp
 `getFlashCloud*`, `getPolarCloud*` (cloud accounts), `hostHeartCheckTemperature`,
 `sendPrintLayer`, `readM25`, `printingPersent`, `gpioBufCheckInit`, `ParseXYZEFField`.
 
+### 6.1 SoC hardware map (verified from the working machine's boot log)
+
+From `FFAD4-BKUP.zip` → `dmesg-start.txt` (a full eMMC image of a working printer):
+
+| Subsystem | Node | Boot-log evidence |
+|---|---|---|
+| SoC | Allwinner sun8i / **sun50i V3S**, armv7l, kernel 3.4.39+ | `Machine: sun8i` |
+| **MCU serial** | **`/dev/ttyS1`** (uart0) | `uart0: ttyS1 at MMIO 0x1c28000` |
+| SoC console | `/dev/ttyS0` (uart2) — **not** the MCU | `uart2: ttyS0`, `console [ttyS0] enabled` |
+| **Ethernet** | `eth0` = **gmac0** GbE, PHY `00441400` | `gmac0: eth0: PHY ID 00441400 at 0` |
+| WiFi | `wlan0` (RTW) | `RTW: rtw_ndev_init(wlan0)` |
+| **Touch** | **TSC2007** → `/dev/input/event0,1`, `/dev/touchscreen/ucb1x00` | `TSC2007 TouchScreen Driver probe` |
+| **Display** | **`/dev/fb0`** (DISP, dclk 400 MHz) | `[DISP]` blocks, `/dev/fb0` |
+| **USB host** | EHCI + OHCI (bus 1 + bus 2) | `sunxi-ehci/ohci .1` |
+| USB mass storage | `sda1/sda2` | `Initializing USB Mass Storage driver` |
+| i2c | `twi0` @100 kHz, `twi1` | `twi_chan_cfg() [twi0]/[twi1]` |
+| PWM / backlight | `/dev/pwm` | `pwm module init!`, `Backlight Compensation` |
+| PMIC | AXP20x (CHIP ID 0x41) | `axp20_board 0-0034: AXP (CHIP ID: 0x41)` |
+| USB camera | `/dev/video0` (`uvcvideo`) | `uvcvideo: Adding mapping ...` |
+
+Key implications (detailed in **`adv4-soc-hack.md`**): the MCU is already wired to the
+SoC (`/dev/ttyS1`), so Klipper can reach it **through the SoC with no soldering**; the
+touch panel is **SoC-driven** (TSC2007); `eth0` is real wired GbE for the RPi↔SoC link;
+`/dev/fb0` + touch give the SoC a local UI. The factory app's MCU baud is 115200; a
+Klipper build uses 250000 — the SoC bridge must be set to the Klipper baud, not the
+vendor one.
+
 ---
 
 ## 7. Patching `stm32isp` for this board
+
+> **Status: built.** A complete, compiling fork with the GPIO dance built in now
+> lives in **`stm32isp-ad4/`** (`stm32isp-ad4.c`, `Makefile`, `flash-mcu.sh`, and
+> the stock `Adventurer4-HD-IAP-2.3.0-20230216.hex`). Its Intel-HEX parser is
+> validated against both factory hexes, and the end-to-end serial pump is tested.
+> The design below is exactly what that code implements. See
+> **`adv4-soc-hack.md` §6** for flashing and recovery.
 
 `IAPCommand` is a `stm32isp` fork; its delta over upstream is small and fully decoded.
 A clean fork needs exactly:
@@ -363,9 +407,11 @@ exit $RC
 
 Safety rules (non-negotiable):
 
-- Write **only** the app window (`0x0800C000`); the ROM ISP keeps every state recoverable.
+- Write **only** the app window for the detected revision (HD `0x0000C000`, NA
+  `0x08010000`); the ROM ISP keeps every state recoverable.
 - `factory-HD.hex` always travels on the disk; presence of `RESTORE` reverts in one boot.
-- The script never touches flash regions other than the IAP app window.
+- The script never touches flash regions other than the IAP app window (and hard-refuses
+  any image base ≤ `0x00008000`).
 
 Open item (verify once on hardware): the exact trigger that makes the SoC execute the disk's
 `flashforge_init.sh` at boot (the bootloader's removable-media update hook). The name and
@@ -374,6 +420,18 @@ argument convention match the factory package, which is the working reference.
 ---
 
 ## 9. RPi-over-Ethernet operation (Klipper host)
+
+> **Two variants.** §9.1 below is the *wired* option (RPi connected to the MCU
+> on PA2/PA3). The **no-soldering** option — RPi connected to the **SoC** over
+> the printer's own Ethernet port, with the SoC running a serial↔network
+> bridge and (optionally) its TSC2007 touch UI — is documented in
+> **`adv4-soc-hack.md`** and is the recommended path (zero wiring). The choice:
+>
+> - **§9.1 (wired MCU)**: RPi drives the MCU directly. Requires the two UART
+>   wires on the board and a Klipper rebuild onto PA2/PA3.
+> - **`adv4-soc-hack.md` (SoC bridge, no soldering)**: RPi talks to the SoC over
+>   Ethernet; the SoC pumps the MCU's existing `/dev/ttyS1` link. No rebuild,
+>   no wires, and it reuses the SoC's touch/USB/network for a UI.
 
 ### 9.1 Architecture and division of labor
 

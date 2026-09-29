@@ -7,8 +7,9 @@
 # Disk layout (FAT32, files at the disk root):
 #   flashforge_init.sh   this script
 #   screwflag            empty file (skips machine-type check)
-#   IAPCommand           factory ARM binary (or stm32isp-ad4 fork)
-#   klipper.hex          Klipper @ 0x0800C000
+#   IAPCommand           factory ARM binary, OR the stm32isp-ad4 fork named
+#                        "IAPCommand" (accepts the same two-hex argv)
+#   klipper.hex          Klipper, built for the HD (H32) app window
 #   factory-HD.hex       known-good restore image (never delete)
 #   RESTORE              OPTIONAL: if present, flashes factory-HD.hex
 # =============================================================

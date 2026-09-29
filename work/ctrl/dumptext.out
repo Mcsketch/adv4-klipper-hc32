@@ -1,0 +1,12 @@
+11 instructions in .text
+00010a0c  mvnsmi  lr, sp, lsr #18
+00010a10  addlt   r4, r6, r0, lsl #13
+00010a14  strhs   r4, [r0, #-0x60f]
+00010a18  stc2l   p0, c15, [r0], #0
+00010a1c  bicseq  pc, r4, #0x4100000
+00010a20  svceq   #0x1f1b8
+00010a24  movweq  pc, #0x12c0
+00010a28  rsclo   pc, r1, #0x4f000000
+00010a2c  strls   sb, [r3, #-0x301]
+00010a30  strls   sb, [r5, #-0x504]
+00010a34  ldcle   p2, c9, [lr, #-8]

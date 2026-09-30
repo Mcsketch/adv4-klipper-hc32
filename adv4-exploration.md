@@ -175,13 +175,23 @@ supported by the port, `tmcuart.c`). The port does **not** implement `temperatur
 
 ### 4.1 MCU side — four sensor curve descriptors
 
-A 4-entry pointer array at VMA `0x08015D10` (file `0x9D10`) selects the per-channel conversion
-table. The descriptors (VMA → content):
+> **Chip scope — read this first.** The offsets in this §4.1 are for the **HD** image
+> (HC32F460 / H32, app base `0x0800C000`, `Adventurer4-HD-IAP-…hex`). The **NA** chip
+> (Nation N32G45x, app base `0x08010000`) is a *different* MCU whose LUTs live at
+> *different* offsets — see `adv4-n32-thermistor.md`. The two mappings are **not**
+> contradictory; they are two chips. Do not cross-apply one image's offsets to the other.
+
+A 4-entry word array at VMA `0x08015D10` (file `0x9D10`) selects the per-channel
+conversion table. In the **HD** image its four words are the **flash file-offsets** of the
+four LUTs — `0x1A6AC, 0x1A88C, 0x1A974, 0x1A4CC` (i.e. VMA `0x0801A6AC / 0x0801A88C /
+0x0801A974 / 0x0801A4CC`, base `0x0800C000`) — which is byte-verified and is why the
+descriptors below are keyed to those addresses. (In the NA image the same address holds
+unrelated data, not a pointer array.) The descriptors (VMA → content):
 
 | VMA | Content | Interpretation |
 |---|---|---|
 | `0x0801A4CC` | pair list climbing to ≈ 263 °C | **hotend, high-temp nozzle curve** |
-| `0x0801A6AC` | (10.2 °C, 300), (11.0, 295), (11.9, 290), (12.8, 285) … (≈117 °C, 170) | **bed** |
+| `0x0801A6AC` | 8 B/entry (u32 temp×10, u32 adc): (10.2 °C, 300), (11.0, 295), (11.9, 290), (12.8, 285) … | **bed** (30+ entries, 10.2 °C → ≥ 147 °C) |
 | `0x0801A88C` | small/secondary range | secondary sensor |
 | `0x0801A974` | small/secondary range | secondary sensor |
 

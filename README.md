@@ -10,6 +10,8 @@ Self-documenting folder. All artifacts verified against:
 
 | File | Purpose |
 |---|---|
+| **`GETTING-STARTED.md`** | **First-install howto**: stock → Klipper that moves, in 5 steps, no soldering. Start here. |
+| **`adv4-touch-ui.md`** | **Touchscreen UI**: drive Klipper from the SoC touch (Qt4 + TSLIB + Moonraker client). Hardware verified, build plan. |
 | **`adv4-exploration.md`** | Shareable engineering report: all verified facts, addresses, GPIO dance, thermistor tables, SoC hardware map, architecture, flashing, recovery |
 | **`adv4-soc-hack.md`** | **No-soldering architecture**: RPi→SoC Ethernet, SoC serial↔network bridge, touch UI, USB, network. How to run Klipper over the bridge. MCU + SoC recovery |
 | **`printer-hc32.cfg`** | Klipper `printer.cfg` draft (correct where certain, annotated where live verification is needed) |

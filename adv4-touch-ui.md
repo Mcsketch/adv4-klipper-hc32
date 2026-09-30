@@ -10,7 +10,7 @@ carries the MCU bridge. No soldering; the SoC already owns the display + touch
 
 | Capability | Detail (from `dmesg` + app env in the rootfs) |
 |---|---|
-| Display | framebuffer **`/dev/fb0`**, 480×800, `rot90` (portrait). `QT_QPA_PLATFORM=linuxfb:tty=/dev/fb0:size=480x800` |
+| Display | framebuffer **`/dev/fb0`**, **480×854 portrait**, `rot270`. `QT_QPA_PLATFORM=linuxfb:tty=/dev/fb0:size=480x854:mmsize=156x244:offset=0`, `QWS_DISPLAY=transformed:rot270:LinuxFB:mmWidth156:mmHeight244:0`. A secondary `size=480x800` mode also appears (88 launches vs 694 for 480×854). **Not 640×800** — that resolution does not exist in the image. The panel is an 854×480 landscape display rotated 270° to portrait. `mmsize=156x244` is a Qt DPI-scaling hint only, not a verified physical size. |
 | Touch | **TSC2007** driver → `/dev/input/event0` (also `event1`). `QWS_MOUSE_PROTO=TSLIB:/dev/input/event0`, `TSLIB_TSDEVICE=/dev/input/event0` |
 | GUI toolkit | **Qt 4.8.6** (`/opt/qt-4.8.6`, `touchkit.so`, tslib generic plugin). The stock app is a Qt4 linuxfb program |
 | Stock app | `/opt/PROGRAM/software/2.0.2/adventurer4-arm` (Qt4, unstripped ARM ELF, symbols present) |
@@ -44,7 +44,8 @@ missing piece is purely an **application** that (a) renders to `/dev/fb0`,
 ### Option A — Replace the stock Qt4 app with a small Qt4 Klipper panel (native)
 - A Qt 4.8.6 C++ (or PyQt4) app using the `linuxfb` platform plugin, exactly
   like the stock app. Reads TSLIB touches (same env: `QT_QPA_PLATFORM=linuxfb
-  tty=/dev/fb0:size=480x800`, `QWS_MOUSE_PROTO=TSLIB:/dev/input/event0`).
+  tty=/dev/fb0:size=480x854`, `QWS_DISPLAY=transformed:rot270:LinuxFB:...`,
+  `QWS_MOUSE_PROTO=TSLIB:/dev/input/event0`).
 - Talks to Moonraker via the SoC's bundled **curl 7.55.1 + jsoncpp** (both
   already in rootfs: `/opt/cloud/curl-7.55.1`, `/opt/cloud/jsoncpp`). WebSocket
   optional — plain HTTP polling at ~2 Hz is enough for temps/progress.

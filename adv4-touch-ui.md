@@ -67,7 +67,7 @@ display path.
 
 ## 4. Minimal UI (what to build first)
 
-A single 480×800 portrait screen:
+A single 480×854 portrait screen:
 1. **Status header** — state (Idle/Printing/Heating/Error), progress %, elapsed.
 2. **Temps** — hotend / bed actual vs target, with +/- 5° stepper buttons
    (→ `M104`/`M140` via `gcode script`).

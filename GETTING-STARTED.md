@@ -109,6 +109,13 @@ passes through intact.
 
 ## Step 4 — Set up the host (on the RPi3)
 
+**Distro:** Raspberry Pi OS **Bookworm Lite (headless), 64-bit** via Raspberry Pi Imager
+(OS Customization: hostname e.g. `ad4`, enable SSH, key auth). No desktop — Fluidd runs in
+your laptop's browser; the Pi only runs klippy + moonraker + the socat PTY (saves the Pi3's
+1 GB RAM). Fallback if a dep ever fails: **32-bit Bookworm Lite (armhf)** — widest wheel
+coverage. Then cable RPi3 ⇄ SoC and set the RPi3's wired NIC to `192.168.1.20/24`
+(Step 0).
+
 ```sh
 cd <repo>/soc-hack
 ./rpi-setup.sh 192.168.1.10 all     # installs Klipper deps + socat + the PTY unit

@@ -14,11 +14,18 @@ fails, jump to [Recovery](#recovery) — the MCU can never be bricked (see
 
 | Piece | Role |
 |---|---|
-| The AD4, powered | SoC (Sunxi V3S) is wired to the MCU on `/dev/ttyS1` and owns the GPIO strapping pins |
-| Orange Pi / RPi | The Klipper **host** (runs klippy/moonraker/fluidd) |
+| The AD4, powered | SoC (Sunxi V3S) is wired to the MCU on `/dev/ttyS1` and owns the GPIO strapping pins — **the SoC does the flashing** |
+| **RPi3** (primary host) | The Klipper **host** (runs klippy/moonraker/fluidd). Orange Pi works too |
 | 1 Ethernet cable | Host ⇄ SoC `eth0`. Direct — no router, no internet |
 | This repo | Synced to both machines (rsync / git) |
 | (Optional) USB-serial dongle | Recovery/debug fallback only |
+
+> **RPi3 = Klipper host only. It does not flash the MCU.** The Pi has no
+> connection to the MCU's NRST/BOOT0 (GPIO34/35) pins — only the AD4's SoC
+> does. So on the RPi3 you run *Klipper* (talks to the MCU over Ethernet via
+> the SoC bridge); the *flash* command (`flash-mcu.sh`) runs **on the SoC**.
+> "First flashing and Klipper tests with an RPi3" = flash on the SoC (Step 2),
+> then bring Klipper up on the RPi3 (Steps 4–5).
 
 **Architecture (final):**
 ```
@@ -100,7 +107,7 @@ passes through intact.
 
 ---
 
-## Step 4 — Set up the host (on the Orange Pi / RPi)
+## Step 4 — Set up the host (on the RPi3)
 
 ```sh
 cd <repo>/soc-hack

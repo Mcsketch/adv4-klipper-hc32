@@ -10,7 +10,7 @@ Self-documenting folder. All artifacts verified against:
 
 | File | Purpose |
 |---|---|
-| **`GETTING-STARTED.md`** | **First-install howto**: stock → Klipper that moves, in 5 steps, no soldering. Start here. |
+| **`GETTING-STARTED.md`** | **The easy path**: stock → Klipper that moves, in 4 easy steps (build stick → plug in → one RPi script → test), no soldering. Start here. |
 | **`adv4-touch-ui.md`** | **Touchscreen UI**: drive Klipper from the SoC touch (Qt4 + TSLIB + Moonraker client). Hardware verified, build plan. |
 | **`adv4-n32-thermistor.md`** | **NA (Nation N32G45x) chip**: ADC/thermistor formulas, NA-hex LUT decode (bed/hotend-std/hotend-hi, verified offsets), Klipper build recipe, and a file:line review of the KV N32 flasher (bricking base, sync byte, parity, recovery gaps). |
 | **`adv4-exploration.md`** | Shareable engineering report: all verified facts, addresses, GPIO dance, thermistor tables, SoC hardware map, architecture, flashing, recovery |
@@ -23,8 +23,9 @@ Self-documenting folder. All artifacts verified against:
 | Folder | Contents |
 |---|---|
 | **`stm32isp-ad4/`** | Complete self-contained C fork of `stm32isp` with the SoC GPIO dance (BOOT0=GPIO35, NRST=GPIO34) built in. `Makefile` (native + cross). `flash-mcu.sh` (SoC driver). Factory HD+NA hexes for restore. **Compiles clean (gcc -Wall -Wextra, zero warnings)** |
-| **`soc-hack/`** | `ad4-serial-bridge.py` (TCP/UDP serial↔network bridge, byte-transparent, tested E2E). `ad4-bridge.sh` (SoC start/stop/status). `rpi-setup.sh` (RPi Klipper host setup + socat PTY systemd unit) |
-| **`flashdisk/`** | Unattended USB-stick flash: `flashforge_init.sh` + `README.md` |
+| **`soc-hack/`** | `ad4-serial-bridge.py` (TCP/UDP serial↔network bridge, byte-transparent, tested E2E). `ad4-bridge.sh` (SoC start/stop/status). `ad4-rpi-setup.sh` (**one-shot RPi3 host setup**: static IP + preflight + deps + Klipper + socat PTY). `rpi-setup.sh` (older manual variant) |
+| **`flashdisk/`** | **Unattended USB-stick flash** (the easy path): `build-usb-stick.sh` (assembles the FAT32 stick, verifies md5 + base), `flashforge_init.sh` (SoC-side flash+net+bridge), `README.md` |
+| **`tools/`** | `make-positioned-ihex.py` — emits a clean type-05 iHEX so the flasher writes the app to its absolute window (fixes the objcopy wrap that would otherwise land at 0x0000) |
 
 ## Work artifacts (reproducible)
 
@@ -36,6 +37,8 @@ Self-documenting folder. All artifacts verified against:
 | `work/bkup/dmesg.txt` | Working-machine SoC boot log (peripheral map) |
 | `work/bkup/printer_profile_kv.txt` | Slic3r printer profile from /data |
 | `work/hd.bin` | Decoded HD MCU image (binary) |
+| `stm32isp-ad4/klipper-ad4.hex` | Klipper MCU image, **positioned at `0x000C0000`** (type-05 iHEX, byte-identical to `klipper.bin`) — the safe flash image the stick uses |
+| `klipper-hc32/out/klipper.{bin,hex}` | Upstream Klipper HC32F460 build (app window `0x00C000`, ~28 KB) |
 
 ## Key verified facts (summary)
 

@@ -1,29 +1,76 @@
-# AD4 Klipper flash disk (unattended)
+# AD4 Klipper flash disk (unattended USB)
 
-Copy everything in this folder to the **root of a FAT32 USB stick**:
+The "plug in a USB stick and the printer does everything" path. One script on
+the stick runs from the SoC's stock boot/update path and, in one go:
 
-    flashforge_init.sh   (chmod +x before copying; FAT does not keep the bit)
-    screwflag            (empty file — skips the machine-type check)
-    IAPCommand           MCU flasher. Either:
-                            • the factory binary (from control-2.3.0/), or
-                            • the built stm32isp-ad4 fork — compile it, then
-                              `cp stm32isp-ad4/stm32isp-ad4  IAPCommand`
-                          (the fork takes the same two-hex argv as the factory one)
-    klipper.hex          Klipper, built for the HD (H32) app window (from /Users/admin/klipper-hc32/out/)
-    factory-HD.hex       known-good restore image = Adventurer4-HD-IAP-2.3.0-20230216.hex
+1. **Flashes the MCU** (Klipper, or factory if a `RESTORE` flag file is
+   present) — with a base-address guard so a mis-positioned image can never
+   clobber the ROM-ISP/reset region (never brickable).
+2. **Hacks the SoC network** — static IP on `eth0` (default `192.168.10.10`).
+3. **Starts the MCU bridge** — `/dev/ttyS1` ↔ TCP `:5000`, so the RPi host
+   reaches the MCU over Ethernet with no soldering.
 
-Image select is by **flag file**, not filename:
+## Build the stick (on the Mac)
 
-- no `RESTORE` file  → flash `klipper.hex`
-- `RESTORE` present  → flash `factory-HD.hex` (revert to stock)
+```sh
+./build-usb-stick.sh /Volumes/MYSTICK
+```
 
-Why two hexes as IAPCommand args: the factory `IAPCommand` is built for two
-positioned images (NA + HD) and picks the right one from the sync reply
-(6 = HD, 7 = NA); the `stm32isp-ad4` fork keeps the same argv for drop-in
-compatibility. See `adv4-exploration.md` §5–7.
+Format the stick FAT32 and mount it first. The builder verifies the flasher's
+md5 and the Klipper hex's base address before it copies anything.
 
-The SoC boot/update path executes `flashforge_init.sh` from removable media
-(same mechanism/name as the factory updater, which also takes args
-`Adventurer4 0012`). Exact trigger hook: verify once on hardware.
+## What lands on the stick (disk root)
+
+| File | Role |
+|---|---|
+| `flashforge_init.sh` | the SoC-side flash+net+bridge script (run at boot) |
+| `screwflag` | empty file — skips the machine-type check |
+| `IAPCommand` | factory ARM flasher, md5 `919864f7…`; it does the GPIO strapping (NRST=34, BOOT0=35, `/dev/ttyS1`) |
+| `klipper.hex` | Klipper, positioned at `0x000C0000` (type-05 iHEX, byte-identical to `klipper.bin`) |
+| `factory-HD.hex` | known-good full restore image (base `0x0000`, full chip) |
+| `ad4-serial-bridge.py` | MCU `/dev/ttyS1` ↔ TCP `:5000` bridge (byte-transparent) |
+| `ad4-net.conf` | `SOC_IP=192.168.10.10  SOC_NET=24  BRIDGE_PORT=5000` (editable) |
+
+## Image select (by flag file, not filename)
+
+- no `RESTORE` file → flash `klipper.hex`
+- `RESTORE` present → flash `factory-HD.hex` (revert to stock)
+
+The flasher takes a two-hex argv and auto-selects HD/NA from the sync reply
+(`6` = HD, `7` = NA). We pass the same image to both slots, which is
+rev-agnostic for a single known revision.
+
+## Anti-brick guarantee (and the bug it fixed)
+
+The MCU's ROM ISP lives at `0x00000000` and is **never** written, so it can
+always re-enter ISP by repeating the GPIO strapping. On top of that,
+`flashforge_init.sh` runs a base-address guard on the image before flashing:
+
+- **Klipper image (strict):** must have lowest programmed address `> 0x00008000`.
+- **Factory image (permissive):** a full-chip dump at base `0x0000` by design;
+  accepted, sanity-checked for size.
+
+**The bug this guard caught:** the stock `objcopy -O ihex --change-address`
+does **not** emit extended-address records for an image that straddles a 64K
+page, so the second page wrapped to 16-bit offsets and the flasher's loader
+resolved the whole image to base `0x00000000` — which would have clobbered the
+ROM-ISP region and **bricked** the printer. The fix is
+`tools/make-positioned-ihex.py`, which emits proper type-05 records; the
+canonical `stm32isp-ad4/klipper-ad4.hex` is produced that way and verified to
+resolve to `0x000C0000`.
+
+## After the stick runs
+
+The SoC is now at `192.168.10.10` with the MCU bridged on `:5000`. On the RPi3
+(set to `192.168.10.1`):
+
+```sh
+./ad4-rpi-setup.sh            # or with --moonraker for the web UI
+```
 
 Result is logged to `/root/ad4-flash-status` on the SoC.
+
+## Revert to stock any time
+
+`touch /path/to/stick/RESTORE`, re-plug the stick, power the printer. Or from
+the SoC: `<repo>/stm32isp-ad4/flash-mcu.sh factory`.

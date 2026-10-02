@@ -11,6 +11,7 @@ Self-documenting folder. All artifacts verified against:
 | File | Purpose |
 |---|---|
 | **`GETTING-STARTED.md`** | **The easy path**: stock → Klipper that moves, in 4 easy steps (build stick → plug in → one RPi script → test), no soldering. Start here. |
+| **`FIRST-RUN-MANUAL.md`** | **Copy-paste first-run manual**: flash the RPi SD, copy the repo, make the USB key, flash the printer, one RPi script, use from your LAN (2nd NIC). Minimal tech. |
 | **`adv4-touch-ui.md`** | **Touchscreen UI**: drive Klipper from the SoC touch (Qt4 + TSLIB + Moonraker client). Hardware verified, build plan. |
 | **`adv4-n32-thermistor.md`** | **NA (Nation N32G45x) chip**: ADC/thermistor formulas, NA-hex LUT decode (bed/hotend-std/hotend-hi, verified offsets), Klipper build recipe, and a file:line review of the KV N32 flasher (bricking base, sync byte, parity, recovery gaps). |
 | **`adv4-exploration.md`** | Shareable engineering report: all verified facts, addresses, GPIO dance, thermistor tables, SoC hardware map, architecture, flashing, recovery |

@@ -22,6 +22,11 @@
 #   factory-HD.hex       known-good full restore image
 #   ad4-serial-bridge.py MCU /dev/ttyS1 <-> TCP :5000 bridge
 #   ad4-net.conf         SOC_IP=192.168.10.10  BRIDGE_PORT=5000
+#   ad4-daemon.sh        persistent Klipper runtime (eMMC)
+#   ad4-install-persistent.sh    eMMC boot-hook installer (runs as root)
+#   ad4-uninstall-persistent.sh  full revert to stock
+#   PERSISTENT           (default ON) empty flag -> install persistent hook.
+#                        Build with NO_PERSISTENT=1 to make a one-shot stick.
 # =============================================================
 set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -57,6 +62,10 @@ cp -f "$IAP_SRC" "$STICK/IAPCommand"
 cp -f "$KIP_HEX" "$STICK/klipper.hex"
 cp -f "$FAC_HEX" "$STICK/factory-HD.hex"
 cp -f "$BRIDGE"  "$STICK/ad4-serial-bridge.py"
+# persistent runtime package
+cp -f "$HERE/ad4-daemon.sh"               "$STICK/ad4-daemon.sh"
+cp -f "$HERE/ad4-install-persistent.sh"   "$STICK/ad4-install-persistent.sh"
+cp -f "$HERE/ad4-uninstall-persistent.sh" "$STICK/ad4-uninstall-persistent.sh"
 : > "$STICK/screwflag"
 cat > "$STICK/ad4-net.conf" <<'EOF'
 # AD4 SoC network (static; the RPi host is 192.168.10.1)
@@ -64,6 +73,15 @@ SOC_IP=192.168.10.10
 SOC_NET=24
 BRIDGE_PORT=5000
 EOF
+# persistent install flag: ON by default (durable). NO_PERSISTENT=1 makes a
+# one-shot stick (works for the power window only, no eMMC changes).
+if [ "${NO_PERSISTENT:-}" = "1" ]; then
+  rm -f "$STICK/PERSISTENT"
+  echo "one-shot stick (no eMMC changes)"
+else
+  : > "$STICK/PERSISTENT"
+  echo "persistent stick (eMMC boot hook, survives power)"
+fi
 chmod +x "$STICK/flashforge_init.sh" 2>/dev/null || true
 
 echo

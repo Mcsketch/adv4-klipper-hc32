@@ -23,6 +23,9 @@
 #   ad4-serial-bridge.py the SoC<->MCU serial/ethernet bridge
 #   ad4-net.conf         OPTIONAL: SOC_IP=192.168.10.10  BRIDGE_PORT=5000
 #   RESTORE              OPTIONAL: if present, flash factory-HD.hex
+#   PERSISTENT           OPTIONAL: if present, install the persistent
+#                        eMMC boot hook (ad4-install-persistent.sh) so the
+#                        Klipper runtime survives power cycles. Reboots.
 #
 # Result logged to /root/ad4-flash-status on the SoC.
 # =============================================================
@@ -113,6 +116,20 @@ RC=$?
 echo "$FLAG rc=$RC" > /root/ad4-flash-status 2>/dev/null || true
 sync
 
+# 3b) RESTORE is a FULL revert: unwind the persistent Klipper hook too,
+#     then reboot to clean stock. (MCU already flashed factory above, so
+#     --no-mcu avoids a double-flash.) Exit so no Klipper setup runs.
+if [ -f "$WORK_DIR/RESTORE" ]; then
+  if [ -f /opt/ad4-klipper/enable ] && [ -f "$WORK_DIR/ad4-uninstall-persistent.sh" ]; then
+    sh "$WORK_DIR/ad4-uninstall-persistent.sh" --no-mcu
+  fi
+  echo "restore complete (MCU=factory, persistent hook unwound)" >> /root/ad4-flash-status
+  sync
+  sleep 2
+  reboot 2>/dev/null || reboot -f 2>/dev/null || /sbin/reboot 2>/dev/null || true
+  exit 0
+fi
+
 # 4) SoC network: static IP on eth0 (self-heals every boot from the stick).
 ip addr flush dev eth0 2>/dev/null
 ip addr add "$SOC_IP/$SOC_NET" dev eth0 2>/dev/null
@@ -132,4 +149,27 @@ if [ -x "$WORK_DIR/ad4-serial-bridge.py" ] || [ -f "$WORK_DIR/ad4-serial-bridge.
     fi
 fi
 sync
+
+# 6) Optional PERSISTENT install: copy the daemon package to eMMC and
+#    gate the vendor watchdog in rcS behind /opt/ad4-klipper/enable so
+#    the Klipper runtime survives power cycles. The installer reboots
+#    the SoC when it succeeds; on failure it aborts (no reboot, no
+#    partial patch) and we log it and fall through to the one-shot
+#    state (still works for this boot).
+if [ -f "$WORK_DIR/PERSISTENT" ]; then
+  echo "persistent: installing eMMC boot hook" > /root/ad4-flash-status
+  if [ -f "$WORK_DIR/ad4-install-persistent.sh" ]; then
+    sh "$WORK_DIR/ad4-install-persistent.sh"
+    PRC=$?
+    echo "persistent-install rc=$PRC" >> /root/ad4-flash-status
+    sync
+    if [ "$PRC" -eq 0 ]; then
+      # the installer should be rebooting now; give it a moment
+      sleep 5
+    fi
+  else
+    echo "persistent: ad4-install-persistent.sh missing, skipped" >> /root/ad4-flash-status
+  fi
+fi
+
 exit $RC

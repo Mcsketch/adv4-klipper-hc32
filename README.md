@@ -12,6 +12,8 @@ Self-documenting folder. All artifacts verified against:
 |---|---|
 | **`GETTING-STARTED.md`** | **The easy path**: stock → Klipper that moves, in 4 easy steps (build stick → plug in → one RPi script → test), no soldering. Start here. |
 | **`FIRST-RUN-MANUAL.md`** | **Copy-paste first-run manual**: flash the RPi SD, copy the repo, make the USB key, flash the printer, one RPi script, use from your LAN (2nd NIC). Minimal tech. |
+| **`PERSISTENT-INSTALL.md`** | **Durable install**: eMMC boot hook that runs our Klipper runtime *instead of* the vendor `ffstartup-arm` watchdog every boot (flag-gated, reversible, can't brick). MCU re-flash watchdog (optional). |
+| **`ALL-FROM-PI.md`** | **Remote, no-stick install**: the RPi drives the SoC over ssh to run the flash + eMMC hook. Root-shell prerequisite, weak-DES root hash, web-console limits, stick-vs-PI comparison. |
 | **`adv4-touch-ui.md`** | **Touchscreen UI**: drive Klipper from the SoC touch (Qt4 + TSLIB + Moonraker client). Hardware verified, build plan. |
 | **`adv4-n32-thermistor.md`** | **NA (Nation N32G45x) chip**: ADC/thermistor formulas, NA-hex LUT decode (bed/hotend-std/hotend-hi, verified offsets), Klipper build recipe, and a file:line review of the KV N32 flasher (bricking base, sync byte, parity, recovery gaps). |
 | **`adv4-exploration.md`** | Shareable engineering report: all verified facts, addresses, GPIO dance, thermistor tables, SoC hardware map, architecture, flashing, recovery |
@@ -25,7 +27,7 @@ Self-documenting folder. All artifacts verified against:
 |---|---|
 | **`stm32isp-ad4/`** | Complete self-contained C fork of `stm32isp` with the SoC GPIO dance (BOOT0=GPIO35, NRST=GPIO34) built in. `Makefile` (native + cross). `flash-mcu.sh` (SoC driver). Factory HD+NA hexes for restore. **Compiles clean (gcc -Wall -Wextra, zero warnings)** |
 | **`soc-hack/`** | `ad4-serial-bridge.py` (TCP/UDP serial↔network bridge, byte-transparent, tested E2E). `ad4-bridge.sh` (SoC start/stop/status). `ad4-rpi-setup.sh` (**one-shot RPi3 host setup**: static IP + preflight + deps + Klipper + socat PTY). `rpi-setup.sh` (older manual variant) |
-| **`flashdisk/`** | **Unattended USB-stick flash** (the easy path): `build-usb-stick.sh` (assembles the FAT32 stick, verifies md5 + base), `flashforge_init.sh` (SoC-side flash+net+bridge), `README.md` |
+| **`flashdisk/`** | **Unattended USB-stick flash** (the easy path) **+ persistent install**: `build-usb-stick.sh` (assembles the FAT32 stick, verifies md5 + base; `PERSISTENT` flag ON by default, `NO_PERSISTENT=1` for one-shot), `flashforge_init.sh` (SoC-side flash+net+bridge; `PERSISTENT`/`RESTORE` flag handling), `ad4-daemon.sh` (eMMC runtime: static IP + self-healing bridge + optional MCU re-flash), `ad4-install-persistent.sh` / `ad4-uninstall-persistent.sh` (eMMC boot-hook install/revert), `ad4-install-from-pi.sh` (remote no-stick install over ssh), `README.md` |
 | **`tools/`** | `make-positioned-ihex.py` — emits a clean type-05 iHEX so the flasher writes the app to its absolute window (fixes the objcopy wrap that would otherwise land at 0x0000) |
 
 ## Work artifacts (reproducible)

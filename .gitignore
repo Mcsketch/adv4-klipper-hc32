@@ -16,3 +16,6 @@ work/flashdisk-work/
 *.zip
 *.tar.xz
 *.tgz
+work/stock/
+work/staging/
+work/fwstock/

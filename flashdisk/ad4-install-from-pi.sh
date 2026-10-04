@@ -69,6 +69,16 @@ echo "SoC reachable."
 # ---- 1) copy the persistent package ---------------------------
 FILES="ad4-daemon.sh ad4-serial-bridge.py klipper.hex IAPCommand ad4-net.conf ad4-install-persistent.sh ad4-uninstall-persistent.sh"
 SRC="$REPO/flashdisk"
+# ad4-net.conf is OPTIONAL: synthesize the default if absent (so a fresh
+# checkout without it still works — the daemon reads it for SOC_IP/port).
+if [ ! -f "$SRC/ad4-net.conf" ]; then
+  cat > "$SRC/ad4-net.conf" <<'EOF'
+# AD4 SoC network (static; the RPi host is 192.168.10.1)
+SOC_IP=192.168.10.10
+SOC_NET=24
+BRIDGE_PORT=5000
+EOF
+fi
 echo "==> copying package to $D:$PKG"
 $SSH "$D" "mkdir -p $PKG"
 for f in $FILES; do

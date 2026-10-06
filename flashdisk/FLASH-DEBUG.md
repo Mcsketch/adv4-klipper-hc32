@@ -1,6 +1,6 @@
 # flashforge_init.sh — debug notes (no-python rewrite, 2026-10-06)
 
-## Why "nothing happens"
+## "Nothing happens" — root cause
 1. **Wrong filename**: the build script is `build-usb-stick.sh`, NOT
    `build-USB-disk.sh`. Running the latter is a no-op ("No such file").
 2. **python3 is NOT on the SoC** (verified against the eMMC rootfs dump:
@@ -9,6 +9,29 @@
    script **exited before flashing**, writing only `flash-refused` to
    `/root/ad4-flash-status` (invisible without a console).
 3. **No console** (no USB-serial adapter) meant there was nothing to see.
+   → Workaround: **`telnet <soc-ip> 23` is a password-less root shell**
+   (`/etc/init.d/telnetd` → `start-stop-daemon ... /usr/sbin/telnetd -F`,
+   no `-l LOGIN`). SoC vendor net is 192.168.0.20 (not 192.168.1.x).
+
+## Buzzer = PWM piezo, NOT a wav file
+- There are **no .wav files** in the rootfs and `aplay` is only in busybox's
+  builtin table (never invoked). The boot/print-end "sounds" are **beep
+  tone sequences**: the vendor GUI's `buzzer/buzzer.cpp` → `buzzerPlay` →
+  `PlayerThreadHandler voice`, driven by a **PWM sysfs node**
+  (`/sys/class/pwm/pwmchip0/pwm0/{export,period,duty_cycle,enable}`), fired
+  on events (`setPrinterReady`, `~BuildPrint`, button presses, page
+  open/close). Note: the vendor itself logs `pwm_fd export error:` on some
+  boots — so the PWM node may need the `export` write (which our `pwm_setup`
+  does) before `period/duty/enable` are usable.
+- Our `flashforge_init.sh` drives the SAME node directly (no vendor code
+  touched): `pwm_setup` finds a usable pwm dir (exports pwm0 if needed),
+  then `chime start|ok|fail` writes period/duty(=period/2)/enable:
+  - **start** = 1 short 1.5 kHz blip
+  - **ok**    = rising two-tone "ding" (2.5 kHz → 3.5 kHz)
+  - **fail**  = 3 low 1 kHz buzzes
+  If no PWM node is found it logs "sound skipped" and continues (flash is
+  already done by then; sound is a bonus). `PWM_BASE` is overridable for
+  testing. Verified against a fake sysfs tree: correct period/duty/enable.
 
 ## What changed
 ### flashforge_init.sh (fully rewritten)

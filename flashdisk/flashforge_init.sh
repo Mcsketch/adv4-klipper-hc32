@@ -88,6 +88,75 @@ pid_alive() {
   return 1
 }
 
+# ---- buzzer (PWM piezo) ----------------------------------------
+# The board's "sound" is NOT a wav file: the vendor GUI (buzzer.cpp)
+# drives a piezo via a PWM sysfs node (pwmchip0/pwm0) and fires tone
+# sequences on events (boot, print-start, print-end, button presses).
+# We drive the SAME node directly to play a "flash done" chime, so no
+# vendor code is touched. If the node is missing/locked we just skip
+# (the flash is already done by then; sound is a bonus).
+# PWM_BASE is overridable for testing on the dev machine.
+PWM_BASE="${PWM_BASE:-/sys/class/pwm}"
+PWM_DIR=""
+PWM_OK=0
+pwm_setup() {
+  # Find a usable pwm dir that has an enable file (export if needed).
+  for base in "$PWM_BASE" /sys/devices/10000000.palmbus/10005000.pwm/pwm; do
+    for chip in pwmchip0 pwmchip1 pwmchip2 pwmchip3; do
+      d="$base/$chip"
+      [ -d "$d" ] || continue
+      # if pwm0 not exported yet, try to export it
+      if [ ! -d "$d/pwm0" ] && [ -e "$d/export" ]; then
+        echo 0 > "$d/export" 2>/dev/null
+        i=0; while [ ! -d "$d/pwm0" ] && [ $i -lt 20 ]; do sleep 0.1 2>/dev/null || break; i=$((i+1)); done
+      fi
+      if [ -e "$d/pwm0/enable" ]; then PWM_DIR="$d"; PWM_OK=1; break; fi
+    done
+    [ "$PWM_OK" = 1 ] && break
+  done
+  return $([ "$PWM_OK" = 1 ] && echo 0 || echo 1)
+}
+tone() {
+  # $1 = period in ns (1e9/freq), $2 = on-duration in seconds
+  [ "$PWM_OK" = 1 ] || return 0
+  echo "$1" > "$PWM_DIR/pwm0/period"    2>/dev/null
+  echo $(( $1 / 2 )) > "$PWM_DIR/pwm0/duty_cycle" 2>/dev/null
+  echo 1 > "$PWM_DIR/pwm0/enable" 2>/dev/null
+  sleep "$2" 2>/dev/null
+  echo 0 > "$PWM_DIR/pwm0/enable" 2>/dev/null
+}
+# chime: $1 = ok | fail | start
+chime() {
+  [ "$PWM_OK" = 1 ] || { LOGF "buzzer: no PWM node (sound skipped)"; return 0; }
+  case "$1" in
+    start)
+      LOGF "chime: start blip"
+      tone 666667 0.12   # 1.5 kHz ~120 ms
+      ;;
+    ok)
+      LOGF "chime: flash-DONE (rising two-tone)"
+      tone 400000 0.18   # 2.5 kHz ~180 ms
+      sleep 0.05 2>/dev/null
+      tone 285714 0.30   # 3.5 kHz ~300 ms  -> pleasant "ding"
+      ;;
+    fail)
+      LOGF "chime: flash-FAILED (low triple buzz)"
+      i=0; while [ $i -lt 3 ]; do
+        tone 1000000 0.25   # 1.0 kHz ~250 ms
+        sleep 0.18 2>/dev/null
+        i=$((i+1))
+      done
+      ;;
+  esac
+  echo 0 > "$PWM_DIR/pwm0/enable" 2>/dev/null
+}
+pwm_setup
+if [ "$PWM_OK" = 1 ]; then
+  LOGF "buzzer ready: $PWM_DIR (PWM piezo, sysfs)"
+else
+  LOGF "buzzer: no PWM node found under $PWM_BASE (sound will be skipped)"
+fi
+
 LOGF "================ AD4 flashforge_init (no-python) ================"
 LOGF "pid=$$  uid=$(id -u 2>/dev/null)  argv: $0 $1 $2"
 LOGF "WORK_DIR=$WORK_DIR"
@@ -217,6 +286,7 @@ else
   FATAL "no flasher on stick (need stm32isp-ad4 or IAPCommand)"
 fi
 LOGF "FLASHING via $TOOLNAME (base guard passed, image=$IMG, mode=$MODE)..."
+chime start
 # stm32isp-ad4:  -r hd  -p /dev/ttyS1  -v   <na.hex> <hd.hex>
 # IAPCommand   :  <img>  <img>
 case "$TOOLNAME" in
@@ -232,9 +302,11 @@ echo "$FLAG rc=$RC ($TOOLNAME)" > "$STATUS"; sync
 if [ "$RC" -ne 0 ]; then
   LOGF "!! flash FAILED rc=$RC. MCU is still bootable (ROM ISP untouched)."
   LOGF "   Re-run the same command, or restore: put a RESTORE file on the stick."
+  chime fail
   exit "$RC"
 fi
 LOGF "flash OK (rc=0). New MCU firmware is running."
+chime ok
 
 # ---- RESTORE = full revert, reboot to clean stock -------------
 if [ -f "$WORK_DIR/RESTORE" ]; then

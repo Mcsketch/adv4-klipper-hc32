@@ -1,175 +1,302 @@
 #!/bin/sh
 # =============================================================
-# AD4 Klipper — unattended SoC-side init (runs from the USB stick
-# via the SoC boot/update path, same contract as the factory script:
-# armv7l + kernel 3.4.39+, machine check skipped via screwflag).
+# AD4 Klipper — unattended SoC-side init  (PYTHON-FREE build)
 #
-# It does the whole "hack the SoC" in one go:
-#   1. Flash the MCU (klipper or factory, by RESTORE flag) —
-#      with a hex base-address guard (never write <= 0x00008000,
-#      so the ROM ISP is always intact => never brickable).
-#   2. Give eth0 a static IP (default 192.168.10.10/24) so the
-#      RPi host always finds the SoC.
-#   3. Start the serial<->network bridge (MCU /dev/ttyS1 <-> TCP
-#      0.0.0.0:5000) so Klipper on the RPi reaches the MCU.
+# Runs from the USB stick via the SoC boot/update path
+# (armv7l + kernel 3.4.39+). No console? No python3? No problem:
+# every step is logged in full to a file on THE STICK itself
+# (it is mounted at /mnt while this runs), so you pull the stick
+# and read ./ad4-flash.log to see exactly what happened.
 #
-# Disk layout (FAT32, files at the disk root):
+# What it does:
+#   1. Flash the MCU (klipper, or factory if RESTORE present)
+#      via the C flasher (IAPCommand). Anti-brick: the flasher
+#      refuses any image whose base is <= 0x00008000, so the ROM
+#      ISP at 0x0000 is never touched => never brickable.
+#   2. Give eth0 a static IP (default 192.168.10.10/24).
+#   3. Start the MCU<->TCP bridge (ONLY if python3 exists; otherwise
+#      it logs and skips — the flash itself never needs python).
+#
+# Stick layout (FAT32, files at root):
 #   flashforge_init.sh   this script
 #   screwflag            empty file (skips machine-type check)
-#   IAPCommand           the factory ARM flasher (it DOES the GPIO
-#                        strapping: gpio 34=NRST, 35=BOOT0, ttyS1)
-#   klipper.hex          Klipper, positioned at the HD app window 0x000C0000
+#   IAPCommand           C ARM flasher (does the GPIO strapping)
+#   klipper.hex          Klipper @ 0x000C0000
 #   factory-HD.hex       known-good restore image (never delete)
-#   ad4-serial-bridge.py the SoC<->MCU serial/ethernet bridge
-#   ad4-net.conf         OPTIONAL: SOC_IP=192.168.10.10  BRIDGE_PORT=5000
-#   RESTORE              OPTIONAL: if present, flash factory-HD.hex
-#   PERSISTENT           OPTIONAL: if present, install the persistent
-#                        eMMC boot hook (ad4-install-persistent.sh) so the
-#                        Klipper runtime survives power cycles. Reboots.
+#   ad4-serial-bridge.py the SoC<->MCU bridge (needs python3)
+#   ad4-net.conf         OPTIONAL SOC_IP=... BRIDGE_PORT=...
+#   RESTORE              OPTIONAL: flash factory-HD.hex (full revert)
+#   PERSISTENT           OPTIONAL: install eMMC boot hook + reboot
 #
-# Result logged to /root/ad4-flash-status on the SoC.
+# OUTPUT (where to read it without a console):
+#   $WORK_DIR/ad4-flash.log   <- ON THE STICK (this is the one)
+#   /root/ad4-flash.log       <- on the SoC
+#   /root/ad4-flash-status    <- one-line result
 # =============================================================
-set -x
-WORK_DIR=`dirname $0`
 
-# ---- arch / kernel guard (same as factory) ------------------
-[ "$(uname -m)" != "armv7l"   ] && { echo "arch error";   exit 1; }
-[ "$(uname -r)" != "3.4.39+" ] && { echo "kernel error"; exit 1; }
+# ---- where is this script (and therefore the stick)? ---------
+WORK_DIR=`dirname "$0"`
 
-# ---- tunables (overridable via ad4-net.conf) ----------------
-SOC_IP="192.168.10.10"
-SOC_NET="24"
-BRIDGE_PORT="5000"
-[ -f "$WORK_DIR/ad4-net.conf" ] && . "$WORK_DIR/ad4-net.conf"
+# A log file is guaranteed to exist on the stick (/mnt) no matter
+# which path auto_run used to launch us (/mnt/... or /data/update/...).
+STICK_LOG="/mnt/ad4-flash.log"
+ROOT_LOG="/root/ad4-flash.log"
+LOG=""
+if [ -d /mnt ] && [ -w /mnt ]; then LOG="$STICK_LOG"; fi
+[ -n "$LOG" ] || LOG="$ROOT_LOG"
 
-# ---- hex base-address guard (the anti-brick check) ----------
-# Refuse to flash any image whose lowest programmed address is at or
-# below 0x00008000 (the reset / ROM-ISP region). Our Klipper image is
-# positioned at 0x0000C000, so this passes; a mis-positioned hex fails
-# loudly and we fall back to NOT flashing the app window.
-check_base() {
-  # Anti-brick guard. Two modes:
-  #   strict  (custom image, e.g. klipper.hex): refuse unless base > 0x00008000
-  #           (the custom app must live in the app window and must not be a
-  #            random/low-base blob that could clobber the vector region).
-  #   factory (known-good vendor image, factory-HD.hex): it is a full-chip
-  #           image at base 0x00000000 by design (the vendor IAP lives at
-  #           0x0000); we accept it but sanity-check it is non-trivial in size.
-  # $1 = hex path, $2 = strict|factory
-  python3 -c '
-import sys
-path, mode = sys.argv[1], sys.argv[2]
-base = None; maxa = 0; minoff = None
-for line in open(path, "r", errors="ignore"):
-    line = line.strip()
-    if not line.startswith(":"): continue
-    try: cnt = int(line[1:3], 16); typ = int(line[7:9], 16)
-    except Exception: continue
-    if typ in (0x04, 0x05):
-        b = int(line[9:13], 16) << 16
-        base = b if base is None else min(base, b)
-    elif typ == 0x00:
-        off = int(line[3:7], 16)
-        if minoff is None or off < minoff: minoff = off
-        if off + cnt > maxa: maxa = off + cnt
-# true lowest absolute address = (extended base or 0) + min data offset.
-# Handles both styles: type-04 base + small offsets, and bare offsets (no
-# type-04) like our Klipper build, which already encodes 0xC000 in the offset.
-minaddr = (base if base is not None else 0) + (minoff if minoff is not None else 0)
-have = (minoff is not None)
-if mode == "strict":
-    ok = have and (minaddr > 0x00008000)
-else:  # factory: full-chip image at base 0x0000 by design; just sanity-check size
-    ok = have and (maxa > 0x00001000)
-print("minaddr=0x%08X max=0x%08X" % (minaddr, maxa))
-sys.exit(0 if ok else 2)
-' "$1" "$2"
+: > "$LOG" 2>/dev/null || { LOG="/root/ad4-flash.log"; : > "$LOG"; }
+STATUS="/root/ad4-flash-status"
+
+# ---- logging --------------------------------------------------
+# Every line: [HH:MM:SS] message  ->  the log file AND stdout.
+T() { date +"%Y-%m-%d %H:%M:%S" 2>/dev/null || printf 'ts?'; }
+LOGF() {
+  # $1 = optional severity tag
+  local m="$1"; [ "$m" = "" ] && return
+  printf '[%s] %s\n' "$(T)" "$m" >> "$LOG"
+  # also echo to console if we ever have one (harmless if not)
+  printf '[%s] %s\n' "$(T)" "$m"
+  # mirror to /root too (best effort) so both copies exist
+  printf '[%s] %s\n' "$(T)" "$m" >> "$ROOT_LOG" 2>/dev/null
+  sync
+}
+FATAL() { LOGF "FATAL: $1"; echo "ad4-fatal($1)" > "$STATUS" 2>/dev/null; sync; exit 1; }
+
+# ---- tolerant process kill (busybox may lack pkill/fuser/pgrep)
+pkill_safe() {
+  # $1 = pattern
+  if command -v pkill >/dev/null 2>&1; then pkill -f "$1" 2>/dev/null; return; fi
+  if command -v killall >/dev/null 2>&1; then killall "$1" 2>/dev/null; return; fi
+  # last resort: scan /proc
+  for p in /proc/[0-9]*; do
+    [ -r "$p/cmdline" ] || continue
+    case `tr '\0' ' ' < "$p/cmdline" 2>/dev/null` in
+      *"$1"*) kill -9 "${p#/proc/}" 2>/dev/null ;;
+    esac
+  done
+}
+pid_alive() {
+  # $1 = pattern ; returns 0 if a matching process exists
+  if command -v pgrep >/dev/null 2>&1; then pgrep -f "$1" >/dev/null 2>&1; return; fi
+  for p in /proc/[0-9]*; do
+    [ -r "$p/cmdline" ] || continue
+    case `tr '\0' ' ' < "$p/cmdline" 2>/dev/null` in
+      *"$1"*) return 0 ;;
+    esac
+  done
+  return 1
 }
 
-# 1) Stop the vendor stack so nothing holds /dev/ttyS1 or the GPIOs.
-pkill -f ffstartup-arm   2>/dev/null
-pkill -f adventurer4-arm 2>/dev/null
+LOGF "================ AD4 flashforge_init (no-python) ================"
+LOGF "pid=$$  uid=$(id -u 2>/dev/null)  argv: $0 $1 $2"
+LOGF "WORK_DIR=$WORK_DIR"
+LOGF "log file = $LOG"
+
+# ---- evidence first (so the log always shows it ran) ----------
+UNAME_M=$(uname -m 2>/dev/null)
+UNAME_R=$(uname -r 2>/dev/null)
+LOGF "uname -m = $UNAME_M   uname -r = $UNAME_R   hostname=$(hostname 2>/dev/null)"
+LOGF "/proc/version: $(cat /proc/version 2>/dev/null)"
+LOGF "/proc/cpuinfo: $(grep -E 'Processor|Architecture|model name' /proc/cpuinfo 2>/dev/null | tr '\n' ' ')"
+
+# ---- toolchain census (tells us what the SoC actually has) ----
+LOGF "tool census:"
+for t in python3 python md5sum awk dd ip ifconfig mount tar sleep pkill pgrep; do
+  p=$(command -v "$t" 2>/dev/null)
+  [ -n "$p" ] && LOGF "    $t -> $p" || LOGF "    $t -> MISSING"
+done
+if command -v python3 >/dev/null 2>&1; then
+  LOGF "    python3 version: $(python3 -V 2>&1)"
+else
+  LOGF "    NOTE: python3 NOT present -> bridge step will be skipped (flash still works)"
+fi
+
+# ---- arch / kernel guard --------------------------------------
+# Arch is a HARD stop (the flasher binary can't run on the wrong arch).
+# Kernel is a SOFT warning: a near-mismatch (e.g. 3.4.39 vs 3.4.39+)
+# must NOT hide the real cause, so we log and continue.
+if [ "$UNAME_M" != "armv7l" ]; then
+  FATAL "arch error: got '$UNAME_M' want armv7l (flasher binary can't run)"
+fi
+case "$UNAME_R" in
+  3.4.39*) LOGF "kernel OK: $UNAME_R" ;;
+  *)       LOGF "WARNING: kernel '$UNAME_R' != expected 3.4.39+ - continuing anyway" ;;
+esac
+
+# ---- tunables -------------------------------------------------
+SOC_IP="192.168.10.10"; SOC_NET="24"; BRIDGE_PORT="5000"
+if [ -f "$WORK_DIR/ad4-net.conf" ]; then
+  LOGF "loading ad4-net.conf"; . "$WORK_DIR/ad4-net.conf"; LOGF "  SOC_IP=$SOC_IP BRIDGE_PORT=$BRIDGE_PORT"
+fi
+
+# ---- inventory of what's on the stick -------------------------
+LOGF "stick inventory ($WORK_DIR):"
+ls -la "$WORK_DIR" >> "$LOG" 2>&1
+for f in screwflag stm32isp-ad4 IAPCommand klipper.hex factory-HD.hex ad4-serial-bridge.py RESTORE PERSISTENT ad4-net.conf; do
+  [ -f "$WORK_DIR/$f" ] && LOGF "    present: $f ($(wc -c < "$WORK_DIR/$f" 2>/dev/null | tr -d ' ') bytes)" \
+                        || LOGF "    absent : $f"
+done
+
+# ---- anti-brick hex base guard, PURE awk (no python) ----------
+# Emits "minabs=0x... maxabs=0x... ok=0/1" and sets a global OK.
+check_base() {
+  # $1 = hex path, $2 = strict|factory
+  # Portable awk (mawk): comparison ops MUST be space-delimited
+  # (mawk mis-tokenizes `x!=":"` and the like), no bit-shifts.
+  # Type-04 AND type-05 are (value << 16), matching the C tool.
+  awk -v HB_MODE="$2" '
+    function h2d(h,  i, v) {
+      v = 0; h = tolower(h)
+      for (i = 1; i <= length(h); i++) v = v * 16 + index("0123456789abcdef", substr(h, i, 1)) - 1
+      return v
+    }
+    {
+      if (substr($0, 1, 1) != ":") next
+      if (length($0) < 11) next
+      t = h2d(substr($0, 8, 2))
+      if (t == 4) { linhi = h2d(substr($0, 10, 4)) * 65536; next }
+      if (t == 5) { linhi = h2d(substr($0, 10, 4)) * 65536; next }
+      if (t != 0) next
+      cnt = h2d(substr($0, 2, 2)); off = h2d(substr($0, 4, 4)); abs = linhi + off
+      if (!first) { min = abs; max = abs + cnt; first = 1 }
+      else { if (abs < min) min = abs; if (abs + cnt > max) max = abs + cnt }
+    }
+    END {
+      if (!first) { print "minabs=0x0 maxabs=0x0 ok=0"; exit }
+      if (HB_MODE == "strict") ok = (min > 32768) ? 1 : 0
+      else ok = (max > 4096) ? 1 : 0
+      printf "minabs=0x%08x maxabs=0x%08x ok=%d\n", min, max, ok
+    }' "$1"
+}
+
+# ---- select image + guard -------------------------------------
+if [ -f "$WORK_DIR/RESTORE" ]; then
+  IMG="$WORK_DIR/factory-HD.hex"; FLAG=restore; MODE=factory
+else
+  IMG="$WORK_DIR/klipper.hex";    FLAG=klipper; MODE=strict
+fi
+LOGF "selected image: $IMG (mode=$MODE, flag=$FLAG)"
+if [ ! -f "$IMG" ]; then FATAL "image missing: $IMG"; fi
+
+LOGF "hex guard (awk) on $IMG ($MODE):"
+GUARD=$(check_base "$IMG" "$MODE")
+LOGF "  $GUARD"
+OK=$(printf '%s' "$GUARD" | awk -F'ok=' '{print $2}')
+if [ "$OK" != "1" ]; then
+  LOGF "!! hex guard FAILED (ok=$OK). Refusing to flash. MCU left as-is (safe)."
+  echo "flash-refused($FLAG)" > "$STATUS"; sync; exit 1
+fi
+LOGF "hex guard PASSED"
+
+# ---- stop the vendor stack (frees /dev/ttyS1 + GPIOs) ---------
+LOGF "stopping vendor stack (ffstartup-arm, adventurer4-arm)..."
+pkill_safe "ffstartup-arm"
+pkill_safe "adventurer4-arm"
 sleep 2
-fuser -k /dev/ttyS1 2>/dev/null
+if [ -e /dev/ttyS1 ]; then
+  if command -v fuser >/dev/null 2>&1; then fuser -k /dev/ttyS1 2>/dev/null; fi
+  LOGF "ttyS1 present: $(ls -la /dev/ttyS1 2>&1)"
+else
+  LOGF "ttyS1 ABSENT (expected on some boards) - /dev/ttyS1: $(ls -la /dev/ttyS* 2>&1)"
+fi
 sleep 1
 
-# 2) Image select + base guard (strict for custom, permissive for the
-#    known-good factory image which is a full-chip dump at base 0x0000).
-if [ -f "$WORK_DIR/RESTORE" ]; then
-    IMG="$WORK_DIR/factory-HD.hex"; FLAG=restore; MODE=factory
+# ---- flash ----------------------------------------------------
+# Prefer the open-source flasher (stm32isp-ad4, verbose) if present;
+# otherwise fall back to the factory IAPCommand. Both take two hex
+# positional args (na, hd); we pass the chosen image to both and force
+# the HD/H32 revision (this board). The base guard above already passed.
+FLASHER=""
+FLASH_VERB=""
+if [ -x "$WORK_DIR/stm32isp-ad4" ]; then
+  FLASHER="$WORK_DIR/stm32isp-ad4"; FLASH_VERB="-v"; TOOLNAME="stm32isp-ad4 (open-source)"
+elif [ -x "$WORK_DIR/IAPCommand" ]; then
+  FLASHER="$WORK_DIR/IAPCommand"; FLASH_VERB=""; TOOLNAME="IAPCommand (factory)"
 else
-    IMG="$WORK_DIR/klipper.hex";    FLAG=klipper;  MODE=strict
+  FATAL "no flasher on stick (need stm32isp-ad4 or IAPCommand)"
 fi
-if [ -f "$IMG" ] && check_base "$IMG" "$MODE"; then
-    :
-else
-    [ -f "$IMG" ] || IMG_ERR="missing: $IMG"
-    echo "!! image check FAILED for $IMG ($MODE) ${IMG_ERR:-}".
-    echo "!! Refusing to flash. MCU left as-is (safe)."
-    echo "flash-refused($FLAG) rc=1" > /root/ad4-flash-status 2>/dev/null || true
-    exit 1
-fi
-
-# 3) Flash (IAPCommand does the strapping; two-hex argv, auto HD/NA).
-"$WORK_DIR/IAPCommand" "$IMG" "$IMG"
+LOGF "FLASHING via $TOOLNAME (base guard passed, image=$IMG, mode=$MODE)..."
+# stm32isp-ad4:  -r hd  -p /dev/ttyS1  -v   <na.hex> <hd.hex>
+# IAPCommand   :  <img>  <img>
+case "$TOOLNAME" in
+  *open-source*) "$FLASHER" -r hd -p /dev/ttyS1 $FLASH_VERB "$IMG" "$IMG" > "$WORK_DIR/iap.out" 2>&1 ;;
+  *factory*)     "$FLASHER" "$IMG" "$IMG" > "$WORK_DIR/iap.out" 2>&1 ;;
+esac
 RC=$?
-echo "$FLAG rc=$RC" > /root/ad4-flash-status 2>/dev/null || true
-sync
+LOGF "$TOOLNAME rc=$RC"
+LOGF "----- flasher output -----"; cat "$WORK_DIR/iap.out" >> "$LOG" 2>&1
+LOGF "----- end flasher output -----"
+echo "$FLAG rc=$RC ($TOOLNAME)" > "$STATUS"; sync
 
-# 3b) RESTORE is a FULL revert: unwind the persistent Klipper hook too,
-#     then reboot to clean stock. (MCU already flashed factory above, so
-#     --no-mcu avoids a double-flash.) Exit so no Klipper setup runs.
+if [ "$RC" -ne 0 ]; then
+  LOGF "!! flash FAILED rc=$RC. MCU is still bootable (ROM ISP untouched)."
+  LOGF "   Re-run the same command, or restore: put a RESTORE file on the stick."
+  exit "$RC"
+fi
+LOGF "flash OK (rc=0). New MCU firmware is running."
+
+# ---- RESTORE = full revert, reboot to clean stock -------------
 if [ -f "$WORK_DIR/RESTORE" ]; then
   if [ -f /opt/ad4-klipper/enable ] && [ -f "$WORK_DIR/ad4-uninstall-persistent.sh" ]; then
-    sh "$WORK_DIR/ad4-uninstall-persistent.sh" --no-mcu
+    LOGF "unwinding persistent hook (ad4-uninstall-persistent.sh --no-mcu)"
+    sh "$WORK_DIR/ad4-uninstall-persistent.sh" --no-mcu >> "$LOG" 2>&1
   fi
-  echo "restore complete (MCU=factory, persistent hook unwound)" >> /root/ad4-flash-status
-  sync
-  sleep 2
+  echo "restore complete" >> "$STATUS"; sync
+  LOGF "restore complete. rebooting to clean stock."; sleep 2
   reboot 2>/dev/null || reboot -f 2>/dev/null || /sbin/reboot 2>/dev/null || true
   exit 0
 fi
 
-# 4) SoC network: static IP on eth0 (self-heals every boot from the stick).
-ip addr flush dev eth0 2>/dev/null
-ip addr add "$SOC_IP/$SOC_NET" dev eth0 2>/dev/null
-ip link set eth0 up 2>/dev/null
+# ---- static IP on eth0 ----------------------------------------
+LOGF "configuring eth0 = $SOC_IP/$SOC_NET"
+if command -v ip >/dev/null 2>&1; then
+  ip addr flush dev eth0 2>/dev/null
+  ip addr add "$SOC_IP/$SOC_NET" dev eth0 2>/dev/null
+  ip link set eth0 up 2>/dev/null
+  LOGF "ip addr show eth0:"; ip addr show eth0 >> "$LOG" 2>&1
+elif command -v ifconfig >/dev/null 2>&1; then
+  ifconfig eth0 "$SOC_IP" netmask 255.255.255.0 up 2>/dev/null
+  LOGF "ifconfig eth0:"; ifconfig eth0 >> "$LOG" 2>&1
+else
+  LOGF "no 'ip' or 'ifconfig' - cannot set IP"
+fi
 sleep 1
 
-# 5) Start the MCU bridge (only if the flash step at least ran).
-if [ -x "$WORK_DIR/ad4-serial-bridge.py" ] || [ -f "$WORK_DIR/ad4-serial-bridge.py" ]; then
-    pkill -f ad4-serial-bridge.py 2>/dev/null
-    nohup python3 "$WORK_DIR/ad4-serial-bridge.py" --tcp 0.0.0.0:"$BRIDGE_PORT" \
-        --uart /dev/ttyS1 --baud 250000 >>/var/log/ad4-bridge.log 2>&1 &
-    sleep 1
-    if pgrep -f ad4-serial-bridge.py >/dev/null 2>&1; then
-        echo "bridge running on 0.0.0.0:$BRIDGE_PORT (soc_ip=$SOC_IP)" >>/root/ad4-flash-status
-    else
-        echo "bridge FAILED (see /var/log/ad4-bridge.log)" >>/root/ad4-flash-status
-    fi
-fi
-sync
-
-# 6) Optional PERSISTENT install: copy the daemon package to eMMC and
-#    gate the vendor watchdog in rcS behind /opt/ad4-klipper/enable so
-#    the Klipper runtime survives power cycles. The installer reboots
-#    the SoC when it succeeds; on failure it aborts (no reboot, no
-#    partial patch) and we log it and fall through to the one-shot
-#    state (still works for this boot).
-if [ -f "$WORK_DIR/PERSISTENT" ]; then
-  echo "persistent: installing eMMC boot hook" > /root/ad4-flash-status
-  if [ -f "$WORK_DIR/ad4-install-persistent.sh" ]; then
-    sh "$WORK_DIR/ad4-install-persistent.sh"
-    PRC=$?
-    echo "persistent-install rc=$PRC" >> /root/ad4-flash-status
-    sync
-    if [ "$PRC" -eq 0 ]; then
-      # the installer should be rebooting now; give it a moment
-      sleep 5
-    fi
+# ---- bridge (ONLY if python3 exists) --------------------------
+if command -v python3 >/dev/null 2>&1 && [ -f "$WORK_DIR/ad4-serial-bridge.py" ]; then
+  LOGF "starting MCU<->TCP bridge on 0.0.0.0:$BRIDGE_PORT (python3 present)"
+  pkill_safe "ad4-serial-bridge.py"
+  nohup python3 "$WORK_DIR/ad4-serial-bridge.py" --tcp 0.0.0.0:"$BRIDGE_PORT" \
+      --uart /dev/ttyS1 --baud 250000 >> /var/log/ad4-bridge.log 2>&1 &
+  sleep 1
+  if pid_alive "ad4-serial-bridge.py"; then
+    LOGF "bridge RUNNING on 0.0.0.0:$BRIDGE_PORT (soc_ip=$SOC_IP)"
+    echo "bridge running" >> "$STATUS"
   else
-    echo "persistent: ad4-install-persistent.sh missing, skipped" >> /root/ad4-flash-status
+    LOGF "bridge FAILED to start (see /var/log/ad4-bridge.log)"
+    echo "bridge-failed" >> "$STATUS"
+  fi
+else
+  LOGF "bridge SKIPPED (python3 absent or no bridge file). Flash still complete."
+  echo "bridge-skipped(no-python)" >> "$STATUS"
+fi
+
+# ---- optional PERSISTENT eMMC hook ----------------------------
+if [ -f "$WORK_DIR/PERSISTENT" ]; then
+  LOGF "PERSISTENT: installing eMMC boot hook"
+  echo "persistent: installing" > "$STATUS"
+  if [ -f "$WORK_DIR/ad4-install-persistent.sh" ]; then
+    sh "$WORK_DIR/ad4-install-persistent.sh" >> "$LOG" 2>&1
+    PRC=$?
+    LOGF "persistent-install rc=$PRC"
+    echo "persistent-install rc=$PRC" >> "$STATUS"; sync
+    [ "$PRC" -eq 0 ] && { LOGF "installer rebooting"; sleep 5; }
+  else
+    LOGF "persistent: ad4-install-persistent.sh missing, skipped"
   fi
 fi
 
-exit $RC
+LOGF "================ DONE. flag=$FLAG rc=$RC ================"
+echo "done($FLAG) rc=$RC" > "$STATUS"; sync
+exit "$RC"

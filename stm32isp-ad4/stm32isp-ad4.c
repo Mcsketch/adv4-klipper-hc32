@@ -77,6 +77,7 @@
 
 /* ---- tiny sysfs GPIO helpers ------------------------------------------ */
 static int g_fd = -1;
+static int g_exported[64] = {0};
 
 static void die(const char *s){ perror(s); exit(1); }
 static void wr(const char *p, const char *v){
@@ -87,12 +88,17 @@ static void gpio_export(int n){
     char p[128];
     snprintf(p,sizeof p, GPIO_ROOT "/export");
     char b[16]; snprintf(b,sizeof b,"%d",n);
-    int fd=open(p,O_WRONLY); if(fd<0) die("export");
-    if(write(fd,b,strlen(b))<0) die("export write");
-    close(fd);
+    char dp[128]; snprintf(dp,sizeof dp, GPIO_ROOT "/gpio%d/direction",n);
+    if(access(dp,F_OK)==0){ /* already exported: skip export, keep going */ }
+    else {
+        int fd=open(p,O_WRONLY); if(fd<0) die("export");
+        if(write(fd,b,strlen(b))<0){ close(fd); die("export write"); }
+        close(fd);
+        g_exported[n]=1;
+    }
     /* direction = out */
-    snprintf(p,sizeof p, GPIO_ROOT "/gpio%d/direction", n);
-    wr(p,"out");
+    int fd=open(dp,O_WRONLY);
+    if(fd>=0){ write(fd,"out",3); close(fd); }
     usleep(20000);
 }
 static void gpio_set(int n, int v){
@@ -101,11 +107,13 @@ static void gpio_set(int n, int v){
     wr(p, v?"1":"0");
 }
 static void gpio_unexport(int n){
-    char p[128]; char b[16];
-    snprintf(p,sizeof p, GPIO_ROOT "/unexport");
-    snprintf(b,sizeof b,"%d",n);
-    int fd=open(p,O_WRONLY); if(fd<0) return;
-    write(fd,b,strlen(b)); close(fd);
+    if(g_exported[n]) {
+        char p[128]; char b[16];
+        snprintf(p,sizeof p, GPIO_ROOT "/unexport");
+        snprintf(b,sizeof b,"%d",n);
+        int fd=open(p,O_WRONLY); if(fd<0) return;
+        write(fd,b,strlen(b)); close(fd);
+    }
 }
 
 /* One reset pulse: NRST LOW 15.68ms, then HIGH 15.68ms. */
@@ -249,12 +257,16 @@ static void ihex_load(const char *path, ihex_t *h, uint32_t *err){
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv){
     const char *port = "/dev/ttyS1";
-    const char *na_hex=NULL, *hd_hex=NULL;
+    const char *na_hex=NULL, *hd_hex=NULL, *dump_bin=NULL;
     int force_hd=-1;      /* -1 auto, 0 na, 1 hd */
     int verbose=0;
     int i=1;
     for(; i<argc; i++){
-        if(!strcmp(argv[i],"-r")){
+        if(!strcmp(argv[i],"-d")){
+            i++; if(i>=argc) die("-d needs <out.bin>");
+            dump_bin=argv[i];
+        }
+        else if(!strcmp(argv[i],"-r")){
             i++; if(i>=argc) die("-r needs hd|na");
             if(!strcasecmp(argv[i],"hd")) force_hd=1;
             else if(!strcasecmp(argv[i],"na")) force_hd=0;
@@ -267,34 +279,32 @@ int main(int argc, char **argv){
             else if(!hd_hex) hd_hex=argv[i];
         }
     }
-    if(!na_hex && !hd_hex){
-        fprintf(stderr,"usage: %s [-r hd|na] [-p /dev/ttyS1] [-v] <na.hex> <hd.hex>\n",argv[0]);
+    if(!na_hex && !hd_hex && !dump_bin){
+        fprintf(stderr,"usage: %s [-d <out.bin>] [-r hd|na] [-p /dev/ttyS1] [-v] [na.hex] [hd.hex]\n",argv[0]);
+        fprintf(stderr,"       %s -d mcu-full-flash.bin      (read full 256KB flash, no write)\n",argv[0]);
         return 2;
     }
     if(geteuid()!=0){ fprintf(stderr,"must run as root (GPIO + /dev/ttyS1)\n"); return 2; }
 
-    /* 1) GPIO strapping */
+    /* 1) GPIO strapping (match IAPCommand: serial open FIRST, then reset) */
+    g_fd = ser_open(port,115200);
+    if(g_fd<0) return 1;
     gpio_export(BOOT0_GPIO); gpio_export(NRST_GPIO);
     gpio_set(BOOT0_GPIO,1);           /* BOOT0 HIGH = select ROM ISP on reset */
     sleep(1);                          /* factory hold */
     nrst_pulse();                      /* put MCU into the ROM bootloader */
 
-    /* 2) open serial */
-    g_fd = ser_open(port,115200);
-    if(g_fd<0) return 1;
-
     /* 3) sync with retry (the generic tool stops here and times out) */
     unsigned char c = CMD_SYNC;
-    int connected=0; int tries=40;
+    int connected=0; int tries=60;
     while(tries--){
+        tcflush(g_fd, TCIOFLUSH);
         ser_wr(g_fd,&c,1);
         unsigned char b=0;
-        if(ser_rd(g_fd,&b,1,50)==1){
+        if(ser_rd(g_fd,&b,1,80)==1){
             if(b==ACK_OK){ connected=1; break; }
-            /* factory tool: reply byte 6 => HD, 7 => NA (revision detect).
-             * We accept the ROM ack (0x79); revision is forced or auto below. */
         }
-        nrst_pulse();
+        if(tries%5==0) nrst_pulse();
     }
     if(!connected){
         fprintf(stderr,"IAPCommand-style error: Can not connect to board, %s timed-out.\n",port);
@@ -305,6 +315,30 @@ int main(int argc, char **argv){
 
     unsigned short pid=0; st_getpid(g_fd,&pid);
     if(verbose) fprintf(stderr,"PID = 0x%04x\n",pid);
+
+    /* DUMP MODE: read the full flash (0x08000000 .. +256KB) and write it
+     * out. Read-only: never erases or programs. This is the safety backup
+     * of the IAP program at 0x0 and the app at 0xC000. */
+    if(dump_bin){
+        const uint32_t FLASH_BASE=0x08000000u, FLASH_LEN=0x40000u, CHUNK=0x400u;
+        uint8_t *buf=malloc(FLASH_LEN);
+        if(!buf){ fprintf(stderr,"alloc failed\n"); return 1; }
+        uint32_t fails=0;
+        for(uint32_t a=0;a<FLASH_LEN;a+=CHUNK){
+            if(!st_read(g_fd,FLASH_BASE+a,buf+a,CHUNK)){ fails++; }
+            else if(verbose && (a%0x4000)==0) fprintf(stderr,"  read 0x%08X..+0x%03X ok\n",FLASH_BASE+a,CHUNK);
+        }
+        FILE *f=fopen(dump_bin,"wb");
+        if(!f){ fprintf(stderr,"open %s: %s\n",dump_bin,strerror(errno)); free(buf); return 1; }
+        fwrite(buf,1,FLASH_LEN,f); fclose(f); free(buf);
+        fprintf(stderr,"DUMP: %s (%u bytes, %u chunk-fails) @0x08000000\n",dump_bin,FLASH_LEN,fails);
+        /* leave MCU running the app (dump is read-only, nothing was changed) */
+        st_jump(g_fd);
+        gpio_set(BOOT0_GPIO,0);
+        nrst_pulse();
+        gpio_unexport(BOOT0_GPIO); gpio_unexport(NRST_GPIO);
+        return (fails==0)?0:1;
+    }
 
     /* 4) pick image (this board is the HD/H32 revision; -r na for NA) */
     const char *img;

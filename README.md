@@ -40,7 +40,7 @@ Self-documenting folder. All artifacts verified against:
 | `work/bkup/dmesg.txt` | Working-machine SoC boot log (peripheral map) |
 | `work/bkup/printer_profile_kv.txt` | Slic3r printer profile from /data |
 | `work/hd.bin` | Decoded HD MCU image (binary) |
-| `stm32isp-ad4/klipper-ad4.hex` | Klipper MCU image, **positioned at `0x000C0000`** (type-05 iHEX, byte-identical to `klipper.bin`) — the safe flash image the stick uses |
+| `stm32isp-ad4/klipper-ad4.hex` | Klipper MCU image, **positioned at `0x0000C000`** (type-04 iHEX, byte-identical to `klipper.bin`) — the safe flash image the stick uses |
 | `klipper-hc32/out/klipper.{bin,hex}` | Upstream Klipper HC32F460 build (app window `0x00C000`, ~28 KB) |
 
 ## Key verified facts (summary)

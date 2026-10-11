@@ -26,7 +26,7 @@ md5 and the Klipper hex's base address before it copies anything.
 | `flashforge_init.sh` | the SoC-side flash+net+bridge script (run at boot) |
 | `screwflag` | empty file — skips the machine-type check |
 | `IAPCommand` | factory ARM flasher, md5 `919864f7…`; it does the GPIO strapping (NRST=34, BOOT0=35, `/dev/ttyS1`) |
-| `klipper.hex` | Klipper, positioned at `0x000C0000` (type-05 iHEX, byte-identical to `klipper.bin`) |
+| `klipper.hex` | Klipper, positioned at `0x0000C000` (type-04 iHEX, byte-identical to `klipper.bin`) |
 | `factory-HD.hex` | known-good full restore image (base `0x0000`, full chip) |
 | `ad4-serial-bridge.py` | MCU `/dev/ttyS1` ↔ TCP `:5000` bridge (byte-transparent) |
 | `ad4-net.conf` | `SOC_IP=192.168.10.10  SOC_NET=24  BRIDGE_PORT=5000` (editable) |
@@ -55,9 +55,9 @@ does **not** emit extended-address records for an image that straddles a 64K
 page, so the second page wrapped to 16-bit offsets and the flasher's loader
 resolved the whole image to base `0x00000000` — which would have clobbered the
 ROM-ISP region and **bricked** the printer. The fix is
-`tools/make-positioned-ihex.py`, which emits proper type-05 records; the
+`tools/make-positioned-ihex.py`, which emits proper type-04 records; the
 canonical `stm32isp-ad4/klipper-ad4.hex` is produced that way and verified to
-resolve to `0x000C0000`.
+resolve to `0x0000C000`.
 
 ## After the stick runs
 

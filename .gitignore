@@ -1,6 +1,17 @@
 # OS junk
 .DS_Store
 
+# Build artifacts (static ARM host tools) — rebuildable from *.c via Makefile
+stm32isp-ad4/stm32isp-ad4
+stm32isp-ad4/stm32isp-ad4-*
+stm32isp-ad4/mcu_state
+stm32isp-ad4/uart_rate
+stm32isp-ad4/cap
+stm32isp-ad4/capfull
+stm32isp-ad4/bootloop
+stm32isp-ad4/safeprobe
+stm32isp-ad4/build.err
+
 # Large extraction/backup artifacts (live on disk, not in git)
 work/backup/
 work/bkup/

@@ -21,7 +21,7 @@
 #   flashforge_init.sh   this script
 #   screwflag            empty file (skips machine-type check)
 #   IAPCommand           C ARM flasher (does the GPIO strapping)
-#   klipper.hex          Klipper @ 0x000C0000
+#   klipper.hex          Klipper @ 0x0000C000
 #   factory-HD.hex       known-good restore image (never delete)
 #   ad4-serial-bridge.py the SoC<->MCU bridge (needs python3)
 #   ad4-net.conf         OPTIONAL SOC_IP=... BRIDGE_PORT=...
@@ -65,16 +65,32 @@ FATAL() { LOGF "FATAL: $1"; echo "ad4-fatal($1)" > "$STATUS" 2>/dev/null; sync; 
 
 # ---- tolerant process kill (busybox may lack pkill/fuser/pgrep)
 pkill_safe() {
-  # $1 = pattern
-  if command -v pkill >/dev/null 2>&1; then pkill -f "$1" 2>/dev/null; return; fi
-  if command -v killall >/dev/null 2>&1; then killall "$1" 2>/dev/null; return; fi
-  # last resort: scan /proc
+  # $1 = pattern. Try pkill, killall, then a /proc/*/cmdline scan.
+  if command -v pkill >/dev/null 2>&1; then pkill -f "$1" 2>/dev/null; fi
+  if command -v killall >/dev/null 2>&1; then killall "$1" 2>/dev/null; fi
   for p in /proc/[0-9]*; do
     [ -r "$p/cmdline" ] || continue
     case `tr '\0' ' ' < "$p/cmdline" 2>/dev/null` in
       *"$1"*) kill -9 "${p#/proc/}" 2>/dev/null ;;
     esac
   done
+}
+# Kill whatever has $1 (e.g. /dev/ttyS1) OPEN, via /proc/*/fd symlinks.
+# This is the reliable way to free a serial the vendor GUI/watchdog holds,
+# and it does NOT depend on pkill/killall/fuser being present.
+kill_fd_holder() {
+  # $1 = device path to free
+  local dev="$1" found=""
+  for fd in /proc/[0-9]*/fd/*; do
+    tgt=$(readlink "$fd" 2>/dev/null) || continue
+    [ "$tgt" = "$dev" ] || continue
+    pid=$(echo "$fd" | cut -d/ -f3)
+    case "$pid" in $$) continue ;; esac   # never kill ourselves
+    kill -9 "$pid" 2>/dev/null
+    found="${found}${pid} "
+  done
+  [ -n "$found" ] && { LOGF "freed $dev (killed holders: $found)"; return 0; }
+  return 1
 }
 pid_alive() {
   # $1 = pattern ; returns 0 if a matching process exists
@@ -88,24 +104,26 @@ pid_alive() {
   return 1
 }
 
-# ---- buzzer (PWM piezo) ----------------------------------------
-# The board's "sound" is NOT a wav file: the vendor GUI (buzzer.cpp)
-# drives a piezo via a PWM sysfs node (pwmchip0/pwm0) and fires tone
-# sequences on events (boot, print-start, print-end, button presses).
-# We drive the SAME node directly to play a "flash done" chime, so no
-# vendor code is touched. If the node is missing/locked we just skip
-# (the flash is already done by then; sound is a bonus).
-# PWM_BASE is overridable for testing on the dev machine.
+# ---- sound (buzzer) ---------------------------------------------
+# The board's sound is a PWM piezo. The vendor's own driver is the
+# standalone `play` binary: it opens the /dev/pwm char device (NOT the
+# /sys/class/pwm sysfs nodes), exports pwm1, and ioctls it to play the
+# tune built into it (its main() is hardcoded: buzzerPlay::play(TuneId 7)
+# -> the boot/"voice" sound, ~4 s). We prefer it (vendor-proven, no
+# reverse-engineering of the ioctl). If `play` is absent we fall back to
+# writing the /sys/class/pwm sysfs node directly (best-effort). Sound is
+# always a bonus — if nothing is available we log and continue.
+PLAY_BIN=""
+if [ -x "$WORK_DIR/play" ]; then PLAY_BIN="$WORK_DIR/play"; fi
+[ -n "$PLAY_BIN" ] || PLAY_BIN=$(command -v play 2>/dev/null)
+
+# sysfs fallback (only used when `play` is missing)
 PWM_BASE="${PWM_BASE:-/sys/class/pwm}"
-PWM_DIR=""
-PWM_OK=0
+PWM_DIR=""; PWM_OK=0
 pwm_setup() {
-  # Find a usable pwm dir that has an enable file (export if needed).
   for base in "$PWM_BASE" /sys/devices/10000000.palmbus/10005000.pwm/pwm; do
     for chip in pwmchip0 pwmchip1 pwmchip2 pwmchip3; do
-      d="$base/$chip"
-      [ -d "$d" ] || continue
-      # if pwm0 not exported yet, try to export it
+      d="$base/$chip"; [ -d "$d" ] || continue
       if [ ! -d "$d/pwm0" ] && [ -e "$d/export" ]; then
         echo 0 > "$d/export" 2>/dev/null
         i=0; while [ ! -d "$d/pwm0" ] && [ $i -lt 20 ]; do sleep 0.1 2>/dev/null || break; i=$((i+1)); done
@@ -116,8 +134,7 @@ pwm_setup() {
   done
   return $([ "$PWM_OK" = 1 ] && echo 0 || echo 1)
 }
-tone() {
-  # $1 = period in ns (1e9/freq), $2 = on-duration in seconds
+tone() { # $1=period ns, $2=on-duration seconds  (sysfs fallback only)
   [ "$PWM_OK" = 1 ] || return 0
   echo "$1" > "$PWM_DIR/pwm0/period"    2>/dev/null
   echo $(( $1 / 2 )) > "$PWM_DIR/pwm0/duty_cycle" 2>/dev/null
@@ -127,34 +144,37 @@ tone() {
 }
 # chime: $1 = ok | fail | start
 chime() {
-  [ "$PWM_OK" = 1 ] || { LOGF "buzzer: no PWM node (sound skipped)"; return 0; }
   case "$1" in
-    start)
-      LOGF "chime: start blip"
-      tone 666667 0.12   # 1.5 kHz ~120 ms
-      ;;
-    ok)
-      LOGF "chime: flash-DONE (rising two-tone)"
-      tone 400000 0.18   # 2.5 kHz ~180 ms
-      sleep 0.05 2>/dev/null
-      tone 285714 0.30   # 3.5 kHz ~300 ms  -> pleasant "ding"
-      ;;
-    fail)
-      LOGF "chime: flash-FAILED (low triple buzz)"
-      i=0; while [ $i -lt 3 ]; do
-        tone 1000000 0.25   # 1.0 kHz ~250 ms
-        sleep 0.18 2>/dev/null
-        i=$((i+1))
-      done
-      ;;
+    start) MSG="chime: start blip" ;;
+    ok)    MSG="chime: flash-DONE" ;;
+    fail)  MSG="chime: flash-FAILED" ;;
   esac
-  echo 0 > "$PWM_DIR/pwm0/enable" 2>/dev/null
+  if [ -n "$PLAY_BIN" ]; then
+    LOGF "$MSG  (via play, /dev/pwm)"
+    # `play` is self-timed (~4 s); run it in the background so a hang
+    # can't block the flash. No args: its main() is hardcoded.
+    ( "$PLAY_BIN" >/dev/null 2>&1 & ) 2>/dev/null
+    return 0
+  fi
+  # sysfs fallback
+  if [ "$PWM_OK" = 1 ]; then
+    LOGF "$MSG  (via sysfs $PWM_DIR)"
+    case "$1" in
+      start) tone 666667 0.12 ;;
+      ok)    tone 400000 0.18; sleep 0.05 2>/dev/null; tone 285714 0.30 ;;
+      fail)  i=0; while [ $i -lt 3 ]; do tone 1000000 0.25; sleep 0.18 2>/dev/null; i=$((i+1)); done ;;
+    esac
+    echo 0 > "$PWM_DIR/pwm0/enable" 2>/dev/null
+  else
+    LOGF "$MSG  (NO sound path: play missing, no sysfs node - skipped)"
+  fi
 }
-pwm_setup
-if [ "$PWM_OK" = 1 ]; then
-  LOGF "buzzer ready: $PWM_DIR (PWM piezo, sysfs)"
+if [ -n "$PLAY_BIN" ]; then
+  LOGF "sound ready: $PLAY_BIN (vendor play, /dev/pwm)"
 else
-  LOGF "buzzer: no PWM node found under $PWM_BASE (sound will be skipped)"
+  pwm_setup
+  [ "$PWM_OK" = 1 ] && LOGF "sound ready: sysfs $PWM_DIR" \
+                    || LOGF "sound: NO path available (play missing + no sysfs node) - will skip"
 fi
 
 LOGF "================ AD4 flashforge_init (no-python) ================"
@@ -202,7 +222,7 @@ fi
 # ---- inventory of what's on the stick -------------------------
 LOGF "stick inventory ($WORK_DIR):"
 ls -la "$WORK_DIR" >> "$LOG" 2>&1
-for f in screwflag stm32isp-ad4 IAPCommand klipper.hex factory-HD.hex ad4-serial-bridge.py RESTORE PERSISTENT ad4-net.conf; do
+for f in screwflag play stm32isp-ad4 IAPCommand klipper.hex factory-HD.hex ad4-serial-bridge.py RESTORE PERSISTENT ad4-net.conf; do
   [ -f "$WORK_DIR/$f" ] && LOGF "    present: $f ($(wc -c < "$WORK_DIR/$f" 2>/dev/null | tr -d ' ') bytes)" \
                         || LOGF "    absent : $f"
 done
@@ -240,73 +260,147 @@ check_base() {
 }
 
 # ---- select image + guard -------------------------------------
+# Flag-file modes:
+#   RESTORE  -> flash factory-HD.hex (full stock restore)
+#   NO_FLASH -> skip MCU flashing entirely (SoC access + bridge only)
+#   (neither) -> flash klipper.hex
 if [ -f "$WORK_DIR/RESTORE" ]; then
-  IMG="$WORK_DIR/factory-HD.hex"; FLAG=restore; MODE=factory
+  IMG="$WORK_DIR/factory-HD.hex"; FLAG=restore; MODE=factory; FLASH_SKIP=0
+elif [ -f "$WORK_DIR/NO_FLASH" ]; then
+  IMG=""; FLAG=noflash; MODE=skip; FLASH_SKIP=1
 else
-  IMG="$WORK_DIR/klipper.hex";    FLAG=klipper; MODE=strict
+  IMG="$WORK_DIR/klipper.hex";    FLAG=klipper; MODE=strict; FLASH_SKIP=0
 fi
-LOGF "selected image: $IMG (mode=$MODE, flag=$FLAG)"
-if [ ! -f "$IMG" ]; then FATAL "image missing: $IMG"; fi
+LOGF "selected image: ${IMG:-(none, NO_FLASH)} (mode=$MODE, flag=$FLAG)"
+if [ "$FLASH_SKIP" = 1 ]; then
+  LOGF "NO_FLASH mode: skipping MCU flash (SoC access + bridge only)"
+  RC=0
+  # jump to the post-flash sections; the flash loop below is guarded
+else
+  [ -f "$IMG" ] || FATAL "image missing: $IMG"
 
-LOGF "hex guard (awk) on $IMG ($MODE):"
-GUARD=$(check_base "$IMG" "$MODE")
-LOGF "  $GUARD"
-OK=$(printf '%s' "$GUARD" | awk -F'ok=' '{print $2}')
-if [ "$OK" != "1" ]; then
-  LOGF "!! hex guard FAILED (ok=$OK). Refusing to flash. MCU left as-is (safe)."
-  echo "flash-refused($FLAG)" > "$STATUS"; sync; exit 1
+  LOGF "hex guard (awk) on $IMG ($MODE):"
+  GUARD=$(check_base "$IMG" "$MODE")
+  LOGF "  $GUARD"
+  OK=$(printf '%s' "$GUARD" | awk -F'ok=' '{print $2}')
+  if [ "$OK" != "1" ]; then
+    LOGF "!! hex guard FAILED (ok=$OK). Refusing to flash. MCU left as-is (safe)."
+    echo "flash-refused($FLAG)" > "$STATUS"; sync; exit 1
+  fi
+  LOGF "hex guard PASSED"
 fi
-LOGF "hex guard PASSED"
 
 # ---- stop the vendor stack (frees /dev/ttyS1 + GPIOs) ---------
-LOGF "stopping vendor stack (ffstartup-arm, adventurer4-arm)..."
+# The vendor GUI/watchdog keeps re-grabbing /dev/ttyS1 (it talks to the
+# MCU), so the ROM-ISP sync collides with it -> "timed-out". Kill by
+# pattern AND by open-fd (the fd scan is the reliable part: it finds
+# whoever actually has the serial open, regardless of the process name).
+# diag_holders logs exactly which pids have $1 open (self-diagnosis).
+diag_holders() {
+  # $1 = label, $2 = device
+  local h=""
+  for fd in /proc/[0-9]*/fd/*; do
+    [ "$(readlink "$fd" 2>/dev/null)" = "$2" ] || continue
+    h="${h}${fd##*/proc/}"
+  done
+  if [ -n "$h" ]; then
+    LOGF "$1: HOLDERS of $2 -> $(echo $h | tr ' ' '\n' | sort -u | tr '\n' ' ')"
+  else
+    LOGF "$1: $2 has NO open holder"
+  fi
+}
+LOGF "--- pre-kill diagnostics ---"
+diag_holders "before-kill" /dev/ttyS1
+LOGF "stopping vendor stack (ffstartup-arm, adventurer4-arm, qt GUI, ttyS1 holders)..."
 pkill_safe "ffstartup-arm"
 pkill_safe "adventurer4-arm"
-sleep 2
+pkill_safe "ad4-daemon"
+sleep 1
 if [ -e /dev/ttyS1 ]; then
-  if command -v fuser >/dev/null 2>&1; then fuser -k /dev/ttyS1 2>/dev/null; fi
-  LOGF "ttyS1 present: $(ls -la /dev/ttyS1 2>&1)"
+  # Free ttyS1, retrying (the watchdog can respawn a holder).
+  i=0
+  while [ $i -lt 5 ]; do
+    diag_holders "iter $i" /dev/ttyS1
+    kill_fd_holder /dev/ttyS1
+    sleep 1
+    i=$((i+1))
+  done
+  diag_holders "after-kill" /dev/ttyS1
+  LOGF "ttyS1 state: $(ls -la /dev/ttyS1 2>&1)"
+  # show GPIO34/35 state (NRST / BOOT0) - must be free for strapping
+  for g in 34 35; do
+    [ -e /sys/class/gpio/gpio$g ] && \
+      LOGF "gpio$g direction=$(cat /sys/class/gpio/gpio$g/direction 2>/dev/null) value=$(cat /sys/class/gpio/gpio$g/value 2>/dev/null)"
+  done
 else
-  LOGF "ttyS1 ABSENT (expected on some boards) - /dev/ttyS1: $(ls -la /dev/ttyS* 2>&1)"
+  LOGF "ttyS1 ABSENT - /dev/ttyS*: $(ls -la /dev/ttyS* 2>&1)"
 fi
 sleep 1
 
 # ---- flash ----------------------------------------------------
-# Prefer the open-source flasher (stm32isp-ad4, verbose) if present;
-# otherwise fall back to the factory IAPCommand. Both take two hex
-# positional args (na, hd); we pass the chosen image to both and force
-# the HD/H32 revision (this board). The base guard above already passed.
-FLASHER=""
-FLASH_VERB=""
-if [ -x "$WORK_DIR/stm32isp-ad4" ]; then
-  FLASHER="$WORK_DIR/stm32isp-ad4"; FLASH_VERB="-v"; TOOLNAME="stm32isp-ad4 (open-source)"
-elif [ -x "$WORK_DIR/IAPCommand" ]; then
-  FLASHER="$WORK_DIR/IAPCommand"; FLASH_VERB=""; TOOLNAME="IAPCommand (factory)"
-else
-  FATAL "no flasher on stick (need stm32isp-ad4 or IAPCommand)"
+# The MCU is a Huada HC32F460 with a CUSTOM vendor ROM. Its sync handshake
+# (decoded from the vendor's own unstripped IAPCommand) is:
+#     send 0x43  ->  reply 6 (HD revision) or 7 (NA revision)
+# NOT the standard STM32F1 0x43->0x79. So the authoritative flasher is the
+# vendor IAPCommand (it implements the correct 1024-byte packet protocol,
+# command-ack 6/7). Its signature (from the disassembly + a failed run):
+#     IAPCommand <NA.hex> <HD.hex> <comport>
+# We pass the same image for NA and HD; IAPCommand detects the revision at
+# sync and reads the matching file. Factory tool runs FIRST (known-good);
+# the open-source stm32isp-ad4 is a verbose fallback (it targets the std
+# STM32F1 protocol, so it may time out at sync on this ROM — that's expected
+# and non-fatal: the factory attempt is what actually flashes).
+do_flash() {
+  # $1 = tool tag (factory only — the open-source flasher was removed)
+  case "$1" in
+    factory) "$WORK_DIR/IAPCommand" "$IMG" "$IMG" /dev/ttyS1 ;;
+  esac > "$WORK_DIR/iap.out" 2>&1
+}
+FAC_OK=0;  [ -x "$WORK_DIR/IAPCommand" ]   && FAC_OK=1
+if [ "$FLASH_SKIP" = 0 ]; then
+  [ "$FAC_OK" = 1 ] || FATAL "no flasher on stick (need IAPCommand)"
 fi
-LOGF "FLASHING via $TOOLNAME (base guard passed, image=$IMG, mode=$MODE)..."
-chime start
-# stm32isp-ad4:  -r hd  -p /dev/ttyS1  -v   <na.hex> <hd.hex>
-# IAPCommand   :  <img>  <img>
-case "$TOOLNAME" in
-  *open-source*) "$FLASHER" -r hd -p /dev/ttyS1 $FLASH_VERB "$IMG" "$IMG" > "$WORK_DIR/iap.out" 2>&1 ;;
-  *factory*)     "$FLASHER" "$IMG" "$IMG" > "$WORK_DIR/iap.out" 2>&1 ;;
-esac
-RC=$?
-LOGF "$TOOLNAME rc=$RC"
-LOGF "----- flasher output -----"; cat "$WORK_DIR/iap.out" >> "$LOG" 2>&1
-LOGF "----- end flasher output -----"
-echo "$FLAG rc=$RC ($TOOLNAME)" > "$STATUS"; sync
 
-if [ "$RC" -ne 0 ]; then
-  LOGF "!! flash FAILED rc=$RC. MCU is still bootable (ROM ISP untouched)."
-  LOGF "   Re-run the same command, or restore: put a RESTORE file on the stick."
+RC=1; USED=""
+# Authoritative flasher ONLY: the vendor IAPCommand (correct HC32 ROM
+# protocol). The open-source stm32isp-ad4 targeted the std STM32F1 protocol
+# and always timed out at sync on this ROM — it is removed (cleanup).
+[ "$FAC_OK" = 1 ] || FATAL "no flasher on stick (need IAPCommand)"
+
+if [ "$FLASH_SKIP" = 0 ]; then
+RC=1; USED=""
+for tag in factory factory; do
+  [ "$FAC_OK" = 1 ] || continue
+  TOOLNAME="IAPCommand (vendor, correct HC32 protocol)"
+  LOGF "FLASH attempt via $TOOLNAME (image=$IMG)..."
+  chime start
+  do_flash "$tag"; RC=$?
+  LOGF "$TOOLNAME rc=$RC"
+  LOGF "----- flasher output -----"; cat "$WORK_DIR/iap.out" >> "$LOG" 2>&1
+  LOGF "----- end flasher output -----"
+  # success = rc 0 AND the vendor's "STM32iap finished HD/NA." marker present
+  if [ "$RC" -eq 0 ] && grep -q "finished" "$WORK_DIR/iap.out" 2>/dev/null; then
+    USED="$TOOLNAME"; break
+  fi
+  echo "$FLAG rc=$RC ($TOOLNAME)" > "$STATUS"; sync
+  LOGF "  -> attempt failed; re-freeing ttyS1 and retrying..."
+  sleep 1
+  kill_fd_holder /dev/ttyS1 2>/dev/null
+done
+
+if [ -z "$USED" ]; then
+  LOGF "!! flash FAILED (all attempts). MCU is still bootable (ROM ISP untouched)."
+  LOGF "   Likely cause: vendor still holding /dev/ttyS1, or no MCU contact."
+  LOGF "   Re-run, or if the board is unresponsive: put a RESTORE file on the stick."
   chime fail
-  exit "$RC"
+  exit 1
 fi
-LOGF "flash OK (rc=0). New MCU firmware is running."
+LOGF "flash OK via $USED. New MCU firmware is running."
 chime ok
+else
+  LOGF "NO_FLASH: MCU flash skipped (RC=0, USED=skip)"
+  RC=0; USED="skip"
+fi
 
 # ---- RESTORE = full revert, reboot to clean stock -------------
 if [ -f "$WORK_DIR/RESTORE" ]; then
@@ -335,23 +429,113 @@ else
 fi
 sleep 1
 
-# ---- bridge (ONLY if python3 exists) --------------------------
-if command -v python3 >/dev/null 2>&1 && [ -f "$WORK_DIR/ad4-serial-bridge.py" ]; then
-  LOGF "starting MCU<->TCP bridge on 0.0.0.0:$BRIDGE_PORT (python3 present)"
-  pkill_safe "ad4-serial-bridge.py"
-  nohup python3 "$WORK_DIR/ad4-serial-bridge.py" --tcp 0.0.0.0:"$BRIDGE_PORT" \
-      --uart /dev/ttyS1 --baud 250000 >> /var/log/ad4-bridge.log 2>&1 &
+# ---- bridge (static C binary; the SoC has NO python3) ---------
+# 'ad4-bridge' is a zig cross-compiled, byte-transparent TCP<->/dev/ttyS1
+# relay. No python, no dependencies. This is the ONLY bridge path.
+BRIDGE_UP=0
+BRIDGE_TAG=""
+if [ -x "$WORK_DIR/ad4-bridge" ]; then
+  LOGF "starting MCU<->TCP bridge via C binary on :$BRIDGE_PORT (no-python)"
+  pkill_safe "ad4-bridge"
   sleep 1
-  if pid_alive "ad4-serial-bridge.py"; then
-    LOGF "bridge RUNNING on 0.0.0.0:$BRIDGE_PORT (soc_ip=$SOC_IP)"
-    echo "bridge running" >> "$STATUS"
-  else
-    LOGF "bridge FAILED to start (see /var/log/ad4-bridge.log)"
-    echo "bridge-failed" >> "$STATUS"
+  kill_fd_holder /dev/ttyS1 2>/dev/null
+  nohup "$WORK_DIR/ad4-bridge" "$BRIDGE_PORT" /dev/ttyS1 250000 \
+      >> /var/log/ad4-bridge.log 2>&1 &
+  BPID=$!
+  sleep 1
+  if kill -0 "$BPID" 2>/dev/null; then
+    BRIDGE_UP=1; BRIDGE_TAG="ad4-bridge (static C, no-python)"
+    echo "$BPID" > /var/run/ad4-bridge.pid
   fi
+fi
+
+if [ "$BRIDGE_UP" = 1 ]; then
+  LOGF "bridge RUNNING on 0.0.0.0:$BRIDGE_PORT  [$BRIDGE_TAG]  soc_ip=$SOC_IP"
+  LOGF "  next: on the MAC run  ad4-mac  (present as /dev/adv4_mcu), then start klippy"
+  echo "bridge running ($BRIDGE_TAG)" >> "$STATUS"
+  tail -n 5 /var/log/ad4-bridge.log >> "$LOG" 2>/dev/null
 else
-  LOGF "bridge SKIPPED (python3 absent or no bridge file). Flash still complete."
-  echo "bridge-skipped(no-python)" >> "$STATUS"
+  LOGF "bridge NOT started (no C binary on stick)."
+  echo "bridge-skipped(no-c)" >> "$STATUS"
+fi
+
+# ---- SoC ACCESS: dropbear SSH + root password ------------------
+# Proven mechanism (SumolX/FlashForge-Hacks): dropbearmulti installed to
+# /opt/services/bin, symlinked, host key generated, and /opt/auto_run.sh
+# (the vendor's real boot hook — NOT rcS) appends our autorun. Root password
+# set to 'flashforge' via an interactive `passwd` heredoc; a shadow-hash
+# fallback (verified MD5-crypt) covers the case where `passwd` needs a tty.
+# This runs on EVERY stick-boot (flash or NO_FLASH) so we always have a way in.
+LOGF "----- SoC access: installing dropbear SSH (root pw = flashforge) -----"
+DROPBIN="$WORK_DIR/dropbear"
+if [ ! -x "$DROPBIN" ]; then
+  LOGF "!! dropbear binary not on stick; skipping SSH install"
+else
+  SVC=/opt/services
+  mkdir -p "$SVC/bin" "$SVC/sbin"
+  # Install the dropbearmulti binary (one file = dropbear/dropbearkey/scp/ssh).
+  cp -f "$DROPBIN" "$SVC/bin/dropbearmulti" 2>/dev/null
+  chmod +x "$SVC/bin/dropbearmulti" 2>/dev/null
+  # Symlinks the vendor expects.
+  ln -sfn "$SVC/bin/dropbearmulti" /bin/dropbear
+  ln -sfn "$SVC/bin/dropbearmulti" /bin/dropbearkey
+  ln -sfn "$SVC/bin/dropbearmulti" /bin/scp
+  ln -sfn "$SVC/bin/dropbearmulti" /bin/ssh
+  LOGF "dropbear installed -> /opt/services/bin/dropbearmulti + symlinks"
+  sync
+  # Host key (once).
+  if [ ! -e /etc/dropbear/dropbear_rsa_host_key ]; then
+    mkdir -p /etc/dropbear
+    /bin/dropbearkey -t rsa -f /etc/dropbear/dropbear_rsa_host_key 2>/dev/null
+    LOGF "generated dropbear rsa host key"
+  fi
+  # ---- root password = flashforge -----------------------------------
+  # Primary: interactive `passwd` heredoc (proven in FFH). Fallback:
+  # rewrite the root shadow entry with a verified MD5-crypt hash.
+  PW_HASH='$1$ff2026$IGxGYXhDTYMygkh.Suun4/'
+  set_root_pw() {
+    # $1 = label
+    # Try interactive passwd first (no tty required on busybox if piped).
+    printf 'flashforge\nflashforge\n' | passwd 2>/dev/null
+    # Verify by checking the shadow hash; if still not ours, force it.
+    if command -v awk >/dev/null 2>&1 && [ -w /etc/shadow ]; then
+      cur=$(awk -F: '$1=="root"{print $2}' /etc/shadow 2>/dev/null)
+      if [ "$cur" != "$PW_HASH" ]; then
+        awk -v h="$PW_HASH" 'BEGIN{} $1=="root"{print "root:"h":15000:0:99999:7:::";next} {print}' \
+          /etc/shadow 2>/dev/null > /etc/shadow.new 2>/dev/null \
+          && mv -f /etc/shadow.new /etc/shadow && chmod 600 /etc/shadow 2>/dev/null
+        LOGF "root shadow set to verified hash (passwd fallback)"
+      else
+        LOGF "root password already = flashforge"
+      fi
+    fi
+  }
+  set_root_pw "boot"
+  LOGF "root password set to: flashforge"
+  sync
+  # ---- start dropbear NOW + persist via /opt/auto_run.sh ------------
+  # Kill any stale dropbear, then start on 0.0.0.0:22.
+  pkill_safe "dropbear"
+  sleep 0.5
+  nohup /bin/dropbear -R -p 22 >> /var/log/dropbear.log 2>&1 &
+  sleep 1
+  SSH_UP=0
+  # verify port 22 is listening via /proc/net/tcp (port 0x0016 = 22)
+  if grep -qiE ':0016[[:space:]]' /proc/net/tcp 2>/dev/null; then SSH_UP=1; fi
+  LOGF "dropbear started (ssh :22 up=$SSH_UP)"
+  # Persist across a no-stick boot via the vendor boot hook.
+  if [ -f /opt/auto_run.sh ]; then
+    if ! grep -qF "dropbear" /opt/auto_run.sh 2>/dev/null; then
+      [ -f /opt/auto_run.sh.ad4-orig ] || cp -f /opt/auto_run.sh /opt/auto_run.sh.ad4-orig
+      echo "/bin/dropbear -R -p 22 &" >> /opt/auto_run.sh
+      LOGF "persisted dropbear via /opt/auto_run.sh"
+      sync
+    else
+      LOGF "dropbear already in /opt/auto_run.sh"
+    fi
+  else
+    LOGF "!! /opt/auto_run.sh not found; SSH will NOT persist past this boot"
+  fi
 fi
 
 # ---- optional PERSISTENT eMMC hook ----------------------------

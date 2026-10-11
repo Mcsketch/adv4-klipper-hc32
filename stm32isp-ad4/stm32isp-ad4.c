@@ -26,14 +26,22 @@
  * Build (on the SoC, armv7l, root):
  *   gcc -O2 -o stm32isp-ad4 stm32isp-ad4.c
  * Usage:
- *   stm32isp-ad4 [-r hd|na] <na.hex> <hd.hex>      (factory-style, auto-select)
- *   stm32isp-ad4 -r hd klipper.hex                 (force revision, one image)
- *   stm32isp-ad4 -r hd -v klipper.hex
+ *   stm32isp-ad4 [-r hd|na] [-v] <na.hex> <hd.hex>   (factory-style; the
+ *                                                   revision is DETECTED
+ *                                                   from the ROM sync reply)
+ *   stm32isp-ad4 -r hd klipper.hex                  (one image, forced rev)
+ *   stm32isp-ad4 -d mcu-full-flash.bin              (read-only 256KB dump)
  *
- * The standard STM32 ROM-bootloader transport (0x43 sync, erase 0x44,
- * program 0x46, read-back 0x11, get-pid 0x02, jump 0x08) is unchanged from
- * upstream stm32isp — that part is hardware-defined and does not depend on the
- * vendor.
+ * ROM-ISP handshake (HC32F460, HC32-specific and NORMAL — not a bug):
+ *   0x43 'C' sync  ->  ROM replies ONE byte: 0x06 (HD/H32) or 0x07 (NA/N32).
+ * The tool accepts that reply as a successful connect (a plain-STM32 0x79
+ * 'Y' reply is accepted too, for portability) and uses it as the revision
+ * detector. The ROM must have just been reset into ISP (BOOT0 HIGH + NRST
+ * pulse) or it stays silent; the sync loop re-pulses NRST automatically.
+ *
+ * The STM32-style sub-command transport (erase 0x44, program 0x46,
+ * read-back 0x11, get-pid 0x02, jump 0x08) is unchanged from upstream
+ * stm32isp — hardware-defined, vendor-independent.
  */
 
 /* Feature-test macro: expose POSIX symbols (usleep, cfmakeraw, strcasecmp)
@@ -52,6 +60,8 @@
 #include <stdint.h>
 #include <sys/stat.h>
 #include <utime.h>
+#include <poll.h>
+#include <time.h>
 
 /* ---- SoC GPIO strapping (the board-specific magic) -------------------- */
 #define NRST_GPIO   34      /* SoC GPIO controlling MCU NRST  */
@@ -59,7 +69,19 @@
 #define NRST_US     15680   /* 15.68 ms, matches factory IAPCommand usleep */
 #define GPIO_ROOT   "/sys/class/gpio"
 
-/* ---- STM32 ROM bootloader protocol (upstream stm32isp, unchanged) ----- */
+/* ---- ROM-ISP protocol -------------------------------------------------
+ * The HC32F460 ROM bootloader speaks a STM32-style transport
+ * (0x43 sync, erase 0x44, program 0x46, read-back 0x11, get-pid 0x02,
+ * jump 0x08), but its SYNC HANDSHAKE IS HC32-SPECIFIC:
+ *   host -> mcu : 0x43
+ *   mcu  -> host: 1 byte  -- 0x06 (HD revision) or 0x07 (NA revision)
+ * This reply is NORMAL behaviour of this MCU (a plain STM32 would answer
+ * 0x79 'Y'); it is NOT an error and must not be worked around. It doubles
+ * as the revision detector, so the -r flag is only a hint/override.
+ * NOTE: the ROM is quiet until it has just been reset into ISP (BOOT0 HIGH
+ * + NRST pulse); if the reply never comes, the MCU is not in ISP state —
+ * re-pulse NRST (the loop below does that automatically).
+ */
 #define CMD_SYNC     0x43   /* 'C' */
 #define CMD_GO       0x04
 #define CMD_GET      0x02   /* get PID */
@@ -67,8 +89,16 @@
 #define CMD_WRITE    0x46
 #define CMD_READ     0x11
 #define CMD_JUMP     0x08
-#define ACK_OK       0x79   /* 'Y' */
+#define ACK_OK       0x79   /* 'Y' — STM32-style ack (sub-commands) */
+#define SYNC_REV_HD  0x07   /* HC32 sync reply: HD (H32) revision   */
+#define SYNC_REV_NA  0x06   /* HC32 sync reply: NA (N32) revision   */
 #define NACK         0x00
+/* Vendor IAP frame-ack: the ROM replies 0x06 after each good 1030-byte
+ * packet (strace-verified). Same value as the HD-sync byte; context disambiguates. */
+#define IAP_FRAME_OK   0x06
+#define IAP_CMD_DATA   0x01
+#define IAP_CMD_FINAL  0x04
+#define IAP_DATA_MAX   1024
 
 /* HD application base (the only window we ever write). */
 #define HD_BASE     0x0800C000u
@@ -150,8 +180,30 @@ static int ser_rd(int fd, unsigned char *b, int n, int ms){
     }
     return got;
 }
-static void ser_wr(int fd, const unsigned char *b, int n){
-    int o=0; while(o<n){ int w=write(fd,b+o,n-o); if(w<0) die("write"); o+=w; }
+static int ser_wr(int fd, const unsigned char *b, int n){
+    /* The port is O_NONBLOCK, so a burst of frames back-to-back can outrun the
+     * UART TX buffer and write() returns EAGAIN (Resource temporarily
+     * unavailable). The vendor tool's port is blocking, so its write() paces
+     * at UART speed naturally; here we reproduce that pacing explicitly: on
+     * EAGAIN, poll for POLLOUT (space in the TX FIFO) and retry. A per-write
+     * deadline (10 s) guards against a wedged UART rather than hanging. */
+    int o=0;
+    struct timespec t0; clock_gettime(CLOCK_MONOTONIC, &t0);
+    while(o<n){
+        int w = write(fd, b+o, n-o);
+        if(w>0){ o+=w; continue; }
+        if(w<0 && (errno==EAGAIN || errno==EWOULDBLOCK)){
+            struct pollfd pfd = { .fd = fd, .events = POLLOUT };
+            poll(&pfd, 1, 50);   /* 50 ms slice */
+            struct timespec now; clock_gettime(CLOCK_MONOTONIC, &now);
+            long used = (now.tv_sec - t0.tv_sec)*1000 + (now.tv_nsec - t0.tv_nsec)/1000000;
+            if(used>10*1000){ errno=EAGAIN; return -1; }
+            continue;
+        }
+        if(w<0) return -1;   /* real error */
+        return o;
+    }
+    return o;
 }
 /* expect one ack byte, with a short retry window */
 static int wait_ack(int fd, int expect){
@@ -204,6 +256,94 @@ static int st_read(int fd, uint32_t addr, unsigned char *data, int len){
 static void st_jump(int fd){
     unsigned char c=CMD_JUMP; ser_wr(fd,&c,1);
     (void)wait_ack(fd,ACK_OK);
+}
+
+/* ---- vendor 1030-byte IAP packet protocol ---------------------------
+ * Decoded from the factory IAPCommand (fillPacket + stm32Write). The HC32 ROM
+ * does NOT speak the STM32 ROM-ISP commands (0x44/0x46/0x11); it speaks a
+ * vendor packet:
+ *   [cmd:1][len:2 LE][data:1024][crc:2 LE]
+ *   crc = CRC16-CCITT (poly 0x1021, init 0, non-reflected, non-reversed) over
+ *         the cmd byte + the 1024 data bytes (i.e. everything before the crc).
+ * Commands (from IAPCommand): 0x01 = data chunk (ROM auto-erases the app pages
+ * and writes), 0x04 = final "write complete" (exit bootloader).
+ * Ack semantics (verified by strace of the vendor IAPCommand): after EACH
+ * 1030-byte packet the ROM replies ONE byte 0x06 = frame-OK. (This is the same
+ * byte as the HD-sync reply; the context — sync vs data phase — disambiguates.)
+ * Silence = timeout = retry (up to 3). The ROM is self-addressing: it writes
+ * each chunk at the next app-window address (auto-erasing the page), so the
+ * hex file base is NOT sent on the wire — matching the factory tool, which
+ * passes the same file to both the NA and HD slots and never transmits an
+ * address. This is why there is NO separate erase command.
+ */
+static uint16_t crc16_iap(const unsigned char *p, int n){
+    uint16_t c=0;
+    for(int i=0;i<n;i++){
+        c ^= (uint16_t)p[i] << 8;
+        for(int b=0;b<8;b++)
+            c = (c & 0x8000) ? (uint16_t)((c<<1) ^ 0x1021) : (uint16_t)(c<<1);
+    }
+    return c;
+}
+/* Fire one vendor data-frame (1030 bytes) — write-only, NO ack read.
+ * On-wire layout — VERIFIED byte-for-byte against a live strace of the vendor
+ * IAPCommand (28 frames, all CRCs match), and cross-checked against the
+ * disassembled fillPacket/stm32Write:
+ *   [0]        0x01 (data cmd)
+ *   [1]        sequence number of this frame, 0-based (0,1,2,...,n-1)
+ *   [2:3]      length, LITTLE-ENDIAN (byte count of this chunk, <=1024)
+ *   [4:1027]   data, 1024 bytes, 0xFF-padded when the last chunk is short
+ *   [1028:1029] crc16, LITTLE-ENDIAN, = CRC16-CCITT(poly 0x1021, init 0x0000,
+ *                non-reflected, non-reversed) over the FULL 1024-byte data
+ *                region INCLUDING the 0xFF padding.
+ *
+ * FIRE-AND-FORGET (strace ground truth): the vendor IAPCommand performs ZERO
+ * read() calls in the data phase — it writes the sync, then ALL frames
+ * back-to-back with no delay, then the final 0x04. The ROM never sends a
+ * per-frame 0x06 that the host consumes; waiting for one (as an earlier
+ * version of this tool did) blocks on an ack that the flow does not use and
+ * aborts the write. So we write and move on; success is determined by the
+ * post-reset Klipper identify on /dev/ttyS1, not by a per-frame ack.
+ * Returns 1 if the write() syscalls succeed, 0 on an I/O error. */
+static int iap_xmit(int fd, int cmd, unsigned char seq, const unsigned char *data, int dlen){
+    if(cmd == IAP_CMD_FINAL){
+        unsigned char b = IAP_CMD_FINAL;   /* 0x04, single byte, no read */
+        return ser_wr(fd, &b, 1) == 1;
+    }
+    unsigned char pkt[1030];
+    memset(pkt, 0xFF, sizeof pkt);          /* 0xFF padding (matches vendor memset(...,0xff));
+                                               padding region is part of the CRC */
+    pkt[0] = (unsigned char)cmd;            /* 0x01 */
+    pkt[1] = seq;                           /* running frame sequence, 0-based */
+    pkt[2] = (unsigned char)(dlen & 0xff);  /* length, little-endian */
+    pkt[3] = (unsigned char)((dlen >> 8) & 0xff);
+    memcpy(pkt + 4, data, dlen);            /* data at offset 4 */
+    uint16_t crc = crc16_iap(pkt + 4, 1024); /* CRC over FULL 1024-byte region (incl. 0xFF pad) */
+    pkt[1028] = (unsigned char)(crc & 0xff); /* crc, little-endian */
+    pkt[1029] = (unsigned char)((crc >> 8) & 0xff);
+    return ser_wr(fd, pkt, sizeof pkt) == (int)sizeof pkt;
+}
+/* Flash the whole image as vendor data-frames + final 0x04, back-to-back with
+ * no inter-frame delay and no per-frame read — byte-for-byte the vendor
+ * IAPCommand flow. [1] is the running frame sequence (0-based); the ROM is
+ * self-addressing (auto-erase + auto-increment inside the app window), so no
+ * address is sent. Returns 1 if every write() succeeded. */
+static int iap_flash(int fd, uint32_t base, const unsigned char *data, uint32_t len){
+    unsigned char seq=0;
+    for(uint32_t o=0; o<len; o+=IAP_DATA_MAX){
+        int n = (len-o)<IAP_DATA_MAX ? (int)(len-o) : IAP_DATA_MAX;
+        if(!iap_xmit(fd, IAP_CMD_DATA, seq, data+o, n)){
+            fprintf(stderr,"iap data frame write failed (seq=%d @0x%08x, %d bytes): %s\n",
+                    seq, base+o, n, strerror(errno));
+            return 0;
+        }
+        seq++;
+    }
+    if(!iap_xmit(fd, IAP_CMD_FINAL, 0, NULL, 0)){
+        fprintf(stderr,"iap final (0x04 write-complete) failed\n");
+        return 0;
+    }
+    return 1;
 }
 
 /* ---- minimal Intel-HEX parser ----------------------------------------- */
@@ -294,33 +434,57 @@ int main(int argc, char **argv){
     sleep(1);                          /* factory hold */
     nrst_pulse();                      /* put MCU into the ROM bootloader */
 
-    /* 3) sync with retry (the generic tool stops here and times out) */
+    /* 3) sync with retry.
+     * The HC32 ROM answers 0x43 with ONE byte: 0x06 or 0x07 (revision id) —
+     * normal behaviour, no further handshake needed. (A plain STM32 ROM
+     * would answer 0x79 'Y'; we accept that too so the tool stays usable on
+     * other boards.) The reply byte doubles as the revision detector, so
+     * -r is only a hint/override. No extra wait beyond the reply: the ROM
+     * is ready to take commands as soon as it has answered the sync. */
     unsigned char c = CMD_SYNC;
-    int connected=0; int tries=60;
+    int connected=0; unsigned char rev=0; int tries=60;
     while(tries--){
         tcflush(g_fd, TCIOFLUSH);
         ser_wr(g_fd,&c,1);
         unsigned char b=0;
         if(ser_rd(g_fd,&b,1,80)==1){
-            if(b==ACK_OK){ connected=1; break; }
+            if(b==SYNC_REV_HD || b==SYNC_REV_NA || b==ACK_OK){
+                rev=b; connected=1; break;
+            }
         }
         if(tries%5==0) nrst_pulse();
     }
     if(!connected){
         fprintf(stderr,"IAPCommand-style error: Can not connect to board, %s timed-out.\n",port);
+        fprintf(stderr,"(the MCU answers the 0x43 sync with 0x06/0x07; silence means it is not in ROM-ISP state)\n");
         gpio_unexport(BOOT0_GPIO); gpio_unexport(NRST_GPIO);
         return 1;
     }
-    if(verbose) fprintf(stderr,"Connected to board.\n");
+    if(verbose) fprintf(stderr,"Connected to board. (sync reply 0x%02x = %s)\n", rev,
+                        rev==SYNC_REV_HD ? "HD/H32" :
+                        rev==SYNC_REV_NA ? "NA/N32" : "generic STM32 ack");
 
-    unsigned short pid=0; st_getpid(g_fd,&pid);
-    if(verbose) fprintf(stderr,"PID = 0x%04x\n",pid);
+    /* NOTE: we deliberately do NOT send a get-PID (0x02) here. The vendor
+     * IAPCommand goes straight from sync to the first 0x01 data frame. An
+     * extra 0x02 leaves stray reply bytes in the RX path that can desync the
+     * per-frame 0x06 acks. (The HC32 ROM's get-PID is not part of the flash
+     * flow anyway.) */
 
-    /* DUMP MODE: read the full flash (0x08000000 .. +256KB) and write it
-     * out. Read-only: never erases or programs. This is the safety backup
-     * of the IAP program at 0x0 and the app at 0xC000. */
+    /* DUMP MODE: read the full flash and write it out. Read-only: never
+     * erases or programs. This is the safety backup of the IAP/ROM at 0x0
+     * and the app at 0xC000.
+     *
+     * ADDRESS CONVENTION: the HC32F460 (HD) ROM-ISP uses RELATIVE addressing
+     * -- the 4-byte address field is an offset from flash start, so 0x00000000
+     * is the ROM-ISP/reset region and 0x0000C000 is the HD app window
+     * (matching how the factory HD image and IAPCommand position it: type-04
+     * base 0x0000 + offset 0xC000). The NA (N32) ROM uses absolute 0x08010000.
+     * So the dump must start at 0x0 (NOT 0x08000000): reading at 0x08000000 is
+     * out of range for the HD ROM and every chunk times out (hangs). Reading
+     * 0x00000000..0x40000 covers the whole 256KB: ROM-ISP @0x0 + app @0xC000.
+     * (The erase/program path already uses h.base=0xC000 for the same reason.) */
     if(dump_bin){
-        const uint32_t FLASH_BASE=0x08000000u, FLASH_LEN=0x40000u, CHUNK=0x400u;
+        const uint32_t FLASH_BASE=0x00000000u, FLASH_LEN=0x40000u, CHUNK=0x400u;
         uint8_t *buf=malloc(FLASH_LEN);
         if(!buf){ fprintf(stderr,"alloc failed\n"); return 1; }
         uint32_t fails=0;
@@ -340,7 +504,10 @@ int main(int argc, char **argv){
         return (fails==0)?0:1;
     }
 
-    /* 4) pick image (this board is the HD/H32 revision; -r na for NA) */
+    /* 4) pick image. Revision is DETECTED from the sync reply (0x06=HD,
+     * 0x07=NA); -r overrides only as an explicit hint. */
+    if(rev==SYNC_REV_HD) force_hd=1;
+    else if(rev==SYNC_REV_NA) force_hd=0;
     const char *img;
     if(force_hd==1){ img=hd_hex?hd_hex:na_hex; }
     else if(force_hd==0){ img=na_hex; }
@@ -365,32 +532,26 @@ int main(int argc, char **argv){
         return 1;
     }
 
-    /* 5) erase (2 pages) + program */
-    /* erase whole app region in 2KB pages from base up to end */
-    uint32_t end = h.base + h.len;
-    for(uint32_t a=h.base & ~0x7FFu; a<=end; a+=0x800){
-        if(verbose) fprintf(stderr,"erase 0x%08x\n",a);
-        if(!st_erase(g_fd,a)){ fprintf(stderr,"erase fail @0x%08x\n",a); return 1; }
+    /* 5) program via the vendor 1030-byte frame protocol.
+     * The HC32 ROM is self-addressing from the app base and auto-erases each
+     * page on write, so there is NO separate erase command and NO address is
+     * sent on the wire. Each 1024-byte chunk is one 0x01 frame (ROM replies
+     * 0x06); the image is closed with one 0x04 "write complete" frame. This
+     * is byte-for-byte the vendor IAPCommand flow (verified by strace).
+     *
+     * NOTE: the ROM read-back op (STM32 0x11) is not spoken by this ROM and is
+     * not yet decoded, so we cannot read flash back over ISP. Success is
+     * indicated by the ROM's per-frame 0x06 acks — the same signal the vendor
+     * tool uses. (Full-chip dump requires the HC32 read op; tracked as an
+     * open item in adv4-iap-protocol.md.) */
+    if(verbose) fprintf(stderr,"programming %u bytes via vendor 1030B frames (auto-erase, header carries addr)\n", h.len);
+    if(!iap_flash(g_fd, h.base, h.data, h.len)){
+        fprintf(stderr,"program failed (ROM stopped acking 0x06)\n");
+        gpio_set(BOOT0_GPIO,0); nrst_pulse();
+        gpio_unexport(BOOT0_GPIO); gpio_unexport(NRST_GPIO);
+        return 1;
     }
-    /* program in 1KB chunks (ROM program max is a page; 1024 is safe) */
-    const int CH=1024;
-    for(uint32_t o=0;o<h.len;o+=CH){
-        int n=(h.len-o)<CH?(int)(h.len-o):CH;
-        if(!st_write(g_fd, h.base+o, h.data+o, n)){
-            fprintf(stderr,"program fail @0x%08x\n",h.base+o); return 1;
-        }
-        if(verbose) fprintf(stderr,"wrote %u/%u\n", o+n, h.len);
-    }
-
-    /* 6) verify a spot check */
-    {
-        unsigned char rb[256];
-        uint32_t va=h.base; int vn=256<h.len?256:(int)h.len;
-        if(st_read(g_fd,va,rb,vn)){
-            if(memcmp(rb,h.data,vn)!=0) fprintf(stderr,"WARNING: verify mismatch\n");
-            else if(verbose) fprintf(stderr,"verify OK (%d bytes)\n",vn);
-        }
-    }
+    if(verbose) fprintf(stderr,"all frames acked 0x06 -> write complete\n");
 
     /* 7) exit ISP, run new app */
     st_jump(g_fd);

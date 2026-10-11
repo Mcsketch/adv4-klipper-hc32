@@ -43,7 +43,7 @@ A small package at **`/opt/ad4-klipper/`** on the eMMC:
 |---|---|
 | `ad4-daemon.sh` | the runtime: static IP on `eth0`, starts+keeps the `:5000` MCU bridge up (self-heals every 10 s), optional MCU re-flash watchdog |
 | `ad4-serial-bridge.py` | SoC `/dev/ttyS1` ⇄ TCP `:5000` (Klipper talks to this) |
-| `klipper.hex` | positioned Klipper @ `0x000C0000` (used only by the re-flash watchdog, off by default) |
+| `klipper.hex` | positioned Klipper @ `0x0000C000` (used only by the re-flash watchdog, off by default) |
 | `IAPCommand` | factory ARM flasher (for the re-flash watchdog) |
 | `ad4-net.conf` | `SOC_IP=192.168.10.10  SOC_NET=24  BRIDGE_PORT=5000` |
 | `enable` | **the flag**: while present, the boot hook runs our daemon instead of the vendor watchdog |

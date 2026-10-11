@@ -51,7 +51,7 @@ cd <repo>/flashdisk
 
 The builder verifies the flasher's md5 and the Klipper hex's base address
 before copying, then lays down: `flashforge_init.sh`, `IAPCommand`,
-`klipper.hex` (positioned at `0x000C0000`), `factory-HD.hex`,
+`klipper.hex` (positioned at `0x0000C000`), `factory-HD.hex`,
 `ad4-serial-bridge.py`, `ad4-net.conf`, `screwflag`. See `flashdisk/README.md`
 for the anti-brick details.
 

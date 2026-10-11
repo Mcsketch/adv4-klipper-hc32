@@ -76,8 +76,8 @@ The SoC's awk is mawk (20200816 class). Two things break naive awk under it:
 - **No `<<` bit-shift** (and mawk is picky about tight packing in general).
   Use `*65536` / `*16` instead. Type-04 and type-05 iHEX records are both
   `(value << 16)`.
-Verified: `klipper.hex` → base `0x000C0000` ok=1; `factory-HD.hex` → base
-`0x000C0000` ok=1 (it is the HD app-window image, not a full-chip dump).
+Verified: `klipper.hex` → base `0x0000C000` ok=1; `factory-HD.hex` → base
+`0x0000C000` ok=1 (it is the HD app-window image, not a full-chip dump).
 
 ## How to read the result (no console)
 1. `./build-usb-stick.sh /Volumes/YOURSTICK`

@@ -25,7 +25,7 @@ Self-documenting folder. All artifacts verified against:
 
 | Folder | Contents |
 |---|---|
-| **`stm32isp-ad4/`** | Complete self-contained C fork of `stm32isp` with the SoC GPIO dance (BOOT0=GPIO35, NRST=GPIO34) built in. `Makefile` (native + cross). `flash-mcu.sh` (SoC driver). Factory HD+NA hexes for restore. **Compiles clean (gcc -Wall -Wextra, zero warnings)** |
+| **`stm32isp-ad4/`** | Complete self-contained C fork of `stm32isp` with the SoC GPIO dance (NRST=GPIO34 **proven**; GPIO35 is driven too but its "BOOT0" role is **unproven**) built in. **Note: its `-d` dump mode cannot work** — it sends STM32 ROM-ISP read (0x11) which the vendor bootloader does not speak; see `adv4-swd-dump.md`. `Makefile` (native + cross). `flash-mcu.sh` (SoC driver). Factory HD+NA hexes for restore. **Compiles clean (gcc -Wall -Wextra, zero warnings)** |
 | **`soc-hack/`** | `ad4-serial-bridge.py` (TCP/UDP serial↔network bridge, byte-transparent, tested E2E). `ad4-bridge.sh` (SoC start/stop/status). `ad4-rpi-setup.sh` (**one-shot RPi3 host setup**: static IP + preflight + deps + Klipper + socat PTY). `rpi-setup.sh` (older manual variant) |
 | **`flashdisk/`** | **Unattended USB-stick flash** (the easy path) **+ persistent install**: `build-usb-stick.sh` (assembles the FAT32 stick, verifies md5 + base; `PERSISTENT` flag ON by default, `NO_PERSISTENT=1` for one-shot), `flashforge_init.sh` (SoC-side flash+net+bridge; `PERSISTENT`/`RESTORE` flag handling), `ad4-daemon.sh` (eMMC runtime: static IP + self-healing bridge + optional MCU re-flash), `ad4-install-persistent.sh` / `ad4-uninstall-persistent.sh` (eMMC boot-hook install/revert), `ad4-install-from-pi.sh` (remote no-stick install over ssh), `README.md` |
 | **`tools/`** | `make-positioned-ihex.py` — emits a clean type-05 iHEX so the flasher writes the app to its absolute window (fixes the objcopy wrap that would otherwise land at 0x0000) |
@@ -48,16 +48,17 @@ Self-documenting folder. All artifacts verified against:
 | Item | Value | Source |
 |---|---|---|
 | SoC | Allwinner V3S (sun8i/sun50i), kernel 3.4.39+, armv7l | dmesg |
-| MCU UART on SoC | `/dev/ttyS1` (uart0), factory 115200, Klipper 250000 | dmesg + IAPCommand |
+| MCU-side UART (session 5, **proven from factory firmware**) | **USART2**, TX=**PA9** (FSEL 36), RX=**PA10** (FSEL 37), **115200**, DMA RX — firmware RE of `control-2.3.0` (descriptor `0x14f64`, init `0x15068`, baud literal `0x1c200`); FSEL map from HDSC HAL. The `PA13/PA14` klipper variant is a hallucination (SWD pins, no USART AF) | factory app disasm + `hc32f460_gpio.h` |
+| MCU UART on SoC | `/dev/ttyS1` (uart0) — **effectively 115200 only**: uart0 clock is 24 MHz, below the driver's 30–120 MHz range, so `setbaud()` is rejected (dmesg `sw_uart_check_baudset`); the line stays at the boot-time 115200. **Klipper must be built @115200** (a 250k build is inaudible) | dmesg + IAPCommand |
 | Ethernet on SoC | `eth0` = gmac0 GbE, PHY 00441400 | dmesg |
 | Touch | TSC2007 → `/dev/input/event0,1` | dmesg |
 | Display | `/dev/fb0` | dmesg |
 | USB host | EHCI+OHCI (bus 1, bus 2) | dmesg |
 | GPIO NRST | SoC GPIO **34** (15.68 ms LOW / 15.68 ms HIGH) | IAPCommand disasm |
-| GPIO BOOT0 | SoC GPIO **35** (HIGH during reset) | IAPCommand disasm |
+| GPIO "BOOT0" | SoC GPIO **35** — IAPCommand writes it, but its connection to the MCU is **UNPROVEN** (HC32F460 has no BOOT0 pin; the boot decision is made by the flash bootloader). Only GPIO34=NRST is confirmed | IAPCommand disasm (role inferred, not verified) |
 | HD MCU base | **0x0000C000**, 60 416 B | HD hex type-04 record |
 | NA MCU base | **0x08010000**, 44 640 B | NA hex type-04 record |
-| Safety invariant | Never write ≤ 0x00008000 | Design (keeps ROM-ISP recoverable) |
+| Safety invariant | Never write ≤ 0x00008000 | Design (keeps the bootloader recoverable — note: **not** "ROM-ISP"; the HC32F460 has no ROM ISP, the bootloader is flash-resident, inferred at `0x0..0xBFFF`) |
 | IAPCommand | stm32isp fork, unstripped, ARM ELF, with debug info | `file` + `strings` |
 
 ## Unattended flash (no soldering, no RPi needed)

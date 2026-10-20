@@ -6,6 +6,14 @@ plus control-flow analysis of `work/hd.bin` (a 64 KB factory flash dump) and
 the `stm32isp-ad4/` source. This supersedes the unverified protocol claims in
 the older `.md` files.
 
+> **Correction 2026-10-20 (session 5): "ROM-ISP" in this doc's title is a
+> misnomer.** The HC32F460 has **no ROM-resident ISP** (unlike STM32F1). The
+> thing answering `0x43` is a **flash-resident vendor bootloader**, inferred
+> at `0x00000000..0x0000BFFF` (the `work/hd.bin` stub at offset `0x0` is its
+> tail end or a jump stub — see §3). It is ordinary flash: erasable, and
+> brickable if we ever write over it. Every "ROM" mention below should be
+> read as "flash bootloader".
+
 ## 1. The IAPCommand tool = stock stm32isp fork (not custom)
 `strings IAPCommand` (unstripped, GCC 4.9.4, `cfmakeraw/tcgetattr/...`):
 ```
@@ -25,8 +33,11 @@ STM32Write: success. /  failed. /  timed-out.
 - GPIO (from `gpio_export/gpio_unexport` + `system()` strings):
   `/sys/class/gpio`, `echo %d > %s/export`, `echo %u > %s/unexport`,
   `echo %s > %s/gpio%u/direction`, `echo %c > %s/gpio%u/value`.
-  Confirmed live: **gpio34 = NRST** (value=1 after flash), **gpio35 = BOOT0**
-  (value=0 after flash) — both exported, direction out.
+  Confirmed live: **gpio34 and gpio35 are both exported, direction out**
+  (gpio34 value=1, gpio35 value=0 after flash). **gpio34 = MCU NRST is the
+  working interpretation (proven by behavior). "gpio35 = BOOT0" is a LABEL,
+  not a proven fact** — the HC32F460 has no BOOT0 pin; whether gpio35 even
+  reaches the MCU has never been traced.
 
 ## 2. ROM-ISP serial protocol (the real one, from the strace)
 The MCU is an HC32F460. Its **ROM ISP is NOT the STM32 ROM bootloader**
@@ -70,15 +81,20 @@ read(3,  "\6", 1)
 | mcu→host | `0x06` | frame ack |
 | host→mcu | (erase / read / jump — not yet decoded) | see "open items" |
 
-**Recovery implication (t5):** because the ROM ISP lives at flash `0x0` and is
-**never programmed**, *any* app state is recoverable by re-entering ISP
-(BOOT0 HIGH + NRST pulse) and re-flashing the stock image. We do NOT need the
-ROM bytes back — they are unerasable. This is the no-IAP-brick safety net.
+**Recovery implication (t5) — weakened by the correction above:** the
+bootloader lives at flash `0x0` and we **never program it**, so *expected*
+behavior is that any app state is recoverable by re-entering the bootloader
+(NRST pulse, with GPIO35 held HIGH as IAPCommand does — its role unproven)
+and re-flashing the stock image. **It is NOT unerasable** — it is ordinary
+flash; the safety net holds only while we keep honoring the
+`base > 0x00008000` rule. And recovery has been observed to fail after
+repeated flashing (STATUS.md §3 "no sync" state), so treat it as
+*probable*, not *guaranteed*.
 
 ## 3. MCU flash map (HD board)
 | Region | Address | Content |
 |---|---|---|
-| ROM ISP | `0x00000000` (first ~0xC000?) | unerasable bootloader; owns USART pins |
+| Vendor bootloader ("ISP") | `0x00000000` (first ~0xC000?) | flash-resident (inferred), **erasable** — we just never write it; owns USART pins while active |
 | Boot stub | `0x00000000..0x0000C000` (in the *app window*) | factory "jump/validate" stub — see below |
 | HD app | `0x0000C000..` | Klipper / vendor app (reset vector here) |
 | NA app | `0x08010000..` | NA (N32) revision image base |
@@ -98,9 +114,10 @@ Klipper and looks silent. The vector table the CPU actually uses at reset is
 therefore the stub's, and the real app vector table (SP/reset) is at `0xC000`
 (`SP=0x20002AD8, reset=0xC295`).
 
-> NOTE: `work/hd.bin` is a **64 KB** capture (only the app window 0x0–0xFFFF),
-> not the full 256 KB flash. A full dump is required to map the ROM ISP region
-> and the whole stub.
+> NOTE: `work/hd.bin` is a **64 KB** capture (flash `0x0000..0xFFFF` only),
+> not the full flash — the HC32F460 has **512 KB** (`0x0..0x7FFFF`), so ~448 KB
+> is still unmapped, including most of the bootloader region. A full dump
+> requires SWD (STM32-style ISP reads don't work — see `adv4-swd-dump.md`).
 
 ## 4. SoC ↔ MCU wiring (verified)
 - SoC = Allwinner V3S (sun8i), kernel 3.4.39+, busybox, armv7l. **No
@@ -112,18 +129,28 @@ therefore the stub's, and the real app vector table (SP/reset) is at `0xC000`
   `-1 -D -qws`); its serial object string is **`/dev/ttyS1`**. So the app UART
   and the ISP UART are the *same physical SoC pin pair* — confirming the
   bridge is on the right line.
-- The MCU side pin for that line: factory app MFP references **PA2** (the only
-  MFP pin literal in the app: `0x40053808 = PA2`). On HC32F460, PA2/PA3 are a
-  standard UART1 RX/TX pair. **User has confirmed PA2/PA3 is the correct
-  mapping** → Klipper `HC32F460_SERIAL_PA3_PA2` is the right choice.
+- **Correction 2026-10-20 (session 5): the MCU-side line is PROVEN to be
+  USART2, TX=PA9 (FSEL 36), RX=PA10 (FSEL 37), 115200, DMA RX** — decoded
+  from the factory app itself (descriptor builder `0x14f64`, link init
+  `0x15068`, baud literal `0x1c200` consumed by `USART_SetBaudRate` at
+  `0x15144`; FSEL map from HDSC HAL). The earlier claim here — "the only MFP
+  pin literal is `0x40053808 = PA2`, so PA2/PA3 is the mapping" — is
+  **wrong**: `0x40053800` is the PORT block base and `+0x8` is not a PA2
+  function-select register. `HC32F460_SERIAL_PA3_PA2` is therefore NOT the
+  vendor link; use `PA9_PA10` (added in our klipper-hc32 fork) to reuse the
+  existing SoC wiring.
 
 ## 5. Klipper build status (Mac, cross-compiled)
 - Toolchain: **xPack arm-none-eabi GCC 14.2.1** (native darwin-arm64, full
   newlib) at `~/.hermes/cache/scratch/xpack/...`. Rebuild with
   `CROSS_PREFIX=<xb>/arm-none-eabi-` and a `cpp` shim (`arm-none-eabi-gcc -E`)
   on PATH so the link script preprocesses.
-- `.config`: `MACH_HC32F460`, `FLASH_APPLICATION_ADDRESS=0x00C000`,
-  `SERIAL_PA3_PA2`, `SERIAL_BAUD=250000`, `CLOCK_SPEED_200M`.
+- `.config` (this early build): `MACH_HC32F460`,
+  `FLASH_APPLICATION_ADDRESS=0x00C000`, `SERIAL_PA3_PA2`,
+  `SERIAL_BAUD=250000`, `CLOCK_SPEED_200M`. **Superseded:** a 250000 build is
+  inaudible on the SoC (uart0 stuck at 115200) and PA3/PA2 is not the vendor
+  link — the flashed image (`out/autoconf.h`) was
+  `SERIAL_PA9_PA10`/USART2/115200, which matches the proven vendor wiring.
 - Output: `out/klipper.elf` (start `0x0000c000`), `out/klipper.bin`, and
   `out/klipper.hex` regenerated with
   `objcopy -I binary -O ihex --change-address=0xC000` (data @ `0xC000`).
@@ -132,8 +159,12 @@ therefore the stub's, and the real app vector table (SP/reset) is at `0xC000`
   **silent to Klipper identify** — see boot-stub theory (§3).
 
 ## 6. Open items / regressions to fix
-- [ ] **Full 256 KB flash dump** (need a working HC32-protocol read — the
-      STM32-style `stm32isp-ad4 -d` cannot; implement the HC32 read op).
+- [ ] **Full 512 KB flash dump** — no ISP read path exists (the vendor
+      protocol has no decoded read op; `stm32isp-ad4 -d` sends STM32 `0x11`,
+      gets nothing, and writes an all-zero file — `mcu-dump-full.bin` is
+      junk). **Route: SWD via ST-Link clone — see `adv4-swd-dump.md`.**
+      Dumping the bootloader is also the prerequisite for later decoding a
+      read op over ISP.
 - [ ] **Decode the boot stub at 0x0**: does it validate the app? What
       checksum/signature/size? This is the likely reason Klipper is silent.
 - [ ] **Reconcile `stm32isp-ad4.c`**: its STM32 read/erase/write won't match

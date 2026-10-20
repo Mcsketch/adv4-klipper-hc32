@@ -15,7 +15,8 @@ Facts extracted from the official firmware package (V2.2.4 / control 2.3.0, buil
 - The **MCU has no G-code engine**. It receives motion/temperature commands over serial
   (`/dev/ttyS1` at 115200 on the SoC) and runs a state machine plus embedded power-loss G-code.
 - The **SoC owns**: G-code parsing, UI, file management, the nozzle-calibration model,
-  and the MCU's **NRST / BOOT0 GPIO strapping** (required for flashing).
+  and the MCU's **reset GPIO strapping** (GPIO34=NRST proven; GPIO35 driven
+  too, its "BOOT0" role unproven) — required for flashing.
 - Neither binary contains Marlin, Repetier, or any third-party firmware signature
   (verified by string scan: 0 hits).
 
@@ -54,20 +55,26 @@ extended-address records), not assumed:
 
 | Region | Address | Content |
 |---|---|---|
-| ROM bootloader / ISP | `0x00000000`–… | ROM-resident; **never written**. Entry condition: NRST pulse with BOOT0 held HIGH |
+| Vendor bootloader ("ISP") | `0x00000000`–`0x0000BFFF`? | **Correction 2026-10-20: NOT ROM-resident.** The HC32F460 has no STM32-style ROM ISP — this is a **flash-resident vendor bootloader**; its extent is *inferred* from the app vectors at `0xC000` (confirm via SWD dump, `adv4-swd-dump.md`). Never written by us. The entry condition "NRST pulse with BOOT0 HIGH" is **unverified** — the HC32F460 has no BOOT0 pin; the bootloader decides, likely from a GPIO sample or flash flag |
 | Application (**HD / H32**) | **`0x0000C000`** | `Adventurer4-HD-IAP-2.3.0-20230216.hex`, 60 416 B |
 | Application (**NA / N32**) | **`0x08010000`** | `Adventurer4-NA-IAP-2.3.0-20230216.hex`, 44 640 B |
 
 The two revisions live at **different base addresses** (HD low, NA high); the
-flasher selects the right one from the sync reply (6 = HD, 7 = NA).
+flasher selects the right one from the sync reply. **Correction 2026-10-20:
+the reply map is `0x06` = NA, `0x07` = HD** — live-confirmed (the HD board
+answers `0x07`); earlier text here had it swapped.
 
 Rules:
 
 - **Write only the app window for the detected revision** (HD `0x0000C000`, NA
   `0x08010000`). Never `0x00000000`. The flasher hard-refuses any image base at
   or below `0x00008000`, so it can never clobber the reset/ISP region.
-- A corrupted app is **always recoverable**: the ISP bootloader lives in ROM, so the next
-  reset/BOOT0 pulse re-enters ISP and the factory image can be re-flashed in one command.
+- A corrupted app is **expected to be recoverable**: the ISP bootloader is
+  flash-resident at `0x0..0xBFFF` (inferred) and untouched by app-window
+  writes, so the next reset (+ whatever GPIO35 does) re-enters it and the
+  factory image can be re-flashed in one command. **Caveat: this recovery has
+  been observed to fail after repeated flashing** (the "no sync" state in
+  STATUS.md §3) — the exact re-entry guarantee is not proven.
 - Klipper hex for the HD (H32) board: build the firmware for the same window the HD
   image uses and re-encode the start:
   `arm-none-eabi-objcopy -I binary -O ihex --change-address=0xC000 klipper.bin klipper.hex`.
@@ -80,21 +87,23 @@ Rules:
 ```text
 stm32Unexport()                     # reset sysfs GPIO state
 port = /dev/ttyS1 ; baud = 115200
-gpio_out(35, 1)                     # BOOT0 / ISP-select = HIGH          (SoC GPIO 35)
+gpio_out(35, 1)                     # "ISP-select" = HIGH (SoC GPIO 35) —
+                                    #   role UNPROVEN: HC32F460 has no BOOT0 pin;
+                                    #   whether GPIO35 even reaches the MCU is unverified
 sleep(1)                            # hold 1 s
 r = stm32Init(port, baud)
       └─ stm32Sync loop:
            send 0x43 ('C'), read reply
-           reply 6  => HD revision, connected
-           reply 7  => NA revision, connected
+           reply 6  => NA revision, connected   # (corrected: earlier text had 6=HD)
+           reply 7  => HD revision, connected   # live-confirmed: HD board answers 0x07
            no reply => gpio_out(34,0); usleep(15680);
                        gpio_out(34,1); usleep(15680);   # NRST pulse, SoC GPIO 34
                        retry until timeout
            ("Can not connect to board, Serial port ... timed-out." = strapping failed)
-if r == 6:  flash HD hex
-if r == 7:  flash NA hex
+if r == 6:  flash NA hex            # (corrected mapping: 6=NA, 7=HD)
+if r == 7:  flash HD hex
 # after a verified write:
-gpio_out(35, 0)                     # release BOOT0 -> normal app boot
+gpio_out(35, 0)                     # clear "ISP-select" -> normal app boot (role unproven)
 touch /root/<status-flag>           # HD or NA flag file
 sync()
 ```
@@ -110,11 +119,15 @@ usleep(15680)
 
 Key facts:
 
-- **BOOT0 (GPIO 35) must be HIGH before and during the NRST pulse (GPIO 34).**
-  NRST pulse width: **15.68 ms LOW, then 15.68 ms HIGH**. The 1 s hold after setting
-  BOOT0 is part of the required timing.
-- Serial sync byte `0x43`; reply `6` (HD) / `7` (NA) also performs **revision auto-detection** —
-  which is why the factory `run.sh` passes **both** hex files:
+- IAPCommand holds **GPIO 35 HIGH before/during the NRST pulse (GPIO 34)** —
+  that is what the binary does (proven). **Interpreting GPIO35 as "BOOT0" is
+  NOT proven**: the HC32F460 has no BOOT0 pin, and the GPIO35→MCU connection
+  has never been traced. NRST pulse width: **15.68 ms LOW, then 15.68 ms
+  HIGH** (proven from the binary). The 1 s hold is what the binary does;
+  whether it is *required* was never A/B-tested.
+- Serial sync byte `0x43`; reply **`6` (NA) / `7` (HD)** — corrected mapping,
+  live-confirmed — also performs **revision auto-detection**, which is why the
+  factory `run.sh` passes **both** hex files:
   `IAPCommand Adventurer4-NA-IAP-….hex Adventurer4-HD-IAP-….hex`.
 - The GPIOs are driven via Linux sysfs (`/sys/class/gpio`), which is why the tool must run
   **on the SoC as root** — a generic `stm32isp` on another board has no access to these lines
@@ -135,11 +148,12 @@ Key facts:
 | Option | Pins | Status in current config |
 |---|---|---|
 | `HC32F460_SERIAL_PA7_PA8` | PA7 / PA8 | **selected — CONFLICTS with X `step_pin: PA8`** |
-| `HC32F460_SERIAL_PA13_PA14` | PA13 / PA14 | free (SWD pins — avoid unless SWD unused) |
+| `HC32F460_SERIAL_PA13_PA14` | PA13 / PA14 | **HALLUCINATION — do not use** (added by a previous agent claiming the vendor link/ROM ISP lives on the JTAG pins; false: PA13/PA14 are SWDIO/SWCLK with **no USART alternate function**, and the real vendor link is USART2 on PA9/PA10 — see note below). Its hex was silent, as expected |
 | `HC32F460_SERIAL_PA3_PA2` | PA3 / PA2 | **free — recommended** |
 | `HC32F460_SERIAL_PH2_PB10` | PH2 / PB10 | PB10 = TMC mux select A — no |
 | `HC32F460_SERIAL_PA15_PA9` | PA15 / PA9 | PA15 = Z step — no |
 | `HC32F460_SERIAL_PC0_PC1` | PC0 / PC1 | PC1 = Y endstop — no |
+| `HC32F460_SERIAL_PA9_PA10` | PA9 / PA10 | **the PROVEN vendor SoC↔MCU line** (session 5 firmware RE: USART2, TX=PA9/FSEL 36, RX=PA10/FSEL 37, 115200, DMA RX). Our klipper-hc32 fork adds this option; `out/autoconf.h` confirms the flashed hex used it. PA9/PA10 are otherwise unused on the board, so this is the correct choice for talking to the SoC without new wiring |
 
 Port clock: `CONFIG_CLOCK_FREQ=200000000` (200 MHz). `CONFIG_WANT_TMCUART=y` (TMC2209-over-UART
 supported by the port, `tmcuart.c`). The port does **not** implement `temperature_mcu`.
@@ -309,9 +323,10 @@ From `FFAD4-BKUP.zip` → `dmesg-start.txt` (a full eMMC image of a working prin
 Key implications (detailed in **`adv4-soc-hack.md`**): the MCU is already wired to the
 SoC (`/dev/ttyS1`), so Klipper can reach it **through the SoC with no soldering**; the
 touch panel is **SoC-driven** (TSC2007); `eth0` is real wired GbE for the RPi↔SoC link;
-`/dev/fb0` + touch give the SoC a local UI. The factory app's MCU baud is 115200; a
-Klipper build uses 250000 — the SoC bridge must be set to the Klipper baud, not the
-vendor one.
+`/dev/fb0` + touch give the SoC a local UI. The factory app's MCU baud is 115200 — and
+**Klipper must use 115200 on the AD4 too**: the SoC `uart0` clock is 24 MHz, below the
+serial driver's 30–120 MHz `setbaud()` range, so 250000 can't actually be programmed on
+this line (see `KLIPPER-AD4-FLASH-GUIDE.md`, baud note).
 
 ---
 
@@ -332,11 +347,11 @@ A clean fork needs exactly:
    static void ad4_gpios_init(void) {
        /* SoC sysfs, root required */
        sysfs_gpio_export(34);           /* NRST  */
-       sysfs_gpio_export(35);           /* BOOT0 */
+       sysfs_gpio_export(35);           /* "BOOT0" — role UNPROVEN */
        sysfs_gpio_dir(34, 1);           /* out   */
        sysfs_gpio_dir(35, 1);           /* out   */
-       sysfs_gpio_set(35, 1);           /* BOOT0 = HIGH */
-       sleep(1);                        /* required hold */
+       sysfs_gpio_set(35, 1);           /* HIGH — what IAPCommand does; why is unverified */
+       sleep(1);                        /* hold — what IAPCommand does; not A/B-tested */
    }
    static void ad4_nrst_pulse(void) {
        sysfs_gpio_set(34, 0);  usleep(15680);
@@ -450,13 +465,13 @@ argument convention match the factory package, which is the working reference.
       │
       └── Ethernet ──> [your LAN] ──> Fluidd/Mainsail (any device)
 
-[Sunxi SoC] ── GPIO 34/35 (NRST/BOOT0) ──> [HC32F460 ISP]   (flashing only)
+[Sunxi SoC] ── GPIO 34 (NRST, proven) + GPIO 35 (role unproven) ──> [HC32F460 bootloader]   (flashing only)
 [USB disk]  ── flashforge_init.sh ──> [SoC]                  (unattended flash)
 ```
 
 - The **RPi is the Klipper host**: klippy + Moonraker + Fluidd, reachable over Ethernet.
 - The **SoC has no role in operation** once the MCU serial is moved off the SoC's USART0.
-  Its only operational role is **flashing** (it alone is wired to NRST/BOOT0) and, later,
+  Its only operational role is **flashing** (it alone drives NRST/GPIO35) and, later,
   optionally a UI — which should be a **network UI** (Fluidd/Mainsail pointed at Moonraker)
   or a small web client on the SoC, not a direct MCU link.
 - The RPi **cannot enter ISP mode itself** — it does not drive GPIO 34/35. All flashing
@@ -471,7 +486,11 @@ CONFIG_HC32F460_SERIAL_PA7_PA8  ->  off
 CONFIG_HC32F460_SERIAL_PA3_PA2  ->  on
 ```
 
-`PA3_PA2` is the only free, non-SWD pair (§3.2). Wire:
+**Correction 2026-10-20:** `PA9_PA10` is now the **preferred** pair — it is
+the proven vendor SoC↔MCU line (USART2), so no new wiring is needed if you
+keep the SoC bridge. `PA3_PA2` remains the fallback if you want the SoC fully
+out of the loop. (Earlier text called PA3_PA2 "the only free non-SWD pair" —
+wrong, and PA13_PA14 is not usable at all: no USART AF on SWD pins.) Wire:
 
 | RPi | MCU | Note |
 |---|---|---|

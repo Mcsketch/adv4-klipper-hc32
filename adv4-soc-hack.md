@@ -31,7 +31,7 @@ off the vendor app and hand it to Klipper over the wire.
             socat (pty)                            │  + eth0 (gmac0)         │
                                                      │  + USB host, wlan0     │
                                                      └───────────┬────────────┘
-                                                                 │ UART 250000
+                                                                 │ UART 115200
                                                                  ▼
                                                           ┌───────────────┐
                                                           │ HC32F460 MCU   │
@@ -48,8 +48,9 @@ Division of labor:
   pump. Kept otherwise idle while printing.
 - **MCU** = runs Klipper firmware, exactly as if the RPi were wired to it.
 
-Why the SoC and not the RPi talks to the MCU: the **SoC is the only chip wired
-to the MCU's NRST/BOOT0** (needed for flashing, §7). Giving the SoC the MCU
+Why the SoC and not the RPi talks to the MCU: the **SoC is the only chip that
+drives the MCU's reset** (GPIO34=NRST proven; GPIO35 also driven, its role
+unproven — needed for flashing, §7). Giving the SoC the MCU
 serial link too means one device does both flashing and bridging, and the RPi
 stays a clean, swappable Klipper host with no soldered MCU connection.
 
@@ -65,7 +66,7 @@ From `dmesg-start.txt` of the working printer:
 
 | Subsystem | What the SoC exposes | Evidence |
 |---|---|---|
-| **MCU serial** | `/dev/ttyS1` (uart0) @ 250000 | `uart0: ttyS1 at MMIO 0x1c28000` |
+| **MCU serial** | `/dev/ttyS1` (uart0) @ 115200 (24 MHz clock; 250k not programmable) | `uart0: ttyS1 at MMIO 0x1c28000` + `sw_uart_check_baudset` |
 | **Ethernet** | `eth0` = **gmac0** GbE, real PHY (`00441400`) | `gmac0 gmac0: eth0: PHY ID 00441400 at 0` |
 | **WiFi** | `wlan0` (RTW, mac `94:a4:08:83:df:07`) | `RTW: rtw_ndev_init(wlan0)` |
 | **Touch** | **TSC2007** driver, input event | `TSC2007 TouchScreen Driver probe`, `/dev/input/event0,1`, `/dev/touchscreen/ucb1x00` |
@@ -119,9 +120,11 @@ cd /root/ad4-soc-hack
 
 1. `pkill` the vendor app (`ffstartup-arm`, `adventurer4-arm`) and
    `fuser -k /dev/ttyS1` so nothing else owns the MCU link.
-2. Runs `ad4-serial-bridge.py --tcp 0.0.0.0:5000 --uart /dev/ttyS1 --baud 250000`.
-   The bridge opens the tty **raw, 8N1, 250000**, flushes it, and pumps bytes
-   both directions until the client disconnects (one client at a time — Klipper).
+2. Runs `ad4-serial-bridge.py --tcp 0.0.0.0:5000 --uart /dev/ttyS1 --baud 115200`.
+   The bridge opens the tty **raw, 8N1, 115200** (the SoC uart0 clock is 24 MHz —
+   below the driver's setbaud range, so 250000 is not programmable here), flushes
+   it, and pumps bytes both directions until the client disconnects (one client at
+   a time — Klipper).
 
 `--udp` is available if you measure TCP as a bottleneck (see §6 on latency).
 
@@ -151,13 +154,13 @@ In `/etc/klippy/printer.cfg`:
 ```ini
 [mcu]
 serial: /dev/adv4_mcu        # the socat PTY, not /dev/serial0
-baud: 250000
+baud: 115200
 restart_method: command
 ```
 
 (The rest of `printer.cfg` is identical to the wired build — see
 `printer-hc32.cfg`. The MCU pin/thermistor section does **not** change, because
-from the MCU's point of view nothing changed: it still sees a 250000-baud
+from the MCU's point of view nothing changed: it still sees a 115200-baud
 serial peer, it just happens to be a TCP socket on the other end of the SoC.)
 
 Then `systemctl restart klipper`. On first connect Klipper does its MCU clock
@@ -241,17 +244,25 @@ validated against the factory hexes. Source: **`stm32isp-ad4/`**.
 
 - `stm32isp-ad4.c` — self-contained stm32isp fork. The **only** delta over a
   generic stm32isp is the SoC GPIO dance (the part a stock tool cannot do):
-  - export **GPIO 34 = NRST**, **GPIO 35 = BOOT0** (SoC sysfs);
-  - `BOOT0=HIGH`, `sleep(1)`, then a **NRST pulse** (15.68 ms LOW / 15.68 ms
+  - export **GPIO 34 = NRST** (proven) and **GPIO 35** (driven like
+    IAPCommand does; the "BOOT0" label is **unproven** — HC32F460 has no
+    BOOT0 pin) via SoC sysfs;
+  - `GPIO35=HIGH`, `sleep(1)`, then a **NRST pulse** (15.68 ms LOW / 15.68 ms
     HIGH — `15680` µs, matching the factory `IAPCommand`);
   - open `/dev/ttyS1` @115200, send `0x43` with **retry** (re-pulse NRST on
     no-answer — the reason stock tools time out);
-  - standard ROM-ISP ops (get-PID `0x02`, erase `0x44`, program `0x46`,
-    read-back `0x11`, jump `0x08`);
+  - **protocol (corrected 2026-10-20):** the fork now speaks the **vendor
+    1030-byte frame protocol** (`[cmd][len:2LE][data:1024][crc16-ccitt]`,
+    cmd `0x01` data / `0x04` final, ack `0x06`) — NOT STM32 ROM-ISP ops
+    (`0x02/0x44/0x46/0x11/0x08` are not spoken by this bootloader). The
+    write path works (full acks observed); **the `-d` read-back path cannot
+    work** — no read op is decoded, so dumps come out all-zero. See
+    `adv4-swd-dump.md` for the real dump method;
   - **safety guard**: refuses any image whose base is ≤ `0x00008000` (never
-    clobber the reset/ROM-ISP region at `0x00000000`, which is what keeps every
-    state recoverable);
-  - post-write: `BOOT0=LOW` + NRST pulse to boot the new app; writes
+    clobber the bootloader region at `0x00000000` — note it is **flash, not
+    ROM**, so it is erasable; the guard is what keeps recovery *likely*, not
+    guaranteed);
+  - post-write: `GPIO35=LOW` + NRST pulse to boot the new app; writes
     `/root/H32` (HD) or `/root/N32` (NA) exactly like the factory tool.
 - `Makefile` — native build on the SoC, or `make CROSS=arm-linux-gnueabihf-`.
 - `flash-mcu.sh` — SoC driver: `./flash-mcu.sh klipper|factory|<image.hex> [-v]`.
@@ -265,15 +276,16 @@ validated against the factory hexes. Source: **`stm32isp-ad4/`**.
 | `Adventurer4-NA-IAP-2.3.0-20230216.hex` | **0x08010000** | 44 640 B |
 
 The two revisions sit at **different base addresses**; the factory `IAPCommand`
-picks between them from the sync reply (byte 6 ⇒ HD, 7 ⇒ NA) — hence the
+picks between them from the sync reply (**corrected: byte 6 ⇒ NA, 7 ⇒ HD** —
+live-confirmed, the HD board answers `0x07`; older text had it swapped) — hence the
 `<na.hex> <hd.hex>` two-argument model, which `flash-mcu.sh` and the unattended
 script reproduce. Your board is the **HD** (H32) revision, so the Klipper hex
 must be built for the same window the HD image uses.
 
 ### 6.1 Flashing the Klipper hex (no soldering — it goes through the SoC)
 
-The MCU is flashed **through the SoC** (it owns NRST/BOOT0), so flashing never
-needs the RPi or any soldered leads:
+The MCU is flashed **through the SoC** (it drives NRST — proven — plus
+GPIO35, role unproven), so flashing never needs the RPi or any soldered leads:
 
 ```sh
 # on the SoC, printer powered, vendor app can be up or down:
@@ -331,7 +343,7 @@ a standard image and we hold a **full verified backup** of a working machine:
 |---|---|---|
 | 1 | Klipper MCU connect over the bridge | `systemctl restart klipper`; watch for `too many serial timeouts` |
 | 2 | Bridge latency adequate | normal print; if timeouts, switch `--udp` and raise bridge priority |
-| 3 | MCU serial baud the Klipper build actually uses | set `[mcu] baud:` to match `CONFIG_..._BAUDRATE` in the Klipper fw (default 250000) |
+| 3 | MCU serial baud the Klipper build actually uses | set `[mcu] baud:` to `CONFIG_SERIAL_BAUD` in the Klipper fw — **115200 on the AD4** (uart0 24 MHz can't do 250k) |
 | 4 | SoC UI path (Option A vs B, §4.1) | build whichever; touch = `/dev/input/event0`, display = `/dev/fb0` |
 | 5 | Hotend thermistor pin / curves | `probe.cfg` sweep (see `adv4-exploration.md` §10) — unchanged by this bridge |
 | 6 | Exactly which of the two HD base addresses the Klipper build targets | match the HD image window (0x0000C000) — build Klipper for that, verify with the flasher's read-back |

@@ -8,6 +8,14 @@
 > and our **Klipper HC32F460 build**. Nothing here is guessed — each "confirmed" fact has evidence.
 > The "magic" of the IAP (in-system programming) flow has been **fully disassembled** and is
 > spelled out in §2.
+>
+> **Corrections 2026-10-20 (session 5):** the "ROM-ISP / BOOT0" framing below was
+> wrong in places — the HC32F460 has **no ROM ISP**; the thing answering the sync
+> is a **flash-resident vendor bootloader** (inferred `0x0..0xBFFF`). The wire
+> protocol is the vendor's 1030-byte-frame format, **not** STM32 ISP ops.
+> GPIO35's "BOOT0" role is **unproven** (only GPIO34=NRST is confirmed). Sync
+> reply mapping is `0x06` = NA, `0x07` = HD (earlier drafts had it swapped).
+> Ground truth: `adv4-iap-protocol.md` (strace) and `adv4-swd-dump.md`.
 
 ---
 
@@ -15,16 +23,70 @@
 
 | Your question | Short answer |
 |---|---|
-| **Will `IAPCommand` flash at the right addresses?** | **Yes.** It writes the HD app at `0x0800C000` (and NA at `0x08010000`). It erases/programs/verifies **only the app window** — it never touches the ROM/ISP region. |
-| **Why did my attempts fail — is there "delay and magic" to put the MCU in IAP mode?** | **Yes, and I found it.** The MCU does **not** enter IAP mode on its own. The SoC must drive **two of its own GPIOs**: **GPIO 34 = MCU reset**, **GPIO 35 = MCU BOOT0/ISP-select**. `IAPCommand` pulses them through `/sys/class/gpio` with **exact 15.68 ms delays**. Skip that and the MCU never boots into ISP, so the serial sync times out ("Can not connect to board, timed-out"). |
-| **Is it as easy as a serial tool?** | Not with a *generic* tool. The serial ISP part is standard, but the **reset/BOOT0 strapping is SoC-specific** — only `IAPCommand` (or an equivalent that reproduces the exact GPIO sequence) does it. |
+| **Will `IAPCommand` flash at the right addresses?** | **Yes.** It writes the HD app at `0x0800C000` (and NA at `0x08010000`). It erases/programs/verifies **only the app window** — it never touches the bootloader region. (Session-5 note: that bootloader is **flash-resident**, not ROM — the HC32F460 has no ROM ISP.) |
+| **Why did my attempts fail — is there "delay and magic" to put the MCU in IAP mode?** | **Yes, and I found it.** The MCU does **not** enter IAP mode on its own. The SoC must drive **two of its own GPIOs**: **GPIO 34 = MCU reset (proven)**, **GPIO 35 = driven by `IAPCommand`, but its "BOOT0/ISP-select" role is UNPROVEN** (the HC32F460 has no BOOT0 pin). `IAPCommand` pulses them through `/sys/class/gpio` with **exact 15.68 ms delays**. Skip that and the MCU never boots into ISP, so the serial sync times out ("Can not connect to board, timed-out"). |
+| **Is it as easy as a serial tool?** | Not with a *generic* tool. The serial protocol is the vendor's own (not standard STM32 ISP — see §2.1 correction), and the **reset/GPIO35 strapping is SoC-specific** — only `IAPCommand` (or an equivalent that reproduces the exact GPIO sequence) does it. |
 | **Did you disassemble it?** | **Yes — `IAPCommand` fully** (`stm32Init`, `stm32Reboot`, `stm32Sync`, `main`, and all `gpio_*` helpers). The exact call sequence and timings are in §2.4. |
-| **Isn't plain `stm32isp` safer/easier?** | **`IAPCommand` *is* a fork of `wengkai/stm32isp`** — same core code, but with the **AD4-specific GPIO reset/BOOT0 logic added**. Plain `stm32isp` has **no** AD4 strapping, so it will *not* bring this MCU into IAP. **Use `IAPCommand`.** |
+| **Isn't plain `stm32isp` safer/easier?** | **`IAPCommand` *is* a fork of `wengkai/stm32isp`** — same core code, but with the **AD4-specific GPIO reset/GPIO35 logic added** (its serial protocol, however, was adapted to the vendor format — see §2.1). Plain `stm32isp` has **no** AD4 strapping, so it will *not* bring this MCU into IAP. **Use `IAPCommand`.** |
 | **Hotend / bed max temps?** | Matches your memory: the **bed LUT is clamped at ~110 °C**; the **hotend LUT runs to ~215–235 °C**, and the two interchangeable nozzles (235 / 265 °C rated) explain you seeing ~270 °C setpoints (the heater runs past the last LUT point via the same NTC). Details in §4. |
 | **Driver config?** | **TMC2209 steppers over UART** (not SPI) with a 4:1 address multiplexer — exactly the ADV3/Voxel layout your `printer.cfg` already uses. Confirmed by disassembly (3 UARTs active, no SPI references). §4.3. |
 
 **The one-sentence summary of the whole flash:**
-> `IAPCommand` runs **on the SoC (Sunxi Linux)**, toggles SoC **GPIO 34 + 35** to force the MCU into ROM-ISP, then talks the standard STM32 ISP protocol over **`/dev/ttyS1` @ 115200**, writing Klipper into the **HD app window `0x0800C000`** and rebooting the MCU.
+> `IAPCommand` runs **on the SoC (Sunxi Linux)**, toggles SoC **GPIO 34 (NRST, proven) + 35 (role unproven)** to force the MCU into its flash-resident bootloader, then talks the **vendor 1030-byte-frame protocol** (not standard STM32 ISP) over **`/dev/ttyS1` @ 115200**, writing Klipper into the **HD app window `0x0800C000`** and rebooting the MCU.
+
+**⚠️ Base-address conventions (the two spellings are the SAME cell):**
+
+| Where you see it | Value | Meaning |
+|---|---|---|
+| iHEX file (type-04 `:020000040000`) + data offsets | `0x0000C000` | **linear/loader base** — what `make-positioned-ihex.py` and Klipper's `CONFIG_HC32F460_FLASH_APPLICATION_ADDRESS_0x00C000` use |
+| HC32F460 physical memory map (this doc) | `0x0800C000` | **physical flash address** — the loader maps linear `0x0000C000` → physical `0x08000000 + 0xC000` |
+
+The commonly-seen wrong value is `0x000C0000` (i.e. `0xC0000`) — that is a *different* cell and must never be used. Rule of thumb: **hex base `0x0000C000` ≡ physical `0x0800C000` ≡ loader offset `0xC000`**.
+
+**⚠️ Klipper baud on the AD4 must be 115200, not 250000.** The SoC's `uart0` (`/dev/ttyS1`) runs from a **24 MHz** clock, which is *below* the serial driver's accepted range `[30 MHz, 120 MHz]` — `setbaud()` calls are rejected at runtime (dmesg: `sw_uart_check_baudset(): uart0 … baud …, uartclk 24000000 beyond range[30000000, 120000000]`) and the line holds its boot-time rate of **115200**. A Klipper build with `SERIAL_BAUD=250000` flashes fine but is **inaudible** on this line (garbage/clock mismatch). Build with `CONFIG_SERIAL_BAUD=115200` (`HC32F460_SERIAL_PA9_PA10` stays — session-5 firmware RE **proves** PA9/PA10/USART2 is the vendor link; the "PA9_PA15" spelling in earlier drafts was a typo, and the `PA13_PA14` variant is a hallucination — those are the SWD pins).
+
+**🚨 PITFALL — "115200" silently compiles as 250000 (this burned 3 days).** Setting
+`CONFIG_SERIAL_BAUD=115200` in `.config` is **not enough**. In upstream Klipper, `SERIAL_BAUD` is an
+`int` whose prompt is gated behind `LOW_LEVEL_OPTIONS`:
+
+```
+config SERIAL_BAUD
+    depends on SERIAL
+    int "Baud rate for serial port" if LOW_LEVEL_OPTIONS   # ← prompt only if LOW_LEVEL_OPTIONS
+    default 250000
+```
+
+When `LOW_LEVEL_OPTIONS` is **unset** (the default), `SERIAL_BAUD` has no active prompt, so it
+resolves as **invisible**. The vendored kconfiglib (`lib/kconfiglib/genconfig.py`) stores your
+`.config` value into `Symbol.user_value` *and reports `set_value() → True`*, but the `str_value`
+resolver then sees the symbol as invisible / out-of-range and **falls back to `default 250000`**.
+The Klipper kconfiglib patch (`kconfiglib.patch`) only forces the symbol to be *written* to
+`autoconf.h` — it does **not** fix the value, so `#define CONFIG_SERIAL_BAUD 250000` is emitted
+**even though `.config` says 115200**, and `genconfig.py` even *skips the write* (no content change),
+so `out/autoconf.h` keeps its old mtime. **The build succeeds and the hex looks fine; only the
+serial is wrong, and it reads as 0 B / garbage on the line.**
+
+The fix is to **enable `LOW_LEVEL_OPTIONS`** so the expert option becomes visible and its value is
+honored. It only toggles prompt visibility; it does not change any other default for this board.
+
+```sh
+cd klipper
+# 1) enable expert options (makes SERIAL_BAUD visible → its .config value is honored)
+sed -i 's/^# CONFIG_LOW_LEVEL_OPTIONS is not set/CONFIG_LOW_LEVEL_OPTIONS=y/' .config
+# 2) set the baud
+sed -i 's/^CONFIG_SERIAL_BAUD=.*/CONFIG_SERIAL_BAUD=115200/' .config
+# 3) normalize (olddefconfig KEEPS both now — verify with grep)
+make olddefconfig && grep -E 'LOW_LEVEL_OPTIONS|SERIAL_BAUD' .config
+# 4) build (host macOS: force the cross cpp — /usr/bin/cpp is a clang wrapper that fails on .lds.S)
+make clean
+make -j8 CPP=arm-none-eabi-cpp
+# 5) VERIFY the compiled header before flashing — this is the only reliable check:
+grep 'define CONFIG_SERIAL_BAUD ' out/autoconf.h    # MUST read 115200
+```
+
+Verify **before every flash**: `grep 'CONFIG_SERIAL_BAUD ' out/autoconf.h` must read
+`#define CONFIG_SERIAL_BAUD 115200`. (The compiled binary does not contain a readable baud string —
+the `identify` dict is XOR-encoded — so `autoconf.h` is the ground truth.)
 
 ---
 
@@ -34,7 +96,7 @@ The AD4 is a **two-chip** design:
 
 | Chip | What it is | What it does |
 |---|---|---|
-| **Allwinner (Sunxi) SoC** | ARM "server" | Touch UI, Ethernet/Wi‑Fi, file management, and — crucially — **drives the MCU's reset & BOOT0 pins** and talks to the MCU over a UART |
+| **Allwinner (Sunxi) SoC** | ARM "server" | Touch UI, Ethernet/Wi‑Fi, file management, and — crucially — **drives the MCU's reset (GPIO34, proven) and GPIO35 (role unproven)** and talks to the MCU over USART2 / PA9-TX / PA10-RX @ 115200 (proven from factory-firmware RE) |
 | **Huada HC32F460** | Cortex‑M4 (an STM32‑F4‑like clone) | Motion, heaters, thermistors, endstops — the **real "printer brain"** |
 
 They talk over a **UART**. The SoC is the network/UI face; the HC32 is the motion controller.
@@ -45,9 +107,11 @@ There are **two board revisions** with slightly different STM32‑class MCUs (th
 **HD** and **NA**). They differ only in **which flash address the app lives at**:
 
 ```
-HC32F460 flash (256 KB, base 0x08000000)
+HC32F460 flash (512 KB, base 0x08000000)
 ┌──────────────────────────────────────────────────────────────┐
-│ 0x08000000   ROM / ISP boot (ROM-resident — NOT in the hex)  │
+│ 0x08000000   vendor bootloader ("ISP") — FLASH-resident,     │
+│              inferred 0x0..0xBFFF. NOT ROM (HC32F460 has     │
+│              no ROM ISP); erasable → never write there       │
 ├──────────────────────────────────────────────────────────────┤
 │ 0x0800C000   HD app start  ──► Klipper .bin/.hex goes HERE   │
 │ 0x0801AC00   HD app end    (59 KB, contiguous, NO gaps)      │
@@ -58,9 +122,14 @@ HC32F460 flash (256 KB, base 0x08000000)
 ```
 
 We parsed **both** factory hex files end to end: each is a single contiguous image with **zero
-gaps**. **There is no hidden second IAP/second-stage region** anywhere in flash. The ISP logic
-lives in the **ROM** plus the host tool — not in a flash region you would overwrite. Replacing the
-app at `0xC000` therefore **cannot** erase the ISP capability. A bad app flash is recoverable.
+gaps**. **Correction (session 5):** "no hidden second region anywhere in flash" was an
+over-claim — the hexes contain only the app, and the **bootloader itself has never been dumped**
+(`work/hd.bin` covers flash `0x0..0xFFFF` only; ~448 KB of the 512 KB is unmapped). The ISP logic
+does **not** live in ROM — it is a **flash-resident vendor bootloader** (inferred at
+`0x0..0xBFFF`). Replacing the app at `0xC000` *should* leave it intact, so a bad app flash is
+*expected* to be recoverable — but it is ordinary flash (destroyable if ever written over), and
+recovery has been observed to fail after repeated flashing. Treat recovery as **probable, not
+guaranteed** (see `adv4-iap-protocol.md` §2–3, `adv4-swd-dump.md`).
 
 **Which revision are you?** We don't know yet — confirm it on the live board (§7) and pick
 `0xC000` (HD) or `0x10000` (NA) accordingly. **Default to HD = `0xC000`** (matches our Klipper
@@ -78,20 +147,28 @@ info) and reconstructed the entire sequence.
 
 - A **fork of `wengkai/stm32isp`** (a classic STM32F1 ISP utility). Its own help string is
   `stm32isp [Options] <file> <comport> <baudrate>`; it links `stm32.c / hexfile.c / serial.c`.
-- It speaks the **standard STM32F1 BOOT0 (ISP) serial protocol** — which the HC32F460's ROM ISP
-  boot intentionally mimics.
+- ~~It speaks the standard STM32F1 BOOT0 (ISP) serial protocol~~ — **WRONG, corrected
+  2026-10-20**: it only shares *code ancestry* with stm32isp. The actual wire protocol (strace
+  ground truth, `adv4-iap-protocol.md`): `0x43` sync → reply `0x06`(NA) / `0x07`(HD); then
+  1030-byte frames `[cmd:1][len:2 LE][data:1024][crc16:2 LE]` (CRC16-CCITT, init 0, over
+  cmd+data) acked by `0x06`. The STM32 ROM-ISP ops (`0x02` erase, `0x11` read, `0x44` write…)
+  are **not spoken** by this bootloader — which is why `stm32isp-ad4 -d` dump can never work.
+  And the HC32F460 has **no ROM ISP**: the responder is a flash-resident bootloader.
 - **Defaults baked in:** port **`/dev/ttyS1`**, baud **115200** (both are literals in `.rodata`).
 - It is **32‑bit ARM glibc** — it runs natively on the Sunxi SoC (armv7). It will **not** run
   unmodified on a 64‑bit Orange Pi (see §6 for the implications).
 
 ### 2.2 The GPIO "magic" — this is why your manual attempts failed
 
-The HC32 **does not** enter IAP mode by itself. Two **SoC** GPIOs, wired to the MCU, control it:
+The HC32 **does not** enter IAP mode by itself. `IAPCommand` drives two **SoC** GPIOs; only
+GPIO34→MCU-NRST is proven — GPIO35 is written by the tool, but whether it even reaches the MCU,
+and what it does there, has **never been traced** (the HC32F460 has no BOOT0 pin; the boot
+decision is made by the flash bootloader):
 
 | SoC GPIO (sysfs) | Wired to MCU pin | Role |
 |---|---|---|
-| **`gpio34`** | **NRST** (reset) | Pulled **low** to assert reset, released to let the MCU boot |
-| **`gpio35`** | **BOOT0 / ISP-select** | Held **high** so the MCU boots into ROM ISP instead of the app |
+| **`gpio34`** | **NRST** (reset) — proven by behavior | Pulled **low** to assert reset (15.68 ms), released to let the MCU boot |
+| **`gpio35`** | **"BOOT0 / ISP-select" — UNPROVEN label** | Held **high** during flashing by the factory tool; reproduce the sequence, don't assume the mechanism |
 
 `IAPCommand` manipulates these purely through the **Linux sysfs GPIO interface** — it does **not**
 solder anything and does **not** need a JTAG probe. The helper functions, straight from the
@@ -103,12 +180,13 @@ disassembly, are:
 | `gpio_set_direction(n,dir)` | `echo in/out > /sys/class/gpio/gpioN/direction` |
 | `gpio_set_value(n,val)` | `echo 0/1 > /sys/class/gpio/gpioN/value` |
 | `gpio_out(n,val)` | export → `usleep(2000)` → set **output** → `usleep(2000)` → set value |
-| `stm32UpdateFLag(v)` | `gpio_out(35, v)` — set the BOOT0/ISP select |
+| `stm32UpdateFLag(v)` | `gpio_out(35, v)` — the factory tool's "ISP select"; role unproven |
 | `stm32Unexport()` | `gpio_unexport(35)` |
 
 > **Key point:** these GPIOs are **SoC pins**, controlled by a process **running on the SoC** as
 > **root**. That is why flashing is done from the SoC (Sunxi), not from a disconnected Orange Pi —
-> the SoC is the only thing physically wired to the MCU's reset and BOOT0 lines.
+> the SoC is the only thing proven to drive the MCU's reset (GPIO34) — and the only thing the
+> factory tool drives GPIO35 from.
 
 ### 2.3 The exact `stm32Init` sequence (enter IAP + sync)
 
@@ -125,8 +203,8 @@ stm32Init(port, baud):
     usleep(15680)                          # let the MCU start up in ISP
     loop:
         r = stm32Sync()                    # serial ISP handshake
-        if r == 6: return HD-connected
-        if r == 7: return NA-connected
+        if r == 6: return NA-connected     # (corrected 2026-10-20: live strace + our fork
+        if r == 7: return HD-connected     #  confirm 0x06=NA, 0x07=HD; earlier drafts swapped)
         # not connected yet:
         puts("stm32 reset");               # (verbose) then re-pulse and retry
         gpio_out(34, 0); usleep(15680); gpio_set_value(34,1); usleep(15680)
@@ -140,13 +218,13 @@ main():
     stm32Unexport()                        # clean state
     port=/dev/ttyS1; baud=115200
     ...
-    stm32UpdateFLag(1)                     # gpio_out(35,1): BOOT0/ISP-select = HIGH
-    sleep(1)                               # 1 full second
+    stm32UpdateFLag(1)                     # gpio_out(35,1): "ISP-select" = HIGH (role unproven)
+    sleep(1)                               # 1 full second (hold duration never A/B-tested)
     r = stm32Init(port, baud)              # → pulses GPIO34 reset with GPIO35 held HIGH
-    if r == 6:  readHexFile(HD); fillPacket(); stm32Write(); stm32Close(); ...
-    if r == 7:  readHexFile(NA); fillPacket(); stm32Write(); stm32Close(); ...
+    if r == 6:  readHexFile(NA); fillPacket(); stm32Write(); stm32Close(); ...
+    if r == 7:  readHexFile(HD); fillPacket(); stm32Write(); stm32Close(); ...
     after a successful write:
-        stm32UpdateFLag(0)                 # gpio_out(35,0): release BOOT0 → normal boot
+        stm32UpdateFLag(0)                 # gpio_out(35,0): release → normal boot
         system("touch /root/H...")         # write a status flag file (HD) or (NA)
         sync()
         puts("STM32iap finished HD/NA.")
@@ -162,22 +240,26 @@ stm32Reboot():
     gpio_set_value(34, 1)                  # release reset (HIGH)
     usleep(15680)                          # 15.68 ms
 ```
-(Called with BOOT0 already released to 0, so the MCU now boots the freshly written app.)
+(Called with GPIO35 already released to 0, so the MCU now boots the freshly written app.)
 
 ### 2.5 The serial handshake (`stm32Sync`)
 
 - Prints `.`, then **writes `0x43` (`'C'`)** to the MCU and reads the reply.
-- A valid reply (byte **6** or **7**) means "connected — I'm in ISP." `6` = HD, `7` = NA.
+- A valid reply (byte **6** or **7**) means "connected — I'm in ISP." **`6` = NA, `7` = HD**
+  (corrected 2026-10-20: live strace and our fork's `Connected to board. (sync reply 0x07 = HD)`
+  confirm this; earlier drafts had the mapping swapped).
 - On no reply it prints a `\n` and **retries** up to a timeout → prints
   `Can not connect to board, Serial port ... timed-out.` — **this is almost certainly the exact
-  symptom you saw.** It happens when the reset/BOOT0 strapping (§2.2) did not put the MCU into ISP.
+  symptom you saw.** It happens when the reset/GPIO35 strapping (§2.2) did not put the MCU into
+  its bootloader — or when the bootloader stopped answering after repeated flash cycles
+  (power-cycle the printer; see STATUS.md §3).
 
 ### 2.6 Why a generic tool (or manual GPIO poking) fails — and why `IAPCommand` works
 
 | Approach | Enters ISP? | Why |
 |---|---|---|
-| Run plain `stm32isp` over `/dev/ttyS1` | **No** | It has no AD4 GPIO code; it never pulses NRST/BOOT0, so the MCU boots the app, not ISP → sync times out |
-| Manually "reset the MCU" with a probe | **Usually no** | You'd need to hold **BOOT0 high for the whole reset** with the correct ~15 ms timing. Doing it by hand is unreliable |
+| Run plain `stm32isp` over `/dev/ttyS1` | **No** | It has no AD4 GPIO code (never pulses NRST/GPIO35) **and** its STM32 sub-commands don't match the vendor protocol — only the `0x43` sync would land |
+| Manually "reset the MCU" with a probe | **Usually no** | You'd need to reproduce the factory sequence — GPIO35 level + NRST pulse with the correct ~15 ms timing (GPIO35's mechanism is unproven). Doing it by hand is unreliable |
 | **Run the factory `IAPCommand`** | **Yes** | It reproduces the exact GPIO34/35 sequence with the exact delays the hardware expects |
 
 **Conclusion:** use `IAPCommand`. It *is* the safest tool here precisely because it already
@@ -201,7 +283,8 @@ Because the magic is SoC-side sysfs GPIO, confirm all of these **before** the fi
 
 ### Path A — From the SoC over SSH (recommended first test)
 
-This is the cleanest test and needs no new wiring: the SoC already owns the reset/BOOT0 pins.
+This is the cleanest test and needs no new wiring: the SoC already drives the MCU reset (GPIO34)
+and the GPIO35 line the factory tool uses.
 
 ```sh
 # On the SoC (Sunxi), as root:
@@ -211,8 +294,9 @@ This is the cleanest test and needs no new wiring: the SoC already owns the rese
 #      IAPCommand        (the factory 32-bit ARM binary)
 #      klipper.hex       (Klipper at 0x0800C000 — see below)
 #      factory-HD.hex    (KNOWN-GOOD restore image — keep it! your safety net)
-# 3) Flash Klipper:
-./IAPCommand /root/flash/klipper.hex /dev/ttyS1 115200
+# 3) Flash Klipper. NOTE: factory IAPCommand takes TWO hex paths (NA-hex HD-hex) —
+#    pass the same file twice to flash one image (that's how it was run live):
+./IAPCommand /root/flash/klipper.hex /root/flash/klipper.hex /dev/ttyS1 115200
 #    Watch for:  "Connected to board."  →  "STM32Write: success."  →  "STM32iap finished HD."
 # 4) If anything looks wrong, restore the factory image immediately:
 ./IAPCommand /root/flash/factory-HD.hex /dev/ttyS1 115200
@@ -222,8 +306,11 @@ This is the cleanest test and needs no new wiring: the SoC already owns the rese
 - **Erase/write only the app window** — `0x0800C000` (HD) or `0x08010000` (NA). **Never `0x00000`.**
 - Keep **`factory-HD.hex`** on the SoC so one command always restores the printer to stock.
 - Always let the tool **verify** (it prints `STM32Write: success.`) before it reboots the MCU.
-- The ROM/ISP boot is **not** in the region you overwrite → a bad app is recoverable by re-running
-  IAP (the MCU re-enters ISP on the next reset/BOOT0 pulse).
+- The vendor bootloader is **not** in the region you overwrite → a bad app is *expected* to be
+  recoverable by re-running IAP (the MCU re-enters the bootloader on the next reset pulse).
+  Caveats: it is flash, not ROM — safe only while you keep the base rule; and sync has been
+  observed to stop answering after repeated flash cycles → power-cycle the printer before
+  concluding it's bricked (STATUS.md §3).
 
 **Making the `.hex`** (a raw `.bin` has no address header, so tell `objcopy` it's a binary **and**
 its base address):
@@ -428,9 +515,10 @@ both a probe sensor and a real driver).
 
 There are **two different jobs** and they use **two different physical paths**:
 
-1. **Flashing into IAP** — needs the MCU's **reset + BOOT0**, which are driven by the **SoC's
-   GPIO 34/35**. → Do this **on the SoC** (run `IAPCommand` there, over SSH or USB‑disk auto‑run).
-   A standalone Orange Pi is **not** wired to those reset/BOOT0 lines, so it can't do this on its own.
+1. **Flashing into IAP** — needs the MCU reset (SoC GPIO34, proven) plus the GPIO35 level the
+   factory tool drives (role unproven) — both on the **SoC**. → Do this **on the SoC** (run
+   `IAPCommand` there, over SSH or USB‑disk auto‑run). A standalone Orange Pi is **not** wired to
+   those lines, so it can't do this on its own.
 2. **Running Klipper** — the **host** (klippy) talks to the **MCU over a UART**. The host can be
    the SoC *or* an Orange Pi.
 
@@ -463,10 +551,11 @@ Put the **finalized** `printer.cfg` (post‑probe) in `~/printer_data/config/`.
 2. **Confirm the SoC serial + GPIO facts on the live board** (SSH, root):
    - `ls -l /dev/ttyS*` and `fuser /dev/ttyS1` (is the vendor daemon holding it?).
    - Check `/sys/class/gpio/gpio34` & `gpio35` exist (export if needed) and are writable.
-   - Read the DTB for the exact MCU‑UART + reset/BOOT0 pins: `dtc -I fs /proc/device-tree -O dts`.
+   - Read the DTB for the exact MCU‑UART + reset/GPIO35 pins: `dtc -I fs /proc/device-tree -O dts`.
+     (Session 5 settled the MCU side by other means: USART2 PA9/PA10 @115200 — see README facts table.)
    - Stop the vendor service that owns the MCU (identify its unit name from `systemctl`).
-3. **Flash (test first):** `./IAPCommand klipper.hex /dev/ttyS1 115200` → expect
-   `Connected to board.` / `STM32Write: success.` / `STM32iap finished HD.`
+3. **Flash (test first):** `./IAPCommand klipper.hex klipper.hex /dev/ttyS1 115200` (two hex args:
+   NA, HD) → expect `Connected to board.` / `STM32Write: success.` / `STM32iap finished HD.`
    **Keep `factory-HD.hex` one command away** for instant restore.
 4. **Run `probe.cfg`** on the host → identify hotend/bed ADC pins, endstops, LED (no heat, no
    motion) and **validate the thermistor LUT scaling** (§4.2) against live `M105`/`QUERY_ADC`.
@@ -541,9 +630,9 @@ correctly. Order matters (cheapest/most‑critical first):
 
 | Risk | Likelihood | Mitigation |
 |---|---|---|
-| Erase the wrong flash region → brick | Low **if you honor the rule** | Write **only** `0x0800C000`/`0x08010000`; never `0x00000`. ISP boot is ROM‑resident → a bad app is recoverable by re‑running IAP on the next reset/BOOT0 pulse. |
-| Wrong app offset (HD vs NA) | Medium | Confirm rev on the live board; default HD. A wrong‑offset flash just won't boot → re‑flash the other offset (ROM ISP still alive). |
-| MCU won't enter ISP ("timed‑out") | **The failure you already hit** | Reproduce the **exact** SoC GPIO sequence: `gpio_out(35,1)` → 1 s → pulse `gpio34` LOW 15.68 ms → HIGH 15.68 ms (§2.3). That's what `IAPCommand` does — just run it. |
+| Erase the wrong flash region → brick | Low **if you honor the rule** | Write **only** `0x0800C000`/`0x08010000`; never `0x00000`. The bootloader is **flash-resident** (not ROM — HC32F460 has no ROM ISP), so it survives only while you never write there; re-running IAP is the recovery path but has been observed to fail after repeated flash cycles → power-cycle first. |
+| Wrong app offset (HD vs NA) | Medium | Confirm rev on the live board; default HD. A wrong‑offset flash just won't boot → re‑flash the other offset (the flash bootloader sits outside both app windows, so it stays alive). |
+| MCU won't enter ISP ("timed‑out") | **The failure you already hit** | Reproduce the **exact** SoC GPIO sequence: `gpio_out(35,1)` → 1 s → pulse `gpio34` LOW 15.68 ms → HIGH 15.68 ms (§2.3) — GPIO35's role is unproven but reproduce it anyway. If sync still fails after many cycles, **power-cycle the printer** (unplug, ~10 s) before anything else. |
 | `IAPCommand` won't run on the Orange Pi | Certain (32‑bit ARM glibc) | Run it **on the SoC** (its native platform), not the Pi. The Pi is for *running* Klipper, not flashing. |
 | Serial pin / GPIO guessed wrong | Medium | Confirm from DTB / probe (§7) before flashing. |
 | `PB7` hotend pin (invalid ADC) | Certain (from ADV3 cfg) | Probe (§5); it *will* fail until moved to a real ADC pin (PA0–7, PB0–1, PC0–5). |
@@ -553,8 +642,10 @@ correctly. Order matters (cheapest/most‑critical first):
 
 ## 10. What is still UNCONFIRMED (being honest)
 
-1. **Exact MCU↔SoC serial pin pair + the SoC's tty name** — in the Sunxi **DTB**, not in the rootfs
-   backup we have. Read it on the live board (§7). (This only affects *running* Klipper, not flashing.)
+1. ~~Exact MCU↔SoC serial pin pair~~ — **RESOLVED session 5**: MCU side is USART2, TX=PA9,
+   RX=PA10, 115200 (proven from factory-firmware RE); SoC side is `/dev/ttyS1` (live). What
+   remains unproven is GPIO35's connection/role, and the boot stub's app-validation behavior
+   (the leading suspect for flashed-Klipper silence — see `adv4-iap-protocol.md` §3).
 2. **Which board rev you have** (HD vs NA) → `0xC000` vs `0x10000`. Default **HD**.
 3. **Live thermistor scaling** — the LUT *shape* is extracted (§4.2), but the absolute ADC↔°C anchor
    must be validated with live `M105`/`QUERY_ADC` during the probe pass before trusting temperatures.

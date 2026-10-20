@@ -29,7 +29,8 @@ SOC_NET="24"
 BRIDGE_PORT="5000"
 [ -f "$BASE/ad4-net.conf" ] && . "$BASE/ad4-net.conf"
 
-BRIDGE="$BASE/ad4-serial-bridge.py"
+BRIDGE_C="$BASE/ad4-bridge"                 # static C bridge (no-python, preferred)
+BRIDGE_PY="$BASE/ad4-serial-bridge.py"      # python3 bridge (fallback if C missing)
 HEX="$BASE/klipper.hex"
 IAP="$BASE/IAPCommand"
 WATCHDOG="$BASE/mcu-watchdog"
@@ -56,24 +57,37 @@ set_ip() {
 }
 
 # ---- 3) (re)start the MCU bridge -----------------------------
+# The SoC has NO python3, so the authoritative backend is the static C
+# bridge (ad4-bridge). Use it whenever present; only fall back to the
+# python bridge if the C binary is missing AND python3 exists.
 start_bridge() {
+  pkill -f ad4-bridge 2>/dev/null
   pkill -f ad4-serial-bridge.py 2>/dev/null
   sleep 1
-  if [ -f "$BRIDGE" ]; then
-    nohup python3 "$BRIDGE" --tcp 0.0.0.0:"$BRIDGE_PORT" \
-        --uart /dev/ttyS1 --baud 250000 >>"$LOG" 2>&1 &
+  if [ -x "$BRIDGE_C" ]; then
+    # ad4-bridge <port> <uart> <baud>
+    nohup "$BRIDGE_C" "$BRIDGE_PORT" /dev/ttyS1 115200 >>"$LOG" 2>&1 &
+    sleep 1
+    if pgrep -f ad4-bridge >/dev/null 2>&1; then
+      log "bridge up (static C) on 0.0.0.0:$BRIDGE_PORT (eth0=$SOC_IP/$SOC_NET)"
+    else
+      log "C bridge FAILED to start (see $LOG)"
+    fi
+  elif [ -f "$BRIDGE_PY" ] && command -v python3 >/dev/null 2>&1; then
+    nohup python3 "$BRIDGE_PY" --tcp 0.0.0.0:"$BRIDGE_PORT" \
+        --uart /dev/ttyS1 --baud 115200 >>"$LOG" 2>&1 &
     sleep 1
     if pgrep -f ad4-serial-bridge.py >/dev/null 2>&1; then
-      log "bridge up on 0.0.0.0:$BRIDGE_PORT (eth0=$SOC_IP/$SOC_NET)"
+      log "bridge up (python3) on 0.0.0.0:$BRIDGE_PORT (eth0=$SOC_IP/$SOC_NET)"
     else
-      log "bridge FAILED to start (see $LOG)"
+      log "python bridge FAILED to start (see $LOG)"
     fi
   else
-    log "bridge script missing at $BRIDGE"
+    log "NO bridge backend: ad4-bridge missing AND (no ad4-serial-bridge.py or no python3)"
   fi
 }
 
-bridge_alive() { pgrep -f ad4-serial-bridge.py >/dev/null 2>&1; }
+bridge_alive() { pgrep -f ad4-bridge >/dev/null 2>&1 || pgrep -f ad4-serial-bridge.py >/dev/null 2>&1; }
 
 # ---- 4) MCU health probe + optional re-flash -----------------
 # Probes by opening the bridge TCP port and trying to read an MCU

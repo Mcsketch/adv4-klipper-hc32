@@ -1,28 +1,43 @@
 #!/usr/bin/env python3
 """
-make-positioned-ihex.py — emit a clean iHEX with type-05 (extended linear
-address) records from a raw binary at a chosen base.
+make-positioned-ihex.py — emit a clean iHEX with type-04 (extended address)
+records from a raw binary at a chosen base, matching the format the factory
+Adventurer-4 HD image and the vendor IAPCommand loader are proven to consume.
 
-Why: GNU objcopy -O ihex --change-address=<base> does NOT emit type-05 records
-for an image that straddles a 64K page — it wraps the 16-bit offset field, so
-the second page lands at low addresses. Our flasher's loader then resolves the
-whole image to base 0x00000000 and would clobber the ROM-ISP/reset region
-(brick). The factory HD image carries proper type-04/05 records and resolves
-correctly; we need the same for a custom Klipper image.
+Record format (matches Adventurer4-HD-IAP-2.3.0-20230216.hex):
+  :020000040000FA   <- type-04 "extended address": data = upper 16 bits of the
+                        LINEAR address (loader computes abs = (data<<16)|offset,
+                        the same as a type-05 record, it just uses type 0x04).
+  :10C00000<16B>c   <- type-00 data records, 16-bit offset field.
+
+A new type-04 record is emitted every time the upper-16-bit segment changes,
+so an image that straddles a 64K linear page (e.g. base 0xC000, ~27 KB ->
+0xC000..0x12C60) is emitted as:
+  seg 0x0000 : offsets 0xC000..0xFFFF
+  seg 0x0001 : offsets 0x0000..0x2C60
+...which is exactly how the full-chip factory dump is laid out.
+
+Why not `objcopy -O ihex --change-address`?
+  GNU objcopy does NOT emit extended-address records for an image that
+  straddles a 64K page — it wraps the 16-bit offset field, so the second
+  page lands at low addresses and the loader resolves the whole image to
+  base 0x00000000, clobbering the ROM-ISP/reset region (BRICK). This tool
+  emits one type-04 record per 64K page, so the base is always resolved
+  correctly by IAPCommand.
+
+Safety note: the MCU ROM-ISP at 0x00000000 is never written by a correctly
+  positioned image (base 0xC000 is > 0x8000). flashforge_init.sh additionally
+  runs a base-address guard before flashing.
 
 Usage:
   make-positioned-ihex.py <in.bin> <base_hex> <out.hex>
-  e.g. make-positioned-ihex.py klipper.bin 0x000C0000 klipper.hex
-
-The output uses one type-05 record per 64K page, followed by 16-byte type-00
-data records, ending with a type-01 EOF. This is exactly what the
-stm32isp-ad4 loader (and the factory IAPCommand) expect.
+  e.g. make-positioned-ihex.py klipper.bin 0xC000 klipper-ad4.hex
 """
 import sys
 
 def rec(cnt, off, typ, data=b""):
     body = bytes([cnt, (off >> 8) & 0xFF, off & 0xFF, typ]) + data
-    chk = (~sum(body)) & 0xFF
+    chk = (0x100 - sum(body)) & 0xFF   # two's complement (GNU/factory ihex standard)
     return ":%02X%04X%02X%s%02X" % (cnt, off, typ, data.hex().upper(), chk)
 
 def main():
@@ -31,28 +46,29 @@ def main():
     src, base_s, dst = sys.argv[1], sys.argv[2], sys.argv[3]
     base = int(base_s, 0)
     data = open(src, "rb").read()
-    assert base % 0x10000 == 0, "base must be 64K-page aligned for type-05"
 
     out = []
-    pos = 0
-    while pos < len(data):
-        page = base + pos                       # absolute page start
-        upper = page >> 16                      # type-05 value
-        page_len = min(0x10000, len(data) - pos)
-        out.append(rec(2, 0, 0x05, bytes([upper >> 8, upper & 0xFF])))
-        off = 0
-        while off < page_len:
-            n = min(16, page_len - off)
-            chunk = data[pos + off: pos + off + n]
-            out.append(rec(len(chunk), off & 0xFFFF, 0x00, chunk))
-            off += 16
-        pos += page_len
+    cur_seg = None            # current upper-16-bit segment
+    i = 0
+    while i < len(data):
+        addr = base + i
+        seg = (addr >> 16) & 0xFFFF
+        if seg != cur_seg:
+            out.append(rec(2, 0, 0x04, bytes([seg >> 8, seg & 0xFF])))
+            cur_seg = seg
+        off16 = addr & 0xFFFF
+        # clamp chunk so a 16-byte record NEVER crosses a 64K page boundary
+        page_room = 0x10000 - off16
+        n = min(16, page_room, len(data) - i)
+        chunk = data[i:i+n]
+        out.append(rec(n, off16, 0x00, chunk))
+        i += n
     out.append(rec(0, 0, 0x01))
     with open(dst, "w") as f:
         f.write("\n".join(out) + "\n")
-    print(f"wrote {dst}: {len(data)} bytes @ 0x{base:08X} "
-          f"(span 0x{base:08X}..0x{base+len(data):08X}), "
-          f"{len(out)} records")
+    end = base + len(data)
+    print("wrote %s: %d bytes @ 0x%08X..0x%08X (%d records)"
+          % (dst, len(data), base, end, len(out)))
 
 if __name__ == "__main__":
     main()

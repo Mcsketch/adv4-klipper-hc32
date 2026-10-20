@@ -39,14 +39,31 @@ WORK_DIR=`dirname $0`
 BASE="/opt/ad4-klipper"
 
 # ---- 1) copy the daemon package to eMMC ----------------------
+# The SoC has NO python3, so the bridge MUST be the static C binary
+# (ad4-bridge). Copy it (required); the python bridge is a belt-and-
+# suspenders fallback only. Also copy the Klipper hex under the exact
+# name the daemon expects (klipper.hex) — the stick may ship it as
+# klipper.hex or klipper-ad4.hex.
 mkdir -p "$BASE"
 cp -f "$WORK_DIR/ad4-daemon.sh"        "$BASE/" 2>/dev/null
+cp -f "$WORK_DIR/ad4-bridge"           "$BASE/" 2>/dev/null
 cp -f "$WORK_DIR/ad4-serial-bridge.py" "$BASE/" 2>/dev/null
-cp -f "$WORK_DIR/klipper-ad4.hex"      "$BASE/" 2>/dev/null
 cp -f "$WORK_DIR/IAPCommand"           "$BASE/" 2>/dev/null
 cp -f "$WORK_DIR/ad4-net.conf"         "$BASE/" 2>/dev/null
-chmod +x "$BASE/ad4-daemon.sh" "$BASE/IAPCommand" 2>/dev/null
+# klipper hex: accept either name on the stick -> klipper.hex on eMMC
+if [ -f "$WORK_DIR/klipper.hex" ]; then
+  cp -f "$WORK_DIR/klipper.hex" "$BASE/klipper.hex" 2>/dev/null
+elif [ -f "$WORK_DIR/klipper-ad4.hex" ]; then
+  cp -f "$WORK_DIR/klipper-ad4.hex" "$BASE/klipper.hex" 2>/dev/null
+fi
+chmod +x "$BASE/ad4-daemon.sh" "$BASE/ad4-bridge" "$BASE/IAPCommand" 2>/dev/null
 sync
+
+# The C bridge is REQUIRED for a no-stick boot (no python3 on SoC).
+if [ ! -x "$BASE/ad4-bridge" ]; then
+  echo "!! WARNING: ad4-bridge (static C) not on stick; eMMC daemon will have no bridge backend."
+fi
+
 
 # marker: the MCU was just flashed by flashforge_init.sh before we
 # got here, so tell the daemon not to re-flash at boot.
@@ -55,71 +72,68 @@ touch "$BASE/mcu-klipper.ok"
 # touch "$BASE/mcu-watchdog"
 
 # ---- 2) gate the vendor watchdog in the boot rc script -------
-# Locate the file that launches ffstartup-arm (normally /etc/init.d/rcS).
-FFLINE='ffstartup-arm -f /opt/PROGRAM/ffstartup.cfg'
+# Locate the file that launches the vendor startup. Match on the
+# SUBSTRING 'ffstartup-arm' — the full command line / flags vary by
+# firmware build, so an exact full-line match is too strict.
+FFPATTERN='ffstartup-arm'
+MARKER='/opt/ad4-klipper/ad4-daemon.sh'
 RCS=""
 for c in /etc/init.d/rcS /etc/rcS /etc/rc.local /etc/inittab /etc/init.d/rc; do
   [ -f "$c" ] || continue
-  if grep -qF "$FFLINE" "$c" 2>/dev/null; then RCS="$c"; break; fi
+  if grep -qF "$FFPATTERN" "$c" 2>/dev/null; then RCS="$c"; break; fi
 done
-# fallback: search the usual init dirs for the line.
+# fallback: search the usual init dirs for the pattern.
 if [ -z "$RCS" ]; then
-  RCS="$(grep -rlF "$FFLINE" /etc/init.d/ /etc/ 2>/dev/null | head -1)"
+  RCS="$(grep -rlF "$FFPATTERN" /etc/init.d/ /etc/ 2>/dev/null | head -1)"
 fi
 if [ -z "$RCS" ] || [ ! -f "$RCS" ]; then
-  echo "!! could not locate the ffstartup launch line; NOT patching."
+  echo "!! could not locate the ffstartup-arm launch line; NOT patching."
   echo "   (Klipper runtime will still work from the stick for this"
   echo "    boot; re-run after confirming the rc file name.)"
   echo "patch-skipped" > "$BASE/install-status"
   # do NOT reboot into an unpatched state expecting persistence
   exit 3
 fi
-echo "patching: $RCS"
 
-# Back up the original (literal, so restore is a simple copy-back).
-[ -f "${RCS}.ad4-orig" ] || cp -f "$RCS" "${RCS}.ad4-orig"
+# Already patched from a previous run? Leave it alone.
+if grep -qF "$MARKER" "$RCS" 2>/dev/null; then
+  echo "rcS already patched: $RCS"
+else
+  echo "patching: $RCS"
 
-# The single-line literal wrap (python3 = safe literal replace).
-python3 - "$RCS" <<'PY'
-import sys
-rc = sys.argv[1]
-FF = "ffstartup-arm -f /opt/PROGRAM/ffstartup.cfg"
-txt = open(rc, "r", errors="ignore").read()
+  # Back up the original (literal, so restore is a simple copy-back).
+  [ -f "${RCS}.ad4-orig" ] || cp -f "$RCS" "${RCS}.ad4-orig"
 
-# If we already patched it (marker present), leave it alone.
-MARKER = "/opt/ad4-klipper/ad4-daemon.sh"
-if MARKER in txt:
-    print("already patched; leaving rcS as-is")
-    sys.exit(0)
-
-# Find the line containing the vendor launch.
-lines = txt.splitlines(keepends=True)
-out = []
-patched = False
-for ln in lines:
-    if FF in ln and not MARKER in ln:
-        # preserve the original command as the else-branch
-        cmd = ln.strip()
-        out.append("if [ -f /opt/ad4-klipper/enable ]; then "
-                   "/opt/ad4-klipper/ad4-daemon.sh & else " + cmd + " fi\n")
-        patched = True
-    else:
-        out.append(ln)
-
-if not patched:
-    print("!! vendor launch line not found inside", rc)
-    sys.exit(2)
-
-open(rc, "w").write("".join(out))
-print("patched", rc, "-> daemon gated behind /opt/ad4-klipper/enable")
-PY
-if [ $? -ne 0 ]; then
-  echo "!! rcS patch FAILED; restoring original and aborting install."
-  cp -f "${RCS}.ad4-orig" "$RCS"
-  echo "patch-failed-restored" > "$BASE/install-status"
-  exit 4
+  # Single-line literal wrap, NO python3 (the SoC has none) -> awk.
+  # Wrap the ffstartup-arm line so that, when /opt/ad4-klipper/enable is
+  # present, our daemon runs INSTEAD of the vendor startup; otherwise the
+  # original command runs and the SoC boots exactly as stock.
+  awk -v MARKER="$MARKER" '
+    {
+      if (index($0, "ffstartup-arm") > 0 && index($0, MARKER) == 0) {
+        cmd = $0
+        gsub(/^[ \t]+/, "", cmd); gsub(/[ \t]+$/, "", cmd)
+        print "if [ -f /opt/ad4-klipper/enable ]; then " MARKER " & else " cmd " fi"
+        patched = 1
+      } else {
+        print $0
+      }
+    }
+    END { if (!patched) { print "!! no ffstartup-arm line to patch inside", ARGV[1] > "/dev/stderr"; exit 2 } }
+  ' "$RCS" > "$RCS.ad4-new"
+  awkrc=$?
+  if [ $awkrc -ne 0 ] || [ ! -s "$RCS.ad4-new" ]; then
+    echo "!! rcS patch FAILED (awk rc=$awkrc); restoring original and aborting."
+    rm -f "$RCS.ad4-new"
+    cp -f "${RCS}.ad4-orig" "$RCS"
+    echo "patch-failed-restored" > "$BASE/install-status"
+    exit 4
+  fi
+  mv -f "$RCS.ad4-new" "$RCS"
+  chmod a+x "$RCS" 2>/dev/null || true
+  echo "patched $RCS -> daemon gated behind /opt/ad4-klipper/enable"
+  sync
 fi
-sync
 
 # ---- 3) enable flag -----------------------------------------
 touch "$BASE/enable"

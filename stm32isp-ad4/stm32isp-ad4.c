@@ -495,7 +495,7 @@ int main(int argc, char **argv){
         FILE *f=fopen(dump_bin,"wb");
         if(!f){ fprintf(stderr,"open %s: %s\n",dump_bin,strerror(errno)); free(buf); return 1; }
         fwrite(buf,1,FLASH_LEN,f); fclose(f); free(buf);
-        fprintf(stderr,"DUMP: %s (%u bytes, %u chunk-fails) @0x08000000\n",dump_bin,FLASH_LEN,fails);
+        fprintf(stderr,"DUMP: %s (%u bytes, %u chunk-fails) @0x00000000 (HD relative: ROM @0x0, app @0xC000)\n",dump_bin,FLASH_LEN,fails);
         /* leave MCU running the app (dump is read-only, nothing was changed) */
         st_jump(g_fd);
         gpio_set(BOOT0_GPIO,0);

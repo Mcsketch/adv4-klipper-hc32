@@ -11,11 +11,13 @@
 # What it does:
 #   1. Flash the MCU (klipper, or factory if RESTORE present)
 #      via the C flasher (IAPCommand). Anti-brick: the flasher
-#      refuses any image whose base is <= 0x00008000, so the ROM
-#      ISP at 0x0000 is never touched => never brickable.
+#      refuses any image whose base is <= 0x00008000. NOTE (session-5
+#      RE): the HC32F460 has no ROM ISP — the bootloader at 0x0..0xBFFF
+#      is FLASH-resident, so it IS erasable; that guard is exactly what
+#      keeps it alive. Do not lower it.
 #   2. Give eth0 a static IP (default 192.168.10.10/24).
-#   3. Start the MCU<->TCP bridge (ONLY if python3 exists; otherwise
-#      it logs and skips — the flash itself never needs python).
+#   3. Start the MCU<->TCP bridge (static C binary 'ad4-bridge' — the
+#      SoC has no python3; the python bridge is a fallback only).
 #
 # Stick layout (FAT32, files at root):
 #   flashforge_init.sh   this script
@@ -338,18 +340,20 @@ fi
 sleep 1
 
 # ---- flash ----------------------------------------------------
-# The MCU is a Huada HC32F460 with a CUSTOM vendor ROM. Its sync handshake
-# (decoded from the vendor's own unstripped IAPCommand) is:
-#     send 0x43  ->  reply 6 (HD revision) or 7 (NA revision)
-# NOT the standard STM32F1 0x43->0x79. So the authoritative flasher is the
-# vendor IAPCommand (it implements the correct 1024-byte packet protocol,
-# command-ack 6/7). Its signature (from the disassembly + a failed run):
+# The MCU is a Huada HC32F460. It has NO ROM ISP: the bootloader answering
+# the sync is FLASH-resident (inferred 0x0..0xBFFF, session-5 RE). Its sync
+# handshake (live-confirmed via strace of the vendor's unstripped
+# IAPCommand) is:
+#     send 0x43  ->  reply 6 (NA revision) or 7 (HD revision)
+# (earlier drafts had 6/7 swapped). NOT the standard STM32F1 0x43->0x79.
+# So the authoritative flasher is the vendor IAPCommand (1030-byte frames:
+# [cmd][len:2LE][data:1024][crc16:2LE], CRC16-CCITT over cmd+data, ack 0x06).
+# Its signature (from the disassembly + a failed run):
 #     IAPCommand <NA.hex> <HD.hex> <comport>
 # We pass the same image for NA and HD; IAPCommand detects the revision at
-# sync and reads the matching file. Factory tool runs FIRST (known-good);
-# the open-source stm32isp-ad4 is a verbose fallback (it targets the std
-# STM32F1 protocol, so it may time out at sync on this ROM — that's expected
-# and non-fatal: the factory attempt is what actually flashes).
+# sync and reads the matching file. Only the factory tool is used; the
+# open-source stm32isp-ad4 (std STM32F1 ops) was removed as a fallback
+# because this bootloader does not speak those commands.
 do_flash() {
   # $1 = tool tag (factory only — the open-source flasher was removed)
   case "$1" in
@@ -439,7 +443,9 @@ if [ -x "$WORK_DIR/ad4-bridge" ]; then
   pkill_safe "ad4-bridge"
   sleep 1
   kill_fd_holder /dev/ttyS1 2>/dev/null
-  nohup "$WORK_DIR/ad4-bridge" "$BRIDGE_PORT" /dev/ttyS1 250000 \
+  # 115200 = the proven MCU line (session-5 firmware RE). Passing 250000
+  # here was the stale-baud bug: the MCU never hears the bridge.
+  nohup "$WORK_DIR/ad4-bridge" "$BRIDGE_PORT" /dev/ttyS1 115200 \
       >> /var/log/ad4-bridge.log 2>&1 &
   BPID=$!
   sleep 1

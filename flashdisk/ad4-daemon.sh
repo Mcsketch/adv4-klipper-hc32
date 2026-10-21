@@ -39,13 +39,38 @@ MAX_FAIL=3                 # consecutive fails before re-flash
 
 log() { echo "$(date '+%F %T') $*" >>"$LOG" 2>/dev/null; }
 
+# ---- busybox-safe process helpers ----------------------------
+# This SoC's busybox has NO pgrep/pkill (verified live 2026-10-21);
+# using them made start_bridge think the bridge never came up and
+# restart-loop every 10 s. Scan /proc/*/cmdline instead (same trick
+# flashforge_init.sh uses). fuser IS present.
+kill_pat() {
+  # $1 = pattern; kills every process whose cmdline contains it (never us)
+  for p in /proc/[0-9]*; do
+    [ -r "$p/cmdline" ] || continue
+    case `tr '\0' ' ' < "$p/cmdline" 2>/dev/null` in
+      *"$1"*) [ "${p#/proc/}" != "$$" ] && kill -9 "${p#/proc/}" 2>/dev/null ;;
+    esac
+  done
+}
+pid_alive() {
+  # $1 = pattern
+  for p in /proc/[0-9]*; do
+    [ -r "$p/cmdline" ] || continue
+    case `tr '\0' ' ' < "$p/cmdline" 2>/dev/null` in
+      *"$1"*) return 0 ;;
+    esac
+  done
+  return 1
+}
+
 # ---- 1) keep vendor stack off --------------------------------
 # Our hook already replaced ffstartup-arm's launch, but if a previous
 # boot left one running (or the hook was partially reverted), make sure
 # the stock app is not holding /dev/ttyS1.
 kill_vendor() {
-  pkill -f ffstartup-arm   2>/dev/null
-  pkill -f adventurer4-arm 2>/dev/null
+  kill_pat ffstartup-arm
+  kill_pat adventurer4-arm
   fuser -k /dev/ttyS1 2>/dev/null
 }
 
@@ -61,14 +86,14 @@ set_ip() {
 # bridge (ad4-bridge). Use it whenever present; only fall back to the
 # python bridge if the C binary is missing AND python3 exists.
 start_bridge() {
-  pkill -f ad4-bridge 2>/dev/null
-  pkill -f ad4-serial-bridge.py 2>/dev/null
+  kill_pat ad4-bridge
+  kill_pat ad4-serial-bridge.py
   sleep 1
   if [ -x "$BRIDGE_C" ]; then
     # ad4-bridge <port> <uart> <baud>
     nohup "$BRIDGE_C" "$BRIDGE_PORT" /dev/ttyS1 115200 >>"$LOG" 2>&1 &
     sleep 1
-    if pgrep -f ad4-bridge >/dev/null 2>&1; then
+    if pid_alive ad4-bridge >/dev/null 2>&1; then
       log "bridge up (static C) on 0.0.0.0:$BRIDGE_PORT (eth0=$SOC_IP/$SOC_NET)"
     else
       log "C bridge FAILED to start (see $LOG)"
@@ -77,7 +102,7 @@ start_bridge() {
     nohup python3 "$BRIDGE_PY" --tcp 0.0.0.0:"$BRIDGE_PORT" \
         --uart /dev/ttyS1 --baud 115200 >>"$LOG" 2>&1 &
     sleep 1
-    if pgrep -f ad4-serial-bridge.py >/dev/null 2>&1; then
+    if pid_alive ad4-serial-bridge.py >/dev/null 2>&1; then
       log "bridge up (python3) on 0.0.0.0:$BRIDGE_PORT (eth0=$SOC_IP/$SOC_NET)"
     else
       log "python bridge FAILED to start (see $LOG)"
@@ -87,7 +112,7 @@ start_bridge() {
   fi
 }
 
-bridge_alive() { pgrep -f ad4-bridge >/dev/null 2>&1 || pgrep -f ad4-serial-bridge.py >/dev/null 2>&1; }
+bridge_alive() { pid_alive ad4-bridge >/dev/null 2>&1 || pid_alive ad4-serial-bridge.py >/dev/null 2>&1; }
 
 # ---- 4) MCU health probe + optional re-flash -----------------
 # Probes by opening the bridge TCP port and trying to read an MCU
@@ -96,7 +121,9 @@ bridge_alive() { pgrep -f ad4-bridge >/dev/null 2>&1 || pgrep -f ad4-serial-brid
 # flashed (marker file). Re-flash only when the watchdog is enabled
 # AND we see N consecutive dead probes AND the flasher is present.
 mcu_probe() {
-  # TCP connect to the bridge is the cheap liveness check.
+  # NOTE: busybox ash has NO /dev/tcp (unlike bash) — this probe always
+  # fails on the SoC, so the mcu-watchdog re-flash path is effectively
+  # unusable there. It stays OFF by default (mcu-watchdog absent).
   (exec 3<>/dev/tcp/127.0.0.1/"$BRIDGE_PORT") 2>/dev/null || return 1
   exec 3>&- 2>/dev/null
   [ -f "$BASE/mcu-klipper.ok" ] || return 1

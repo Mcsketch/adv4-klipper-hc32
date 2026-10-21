@@ -75,10 +75,13 @@ touch "$BASE/mcu-klipper.ok"
 # Locate the file that launches the vendor startup. Match on the
 # SUBSTRING 'ffstartup-arm' — the full command line / flags vary by
 # firmware build, so an exact full-line match is too strict.
+# PROVEN 2026-10-21 (live SoC): the launch line is in /opt/auto_run.sh
+# (rcS does '. /opt/auto_run.sh'); the /etc-only search that ran before
+# logged 'patch-skipped' because it never looked in /opt.
 FFPATTERN='ffstartup-arm'
 MARKER='/opt/ad4-klipper/ad4-daemon.sh'
 RCS=""
-for c in /etc/init.d/rcS /etc/rcS /etc/rc.local /etc/inittab /etc/init.d/rc; do
+for c in /opt/auto_run.sh /etc/init.d/rcS /etc/rcS /etc/rc.local /etc/inittab /etc/init.d/rc; do
   [ -f "$c" ] || continue
   if grep -qF "$FFPATTERN" "$c" 2>/dev/null; then RCS="$c"; break; fi
 done

@@ -1,10 +1,24 @@
 # Flashforge Adventurer 4 → Klipper — Complete Engineering Dossier
 
+Klipper support for the Flashforge Adventurer 4 / 4 Pro **HC32F460 (Hollystone HD)** MCU:
+the open-source MCU flasher, the SoC↔MCU serial bridge, the complete Klipper board port,
+and the unattended USB-stick / persistent eMMC install path.
+
 Self-documenting folder. All artifacts verified against:
 - `FFAD4-BKUP.zip` (7.8 GB eMMC image of a working printer)
 - `control-2.3.0.tar.xz` (factory updater package)
 - Direct disassembly of `IAPCommand` (stm32isp fork)
 - Raw Intel-HEX parsing of factory MCU images
+
+## Layout
+
+| Path | What |
+|---|---|
+| `flasher/` | `stm32isp-ad4.c` — self-contained stm32isp fork with the AD4 SoC GPIO strapping (NRST=GPIO34 proven; GPIO35 driven, role unproven) + the HC32 vendor 1030-byte IAP packet protocol. `flash-mcu.sh` — unattended flash runbook. |
+| `bridge/` | SoC-side userland: `ad4-bridge` (C, MCU UART → TCP 5000), `ad4-serial-bridge.py`, `klip_probe.c` (Klipper identify liveness probe), `rom_sweep.c`, `ad4-identify-probe.py`, plus Mac-side Fluid/klippy setup scripts. |
+| `klipper-port/` | The Klipper board files: `src-hc32f460/` (main/serial/gpio/pwm/adc/Kconfig/Makefile), `lib-hc32f460/` (vendor driver), `board.config` (working `.config`), `make-positioned-ihex.py`. |
+| `flash-images/` | Validated Intel-HEX ready to flash (checksums verified). |
+| `docs/` | Flash guide, IAP protocol write-up, STATUS. |
 
 ## Documents
 
@@ -26,7 +40,7 @@ Self-documenting folder. All artifacts verified against:
 | Folder | Contents |
 |---|---|
 | **`stm32isp-ad4/`** | Complete self-contained C fork of `stm32isp` with the SoC GPIO dance (NRST=GPIO34 **proven**; GPIO35 is driven too but its "BOOT0" role is **unproven**) built in. **Note: its `-d` dump mode cannot work** — it sends STM32 ROM-ISP read (0x11) which the vendor bootloader does not speak; see `adv4-swd-dump.md`. `Makefile` (native + cross). `flash-mcu.sh` (SoC driver). Factory HD+NA hexes for restore. **Compiles clean (gcc -Wall -Wextra, zero warnings)** |
-| **`soc-hack/`** | `ad4-serial-bridge.py` (TCP/UDP serial↔network bridge, byte-transparent, tested E2E). `ad4-bridge.sh` (SoC start/stop/status). `ad4-rpi-setup.sh` (**one-shot RPi3 host setup**: static IP + preflight + deps + Klipper + socat PTY). `rpi-setup.sh` (older manual variant) |
+| **`soc-hack/`** | `ad4-bridge.c` + static ARM `ad4-bridge` binary (TCP/serial↔network bridge, no python — the SoC has none; build: `zig cc -target arm-linux-musleabi -std=c11 -O2 -static`). `ad4-serial-bridge.py` (reference python bridge, byte-transparent, tested E2E). `ad4-bridge.sh` (SoC start/stop/status). `ad4-rpi-setup.sh` (**one-shot RPi3 host setup**: static IP + preflight + deps + Klipper + socat PTY). `rpi-setup.sh` (older manual variant) |
 | **`flashdisk/`** | **Unattended USB-stick flash** (the easy path) **+ persistent install**: `build-usb-stick.sh` (assembles the FAT32 stick, verifies md5 + base; `PERSISTENT` flag ON by default, `NO_PERSISTENT=1` for one-shot), `flashforge_init.sh` (SoC-side flash+net+bridge; `PERSISTENT`/`RESTORE` flag handling), `ad4-daemon.sh` (eMMC runtime: static IP + self-healing bridge + optional MCU re-flash), `ad4-install-persistent.sh` / `ad4-uninstall-persistent.sh` (eMMC boot-hook install/revert), `ad4-install-from-pi.sh` (remote no-stick install over ssh), `README.md` |
 | **`tools/`** | `make-positioned-ihex.py` — emits a clean type-05 iHEX so the flasher writes the app to its absolute window (fixes the objcopy wrap that would otherwise land at 0x0000) |
 
@@ -61,6 +75,32 @@ Self-documenting folder. All artifacts verified against:
 | Safety invariant | Never write ≤ 0x00008000 | Design (keeps the bootloader recoverable — note: **not** "ROM-ISP"; the HC32F460 has no ROM ISP, the bootloader is flash-resident, inferred at `0x0..0xBFFF`) |
 | IAPCommand | stm32isp fork, unstripped, ARM ELF, with debug info | `file` + `strings` |
 
+## Hard-won facts (read before touching anything)
+
+1. **Board revision = HD** (Hollystone HC32F460, marker `/root/H32`). App flash window
+   **0x0000C000** (48 K). The bootloader answering the IAP sync is **flash-resident**
+   (inferred `0x0..0xBFFF`) — it is *erasable*, so recovery depends on the safety
+   invariant: **never write ≤ 0x00008000**. (Earlier drafts called this "ROM-ISP"; wrong —
+   the HC32F460 has no ROM ISP.)
+2. **Baud: use 115200, not the 250000 default.** Klipper's `CONFIG_SERIAL_BAUD` is gated behind
+   `LOW_LEVEL_OPTIONS` (expert, default off). With it off, the vendored kconfiglib marks the
+   symbol *invisible* and silently falls back to `default 250000` even though your value is
+   stored — `set_value()` returns True, `autoconf.h` gets a stale mtime, nothing detects it.
+   **Fix: set both `CONFIG_LOW_LEVEL_OPTIONS=y` AND `CONFIG_SERIAL_BAUD=115200`** in `.config`,
+   run `make olddefconfig`, then **verify** `grep 'define CONFIG_SERIAL_BAUD ' out/autoconf.h`
+   before flashing. (This silent fallback ate 3 days; full repro in `docs/KLIPPER-AD4-FLASH-GUIDE.md`.)
+3. **Build on macOS:** `make -j8 CPP=arm-none-eabi-cpp` — the host `/usr/bin/cpp` is a clang
+   wrapper that dies on the `.lds.S` linker-script step.
+4. **Klipper↔SoC line = USART2, TX=PA9, RX=PA10** (FSEL36/37, proven from factory firmware
+   in session 5; earlier drafts said PA15 — wrong).
+5. **IAP sync** replies 1 byte: `0x07` = HD, `0x06` = NA. The MCU only answers after a fresh
+   reset into its bootloader (GPIO34 NRST pulse; GPIO35 is driven too but its role is
+   unproven); after many NRST pulses it can go deaf — a **physical power cycle** of the
+   printer clears it.
+6. The flasher is **fire-and-forget** in the data phase (byte-for-byte the vendor `IAPCommand`
+   flow; the bootloader sends no per-frame ack the host consumes). Success = Klipper `identify`
+   on `/dev/ttyS1` after reset.
+
 ## Unattended flash (no soldering, no RPi needed)
 
 ```
@@ -74,8 +114,34 @@ USB stick (FAT32, root):
 ```
 Insert, power on, SoC runs the script. Log → `/root/ad4-flash-status`.
 
+## Flash (from the SoC, `root@192.168.10.10`)
+
+```sh
+cd /root
+# build the flasher once:  gcc -O2 -o stm32isp-ad4 stm32isp-ad4.c
+./stm32isp-ad4 -p /dev/ttyS1 klipper-115200-real.hex      # auto-detects HD from sync 0x07
+# verify: probe the app, NOT the bootloader:
+/opt/ad4-klipper/klip_probe_arm 115200 /dev/ttyS1 2000    # expect the ~1.5 KB Klipper identify
+```
+
+## Test the whole chain (SoC → bridge → Mac → klippy/Fluid)
+
+1. SoC: `/opt/ad4-klipper/ad4-bridge 5000 /dev/ttyS1 115200` (kill any old 250000 instance first).
+2. Mac: socat PTY → `tcp:192.168.10.10:5000`; `printer.cfg` serial = the PTY, **baud 115200**
+   (must be a standard rate or the `IOSSIOSPEED` ioctl fails on the PTY; the SoC enforces the
+   real rate).
+3. Start klippy → `identify` handshake → Fluid.
+
 ## Recovery
 
 **MCU** (always available, no hardware): `./flash-mcu.sh factory` on the SoC.
 **SoC** (if Linux breaks): rewrite `FFAD4-BKUP.zip` eMMC image to `mmcblk0`.
 The two are independent — MCU recovery never depends on SoC state and vice versa.
+
+## Provenance
+
+- Flasher ported from the factory `IAPCommand` (unstripped stm32isp fork, md5
+  `919864f702cf3c07665234ab8de7896e`) + `control-2.3.0/run.sh`; wire format strace-verified.
+- Klipper base: upstream `ce7002b` (2026-09-18). Board files are original work in this project.
+- All `flash-images/` hexes validated: record checksums (two's complement), type-04 base 0x0000,
+  data byte-identical to the built `klipper.bin`.

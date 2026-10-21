@@ -30,3 +30,6 @@ work/flashdisk-work/
 work/stock/
 work/staging/
 work/fwstock/
+
+# kept on disk only (133 MB, over GitHub 100 MB limit)
+FFAD4-BKUP.zip

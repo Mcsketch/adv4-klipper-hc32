@@ -33,3 +33,9 @@ work/fwstock/
 
 # kept on disk only (133 MB, over GitHub 100 MB limit)
 FFAD4-BKUP.zip
+
+# vendor firmware download (21 MB, kept on disk)
+FlashForge-Hacks-main/
+
+# cross-compiled ARM binaries — rebuild from *.c
+bridge/*_arm

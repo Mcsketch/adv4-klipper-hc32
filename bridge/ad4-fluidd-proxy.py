@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 # ad4-fluidd-proxy.py — raw-socket reverse proxy.
-#  :8080  serves Fluidd static (~/moonraker/fluidd)
+#  :8081  serves Fluidd static (~/moonraker/fluidd)
 #  /api /websocket /server /machine  ->  Moonraker 127.0.0.1:7125
 # Raw socket (not BaseHTTPRequestHandler) so we can pipe the WebSocket
 # upgrade and arbitrary bodies transparently.
 import os, socket, socketserver, threading
 
-PORT = 8080
+PORT = 8081
 MR_HOST, MR_PORT = "127.0.0.1", 7125
 FLUIDD = os.path.expanduser("~/moonraker/fluidd")
-PROXY_PREFIXES = (b"/api", b"/websocket", b"/server", b"/machine")
+# First path segment -> Moonraker API; anything else is a Fluidd SPA route.
+API_SEGMENTS = {b"api", b"websocket", b"server", b"machine", b"printer",
+                b"gcode_script", b"object", b"job_queue", b"history",
+                b"update", b"announcement", b"webcam", b"database",
+                b"spoolman", b"power", b"template", b"extensions"}
 CT = {b".html":b"text/html",b".js":b"text/javascript",b".css":b"text/css",
       b".json":b"application/json",b".png":b"image/png",b".svg":b"image/svg+xml",
       b".ico":b"image/x-icon",b".woff":b"font/woff",b".woff2":b"font/woff2",
@@ -76,7 +80,7 @@ class Handler(socketserver.BaseRequestHandler):
         try:
             first, head = recv_headers(sock)
             path = first.split(b" ", 2)[1].split(b"?", 1)[0] if b" " in first else b""
-            if path.startswith(PROXY_PREFIXES):
+            if path.lstrip(b"/").split(b"/", 1)[0] in API_SEGMENTS:
                 proxy(sock, head)
             else:
                 serve_static(sock, path)

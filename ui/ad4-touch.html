@@ -1,0 +1,548 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>ADV4 Panel</title>
+<style>
+:root{
+  --bg:#0d1220; --card:#161f33; --card2:#1d2942; --line:#2a3a5c;
+  --ink:#e8eefb; --dim:#8fa3c4; --accent:#4d9fff; --accent2:#2f6fd0;
+  --hot:#ff7a45; --ok:#39d98a; --warn:#ffcb4a; --bad:#ff5f6d;
+  --btn:62px;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--ink);
+  font:16px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+body{padding:14px 14px 60px;max-width:900px;margin:0 auto}
+h1{font-size:19px;margin:0;letter-spacing:.3px}
+h2{font-size:12px;margin:0 0 12px;color:var(--dim);text-transform:uppercase;
+   letter-spacing:1.4px;font-weight:600}
+.card{background:var(--card);border:1px solid var(--line);border-radius:18px;
+  padding:16px;margin-bottom:14px}
+.bar{display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+.chip{background:var(--card2);border:1px solid var(--line);border-radius:999px;
+  padding:5px 12px;font-size:12px;color:var(--dim);white-space:nowrap}
+.chip b{color:var(--ink);font-weight:600}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--bad);display:inline-block;
+  margin-right:6px}
+.dot.on{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+.spacer{flex:1}
+
+.rbtn{width:var(--btn);height:var(--btn);border-radius:50%;border:1px solid var(--line);
+  background:radial-gradient(circle at 30% 25%,var(--accent),var(--accent2) 70%);
+  color:#fff;font-size:14px;font-weight:600;cursor:pointer;line-height:1.15;
+  box-shadow:0 4px 12px rgba(45,110,210,.35);transition:transform .08s,filter .12s;
+  display:inline-flex;align-items:center;justify-content:center;
+  padding:0 6px;text-align:center}
+.rbtn:active{transform:scale(.92);filter:brightness(1.25)}
+.rbtn.ghost{background:var(--card2);color:var(--ink);box-shadow:none}
+.rbtn.sm{width:56px;height:56px;font-size:12.5px}
+.rbtn.danger{background:radial-gradient(circle at 30% 25%,#ff7b86,#c9364a 70%)}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+/* XY pad: Y+ centred over Y-, X- and X+ either side */
+.xy{display:grid;grid-template-columns:repeat(3,var(--btn));
+  grid-auto-rows:var(--btn);gap:8px}
+.gauges{display:flex;gap:14px;flex-wrap:wrap}
+.gauge{flex:1;min-width:150px;text-align:center}
+.gring{position:relative;display:inline-block;width:132px;height:132px}
+.gring svg{width:132px;height:132px;transform:rotate(-90deg)}
+.ring{fill:none;stroke-width:9}
+.ring.bg{stroke:var(--card2)}
+/* dash values match CIRC in the script: without them the arc reads as full
+   until the first temperature arrives */
+.ring.fg{stroke:var(--accent);stroke-linecap:round;transition:stroke-dashoffset .4s;
+  stroke-dasharray:326.73;stroke-dashoffset:326.73}
+.gauge.hot .ring.fg{stroke:var(--hot)}
+.gval{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  font-size:29px;font-weight:700;font-variant-numeric:tabular-nums}
+.gval small{font-size:14px;color:var(--dim);margin-left:2px}
+.gname{margin-top:8px;font-size:11.5px;color:var(--dim);text-transform:uppercase;
+  letter-spacing:1.2px}
+.gtgt{font-size:12px;color:var(--dim);margin-top:2px}
+
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:34px;
+  background:transparent}
+input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:3px;
+  background:var(--card2)}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:26px;height:26px;
+  border-radius:50%;background:var(--accent);margin-top:-10px;
+  box-shadow:0 2px 8px rgba(45,110,210,.5)}
+/* Firefox ignores the -webkit- pseudo-elements entirely */
+input[type=range]::-moz-range-track{height:6px;border-radius:3px;background:var(--card2)}
+input[type=range]::-moz-range-thumb{width:26px;height:26px;border:0;border-radius:50%;
+  background:var(--accent);box-shadow:0 2px 8px rgba(45,110,210,.5)}
+input[type=number]{background:var(--card2);border:1px solid var(--line);
+  color:var(--ink);border-radius:10px;padding:9px 11px;font-size:15px;width:110px}
+.pill{background:var(--card2);border:1px solid var(--line);border-radius:999px;
+  padding:8px 14px;font-size:13px;cursor:pointer;color:var(--ink)}
+.pill.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.kv{display:flex;justify-content:space-between;font-size:13px;color:var(--dim);
+  padding:3px 0}
+.kv b{color:var(--ink);font-variant-numeric:tabular-nums}
+.log{background:#0a0f1a;border:1px solid var(--line);border-radius:12px;
+  padding:10px;font:12px/1.5 ui-monospace,Menlo,monospace;height:150px;
+  overflow-y:auto;white-space:pre-wrap;color:#9fb4d4}
+.note{font-size:12.5px;color:var(--dim);margin:0}
+table{width:100%;border-collapse:collapse;font-size:13px;margin-top:10px}
+td,th{padding:6px 4px;border-bottom:1px solid var(--line);text-align:right}
+th{color:var(--dim);font-weight:600}
+td:first-child,th:first-child{text-align:left}
+@media (max-width:430px){:root{--btn:56px}.gring{width:118px;height:118px}
+  .gring svg{width:118px;height:118px}}
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <h1>ADV4</h1>
+  <span class="chip"><span id="wsdot" class="dot"></span><span id="wsstate">connecting</span></span>
+  <span class="chip">klipper <b id="kstate">—</b></span>
+  <span class="chip">homed <b id="homed">no</b></span>
+  <span class="spacer"></span>
+  <span class="chip" id="pos">X — Y — Z —</span>
+  <span class="chip" id="gear" style="cursor:pointer">⚙</span>
+</div>
+
+<div class="card">
+  <h2>Temperatures</h2>
+  <div class="gauges">
+    <div class="gauge" id="gE">
+      <div class="gring">
+        <svg viewBox="0 0 120 120"><circle class="ring bg" cx="60" cy="60" r="52"/>
+        <circle class="ring fg" cx="60" cy="60" r="52"/></svg>
+        <div class="gval"><span id="tE">—</span><small>°C</small></div>
+      </div>
+      <div class="gname">Nozzle</div><div class="gtgt" id="tgtE">target off</div>
+    </div>
+    <div class="gauge" id="gB">
+      <div class="gring">
+        <svg viewBox="0 0 120 120"><circle class="ring bg" cx="60" cy="60" r="52"/>
+        <circle class="ring fg" cx="60" cy="60" r="52"/></svg>
+        <div class="gval"><span id="tB">—</span><small>°C</small></div>
+      </div>
+      <div class="gname">Bed</div><div class="gtgt" id="tgtB">target off</div>
+    </div>
+  </div>
+  <div class="row" style="margin-top:16px">
+    <button class="rbtn sm ghost" data-adj="E:-10">−10</button>
+    <button class="rbtn sm ghost" data-adj="E:10">+10</button>
+    <input type="number" id="setE" placeholder="nozzle °C" inputmode="numeric">
+    <button class="rbtn sm" data-m="M104 S{setE}">Set</button>
+  </div>
+  <div class="row" style="margin-top:10px">
+    <button class="rbtn sm ghost" data-adj="B:-5">−5</button>
+    <button class="rbtn sm ghost" data-adj="B:5">+5</button>
+    <input type="number" id="setB" placeholder="bed °C" inputmode="numeric">
+    <button class="rbtn sm" data-m="M140 S{setB}">Set</button>
+  </div>
+  <div class="row" style="margin-top:14px">
+    <span class="pill" data-m="M104 S210&#10;M140 S60">PLA 210/60</span>
+    <span class="pill" data-m="M104 S240&#10;M140 S80">PETG 240/80</span>
+    <span class="pill" data-m="M104 S250&#10;M140 S100">ABS 250/100</span>
+    <span class="pill" data-m="M104 S0&#10;M140 S0">Cooldown</span>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Motion</h2>
+  <div class="row" style="align-items:flex-start;gap:20px">
+    <div class="row" style="gap:8px;flex-direction:column">
+      <div class="xy">
+        <span></span><button class="rbtn" data-jog="Y:1">Y+</button><span></span>
+        <button class="rbtn" data-jog="X:-1">X−</button>
+        <button class="rbtn" data-jog="Y:-1">Y−</button>
+        <button class="rbtn" data-jog="X:1">X+</button>
+      </div>
+    </div>
+    <div class="row" style="gap:8px;flex-direction:column">
+      <button class="rbtn" data-jog="Z:1">Z+</button>
+      <button class="rbtn" data-jog="Z:-1">Z−</button>
+    </div>
+    <div class="row" style="gap:8px;flex-direction:column">
+      <button class="rbtn" data-m="G28">Home</button>
+      <button class="rbtn ghost" data-m="M18">Motors<br>off</button>
+    </div>
+  </div>
+  <div class="row" style="margin-top:14px">
+    <span class="note">step</span>
+    <span class="pill on" data-step="10">10 mm</span>
+    <span class="pill" data-step="1">1 mm</span>
+    <span class="pill" data-step="0.1">0.1 mm</span>
+  </div>
+  <div class="row" style="margin-top:14px">
+    <button class="rbtn sm ghost" data-m="M83 G1 E-{dFe} F300">Retract</button>
+    <button class="rbtn sm ghost" data-m="M83 G1 E{dFe} F300">Extrude</button>
+    <span class="note" id="egate"></span>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Tune</h2>
+  <div class="kv"><span>Speed factor — M220</span><b id="vSpeed">100 %</b></div>
+  <input type="range" id="rSpeed" min="10" max="200" step="5" value="100">
+  <div class="kv" style="margin-top:10px"><span>Extrude ratio — M221</span>
+    <b id="vFlow">100 %</b></div>
+  <input type="range" id="rFlow" min="80" max="120" step="1" value="100">
+  <div class="kv"><span>configured extruder rotation_distance</span>
+    <b id="vRd">—</b></div>
+  <div class="row" style="margin-top:6px">
+    <span class="pill" data-m="M220 S100">speed 100</span>
+    <span class="pill" data-m="M221 S100">flow 100</span>
+  </div>
+  <div class="kv" style="margin-top:16px"><span>Part fan — M106</span>
+    <b id="vFan">off</b></div>
+  <input type="range" id="rFan" min="0" max="100" step="5" value="0">
+  <div class="row" style="margin-top:12px">
+    <button class="rbtn sm danger" id="estop">E-STOP</button>
+    <button class="rbtn sm ghost" id="frestart">Firmware<br>restart</button>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Z calibration — paper method</h2>
+  <div class="kv"><span>stored Z offset</span><b id="vZoff">0.000 mm</b></div>
+  <div class="kv"><span>current Z</span><b id="vZnow">—</b></div>
+  <div class="row" style="margin-top:12px">
+    <button class="rbtn sm ghost" data-m="G91 G1 Z-0.05 F30 G90">Z−0.05</button>
+    <button class="rbtn sm ghost" data-m="G91 G1 Z-0.01 F30 G90">Z−0.01</button>
+    <button class="rbtn sm ghost" data-m="G91 G1 Z0.05 F30 G90">Z+0.05</button>
+  </div>
+  <div class="row" style="margin-top:14px;align-items:flex-start">
+    <button class="rbtn" id="z1">Set<br>Z=0</button>
+    <p class="note" style="flex:1;min-width:200px">Put paper on the bed, lower Z
+      until it drags, then press Set Z=0 right there. The value goes into klipper's
+      variables file and is re-applied at every startup, so it survives a restart.</p>
+  </div>
+
+  <h2 style="margin-top:22px">9-point bed map</h2>
+  <div class="row">
+    <button class="rbtn sm" id="z9start">Start</button>
+    <button class="rbtn sm ghost" id="z9next" disabled>Next point</button>
+    <button class="rbtn sm ghost" id="z9stop">Abort</button>
+    <span class="chip">point <b id="z9i">0</b>/9</span>
+  </div>
+  <div id="z9body" style="display:none;margin-top:12px">
+    <p class="note" id="z9msg"></p>
+    <table id="z9table" style="display:none">
+      <tr><th>#</th><th>X</th><th>Y</th><th>Z at drag</th><th>Δ vs mean</th></tr>
+    </table>
+    <div class="row" style="margin-top:12px">
+      <button class="rbtn sm" id="z9apply" disabled>Apply mean<br>as Z=0</button>
+      <button class="rbtn sm ghost" id="z9copy" disabled>Copy bed_mesh</button>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Console</h2>
+  <div class="log" id="log"></div>
+</div>
+
+<script>
+/* Moonraker JSON-RPC over WebSocket. No dependencies, no build step: the page
+ * talks to moonraker directly, so it runs from file:// or from any static
+ * server on the printer's network. */
+let host = localStorage.getItem("ad4host") || "127.0.0.1:7125";
+let ws = null, rpcid = 0, pending = {}, cfg = {};
+
+const $ = (s) => document.querySelector(s);
+const logEl = $("#log");
+function log(line, color) {
+  const d = document.createElement("div");
+  if (color) d.style.color = color;
+  d.textContent = line;
+  logEl.appendChild(d);
+  while (logEl.childNodes.length > 300) logEl.removeChild(logEl.firstChild);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function connect() {
+  ws = new WebSocket("ws://" + host + "/websocket");
+  ws.onopen = () => {
+    $("#wsdot").classList.add("on");
+    $("#wsstate").textContent = "connected";
+    rpc("gcode/subscribe_output", {}).catch(() => {});
+    sub(SUB_CORE);
+    SUB_EXTRA.forEach(sub);
+    httpCfg();
+  };
+  ws.onclose = () => {
+    $("#wsdot").classList.remove("on");
+    $("#wsstate").textContent = "offline";
+    $("#kstate").textContent = "—";
+    log("disconnected from " + host, "#ff8a94");
+    setTimeout(connect, 2500);
+  };
+  ws.onmessage = (ev) => {
+    const m = JSON.parse(ev.data);
+    if (m.id && pending[m.id]) {
+      const { resolve, reject } = pending[m.id];
+      delete pending[m.id];
+      m.error ? reject(new Error(m.error.message || "error")) : resolve(m.result);
+      return;
+    }
+    if (m.method === "notify_status_update") apply(m.params[0]);
+    else if (m.method === "notify_gcode_response") log(m.params[0]);
+    else if (m.method === "notify_klippy_shutdown") log("klipper SHUTDOWN", "#ff8a94");
+    else if (m.method === "notify_klippy_ready") log("klipper ready", "#7ee7b0");
+    else if (m.method === "notify_klippy_disconnected") log("klipper disconnected", "#ff8a94");
+  };
+}
+
+function rpc(method, params) {
+  return new Promise((resolve, reject) => {
+    if (!ws || ws.readyState !== 1) return reject(new Error("not connected"));
+    const id = ++rpcid;
+    // This moonraker rejects any request without "jsonrpc":"2.0" (-32600
+    // Invalid Request, common.py process_object), so the field is mandatory.
+    ws.send(JSON.stringify({ jsonrpc: "2.0", method, params, id }));
+    pending[id] = { resolve, reject };
+    setTimeout(() => {
+      if (pending[id]) { delete pending[id]; reject(new Error(method + " timed out")); }
+    }, 20000);
+  });
+}
+const script = (s) => rpc("printer.gcode.script", { script: s })
+  .catch((e) => log("! " + e.message, "#ff8a94"));
+
+const SUB_CORE = {
+  extruder: ["temperature", "target", "can_extrude"],
+  heater_bed: ["temperature", "target"],
+  gcode_move: ["speed_factor", "extrude_factor", "gcode_position"],
+  toolhead: ["position", "homed_axes"],
+  print_stats: ["state", "filename", "progress"],
+  webhooks: ["state"]
+};
+// Optional objects get their own subscription: one unknown object name makes
+// moonraker reject the whole request, which would leave the panel blank.
+const SUB_EXTRA = [{ fan: ["speed"] }, { save_variables: ["variables"] }];
+function sub(objects) {
+  rpc("printer.objects.subscribe", { objects })
+    .then((r) => apply(r.status))
+    .catch((e) => { if (objects === SUB_CORE) log("subscribe failed: " + e.message, "#ff8a94"); });
+}
+
+async function httpCfg() {
+  try {
+    const r = await fetch("http://" + host + "/printer/objects/query?configfile=settings");
+    cfg = (await r.json()).result.status.configfile.settings;
+    const rd = cfg.extruder && cfg.extruder.rotation_distance;
+    if (rd) $("#vRd").textContent = rd.toFixed(2) + " mm";
+  } catch (e) { /* introspection is optional */ }
+}
+
+const st = { E: {}, B: {}, gm: {}, th: {}, ps: {}, wh: {}, fan: {}, sv: {} };
+const CIRC = 2 * Math.PI * 52;
+function ring(sel, frac) {
+  const el = $(sel + " .ring.fg");
+  el.style.strokeDasharray = CIRC;
+  el.style.strokeDashoffset = CIRC * (1 - Math.max(0, Math.min(1, frac)));
+}
+function apply(s) {
+  for (const [k, o] of [["extruder", st.E], ["heater_bed", st.B], ["gcode_move", st.gm],
+                        ["toolhead", st.th], ["print_stats", st.ps], ["webhooks", st.wh],
+                        ["fan", st.fan]]) {
+    if (s[k]) Object.assign(o, s[k]);
+  }
+  if (s.save_variables) Object.assign(st.sv, s.save_variables.variables || {});
+  render();
+}
+const drag = {};
+// gcode_move.gcode_position is the coordinate the operator reads; toolhead.position
+// is the raw kinematic one and ignores SET_GCODE_OFFSET entirely, so using it for
+// the Z readout would hide the paper offset we just set.
+const gpos = () => st.gm.gcode_position || st.th.position;
+function render() {
+  const t = (v) => (v === undefined ? "—" : v.toFixed(1));
+  $("#tE").textContent = t(st.E.temperature);
+  $("#tB").textContent = t(st.B.temperature);
+  $("#tgtE").textContent = st.E.target ? "target " + st.E.target + " °C" : "target off";
+  $("#tgtB").textContent = st.B.target ? "target " + st.B.target + " °C" : "target off";
+  ring("#gE", (st.E.temperature || 0) / 265);
+  ring("#gB", (st.B.temperature || 0) / 120);
+  $("#gE").classList.toggle("hot", !!st.E.target);
+  $("#kstate").textContent = st.wh.state || "—";
+  const h = st.th.homed_axes || "";
+  $("#homed").textContent = (h || "no").toUpperCase();
+  const p = gpos();
+  if (p) $("#pos").textContent =
+    "X " + p[0].toFixed(1) + "  Y " + p[1].toFixed(1) + "  Z " + p[2].toFixed(2);
+  $("#vZnow").textContent = p ? p[2].toFixed(3) + " mm" : "—";
+  $("#vZoff").textContent = (st.sv.z_offset || 0).toFixed(3) + " mm";
+  if (!drag.speed) $("#vSpeed").textContent = Math.round((st.gm.speed_factor || 1) * 100) + " %";
+  if (!drag.flow) {
+    $("#vFlow").textContent = Math.round((st.gm.extrude_factor || 1) * 100) + " %";
+    $("#rFlow").value = Math.round((st.gm.extrude_factor || 1) * 100);
+  }
+  if (!drag.fan) {
+    const f = st.fan.speed || 0;
+    $("#vFan").textContent = f ? Math.round(f * 100) + " %" : "off";
+    $("#rFan").value = Math.round(f * 100);
+  }
+  $("#egate").textContent = st.E.can_extrude ? "" :
+    "extrude locked below " + ((cfg.extruder && cfg.extruder.min_extrude_temp) || 170) + " °C";
+  if (st.ps.state === "printing")
+    $("#kstate").textContent = st.wh.state + " · printing " +
+      Math.round((st.ps.progress || 0) * 100) + "%";
+  if (z9.live) $("#z9i").textContent = z9.i;
+}
+
+/* ---- buttons ---- */
+// {name} in data-m is replaced by the value of the input with that id, or by
+// the named entry in `vars`.
+const vars = { dFe: 5 };
+function fill(m) {
+  let blank = false;
+  const out = m.replace(/\{(\w+)\}/g, (_, k) => {
+    const el = document.getElementById(k);
+    if (el) {
+      const v = parseFloat(el.value);
+      if (!isFinite(v)) { blank = true; return 0; }
+      return v;
+    }
+    return vars[k] !== undefined ? vars[k] : 0;
+  });
+  // An empty field must not turn into "M104 S0" — that silently cuts the
+  // heater instead of doing nothing.
+  return blank ? null : out;
+}
+document.querySelectorAll("[data-m]").forEach((b) => b.addEventListener("click", () => {
+  const s = fill(b.dataset.m);
+  if (s !== null) script(s);
+}));
+
+let jogStep = 10;
+document.querySelectorAll("[data-step]").forEach((p) =>
+  p.addEventListener("click", () => {
+    document.querySelectorAll("[data-step]").forEach((q) => q.classList.remove("on"));
+    p.classList.add("on");
+    jogStep = parseFloat(p.dataset.step);
+  }));
+document.querySelectorAll("[data-jog]").forEach((b) => b.addEventListener("click", () => {
+  const [axis, sign] = b.dataset.jog.split(":");
+  const d = parseFloat(sign) * jogStep;
+  const feed = axis === "Z" ? 60 : 3000;
+  script("G91 G1 " + axis + (d < 0 ? "-" : "") + Math.abs(d) + " F" + feed + " G90");
+}));
+document.querySelectorAll("[data-adj]").forEach((b) => b.addEventListener("click", () => {
+  const [which, delta] = b.dataset.adj.split(":");
+  const cur = (which === "E" ? st.E.target : st.B.target) || 0;
+  const next = Math.max(0, cur + parseFloat(delta));
+  script((which === "E" ? "M104 S" : "M140 S") + next);
+}));
+
+function slider(id, key, send) {
+  const el = $(id);
+  el.addEventListener("input", () => { drag[key] = true; });
+  el.addEventListener("change", () => { drag[key] = false; send(parseFloat(el.value)); });
+}
+slider("#rSpeed", "speed", (v) => { $("#vSpeed").textContent = v + " %"; script("M220 S" + v); });
+slider("#rFlow", "flow", (v) => { $("#vFlow").textContent = v + " %"; script("M221 S" + v); });
+slider("#rFan", "fan", (v) => script(v > 0 ? "M106 S" + Math.round(v * 2.55) : "M107"));
+$("#estop").addEventListener("click", () => {
+  if (confirm("Emergency stop (M112) shuts the MCU down.")) script("M112");
+});
+$("#frestart").addEventListener("click", () => {
+  if (confirm("Firmware restart?")) script("FIRMWARE_RESTART");
+});
+$("#gear").addEventListener("click", () => {
+  const v = prompt("moonraker host:port", host);
+  if (v) { localStorage.setItem("ad4host", v.trim()); location.reload(); }
+});
+
+/* ---- Z calibration ----
+ * The stored offset is absolute: SET_GCODE_OFFSET Z=<off>. Verified against
+ * klippy (gcode_move.py: displayed = last_position - base_position, and the
+ * command moves base_position by off - homing_position): raising the offset
+ * lowers the reported Z by the same amount. So if the paper drags at displayed
+ * Z=z, making that height read 0 needs (old + z). ZCAL_SET in printer.cfg saves
+ * it and applies it in one go. */
+function setZOffset(off) {
+  script("ZCAL_SET Z=" + off.toFixed(3));
+  log("Z offset -> " + off.toFixed(3) + " mm", "#7ee7b0");
+}
+$("#z1").addEventListener("click", () => {
+  const p = gpos();
+  if (!p) return log("no position reported yet", "#ff8a94");
+  setZOffset((st.sv.z_offset || 0) + p[2]);
+});
+
+const z9 = { live: false, i: 0, pts: [], grid: [], mean: 0 };
+$("#z9start").addEventListener("click", () => {
+  const mx = (cfg.stepper_x && cfg.stepper_x.position_max) || 220;
+  const my = (cfg.stepper_y && cfg.stepper_y.position_max) || 200;
+  z9.grid = [];
+  for (const fy of [0.15, 0.5, 0.85])
+    for (const fx of [0.15, 0.5, 0.85])
+      z9.grid.push([Math.round(mx * fx), Math.round(my * fy)]);
+  Object.assign(z9, { live: true, i: 0, pts: [] });
+  $("#z9body").style.display = "block";
+  $("#z9next").disabled = false;
+  $("#z9table").style.display = "none";
+  $("#z9apply").disabled = $("#z9copy").disabled = true;
+  nextPoint();
+});
+$("#z9stop").addEventListener("click", () => {
+  z9.live = false;
+  $("#z9next").disabled = true;
+  $("#z9msg").textContent = "aborted — nothing was changed";
+});
+function nextPoint() {
+  if (z9.i >= 9) return finish9();
+  const [x, y] = z9.grid[z9.i];
+  $("#z9msg").innerHTML = "Point " + (z9.i + 1) + " of 9: moving to X" + x +
+    " Y" + y + ". Lower Z until the paper drags, then press <b>Next point</b>.";
+  script("G90\nG1 Z5 F600\nG1 X" + x + " Y" + y + " F3000");
+}
+$("#z9next").addEventListener("click", () => {
+  const p = gpos();
+  if (!p) return;
+  const [x, y] = z9.grid[z9.i];
+  z9.pts.push({ x, y, z: p[2] });
+  z9.i++;
+  nextPoint();
+});
+function finish9() {
+  z9.live = false;
+  $("#z9next").disabled = true;
+  const zs = z9.pts.map((p) => p.z);
+  z9.mean = zs.reduce((a, b) => a + b, 0) / zs.length;
+  const t = $("#z9table");
+  t.style.display = "table";
+  while (t.rows.length > 1) t.deleteRow(1);
+  z9.pts.forEach((p, i) => {
+    const r = t.insertRow(-1);
+    r.insertCell().textContent = i + 1;
+    r.insertCell().textContent = p.x;
+    r.insertCell().textContent = p.y;
+    r.insertCell().textContent = p.z.toFixed(3);
+    r.insertCell().textContent = (p.z - z9.mean).toFixed(3);
+  });
+  $("#z9msg").innerHTML = "Mean <b>" + z9.mean.toFixed(3) + "</b> mm, spread <b>" +
+    (Math.max(...zs) - Math.min(...zs)).toFixed(3) + "</b> mm. The mean is your Z=0; " +
+    "the per-point deltas are bed flatness, which a single-Z cartesian can only " +
+    "compensate through a bed_mesh profile.";
+  $("#z9apply").disabled = $("#z9copy").disabled = false;
+}
+$("#z9apply").addEventListener("click", () => setZOffset((st.sv.z_offset || 0) + z9.mean));
+$("#z9copy").addEventListener("click", () => {
+  // A bed_mesh point is the height the nozzle must ADD at that XY, so a point
+  // measured higher than the mean needs a negative correction.
+  const rows = z9.pts.map((p) => (-(p.z - z9.mean)).toFixed(4));
+  const g = z9.grid;
+  const blk = "[bed_mesh default]\nversion = 1\npoints =\n\t" +
+    rows.slice(0, 3).join(", ") + "\n\t" + rows.slice(3, 6).join(", ") + "\n\t" +
+    rows.slice(6).join(", ") + "\nx_count = 3\ny_count = 3\nmesh_x_pps = 2\n" +
+    "mesh_y_pps = 2\nalgo = lagrange\ntension = 0.2\nmin_x = " + g[0][0] +
+    "\nmax_x = " + g[8][0] + "\nmin_y = " + g[0][1] + "\nmax_y = " + g[8][1];
+  const done = () => log("bed_mesh profile copied — paste it into printer.cfg " +
+    "under SAVE_CONFIG, replacing the existing [bed_mesh default]");
+  if (navigator.clipboard) navigator.clipboard.writeText(blk).then(done, () => log(blk));
+  else log(blk);
+});
+
+connect();
+</script>
+</body>
+</html>

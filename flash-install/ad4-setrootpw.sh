@@ -38,7 +38,10 @@ echo "root password changed (/etc/shadow root entry rewritten)"
 
 # Keep SSH reachable after a reboot, or a new password is a lockout risk.
 if [ -f /opt/auto_run.sh ] && ! grep -qF "dropbear" /opt/auto_run.sh 2>/dev/null; then
-    cp -f /opt/auto_run.sh /opt/auto_run.sh.ad4-orig 2>/dev/null
+    # Never overwrite .ad4-orig: the installer's copy is the pristine stock
+    # file, and replacing it with this already-patched one would make a later
+    # RESTORE restore the Klipper gate instead of removing it.
+    [ -f /opt/auto_run.sh.ad4-orig ] || cp -f /opt/auto_run.sh /opt/auto_run.sh.ad4-orig 2>/dev/null
     echo "/bin/dropbear -R -p 22 &" >> /opt/auto_run.sh
     echo "dropbear start line added to /opt/auto_run.sh (was missing)"
 fi

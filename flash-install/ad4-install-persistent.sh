@@ -53,13 +53,19 @@ cp -f "$WORK_DIR/ad4-net.conf"         "$BASE/" 2>/dev/null
 # bench helpers, so they are still there after the stick is gone
 cp -f "$WORK_DIR/ad4-revcheck.sh"      "$BASE/" 2>/dev/null
 cp -f "$WORK_DIR/ad4-setrootpw.sh"     "$BASE/" 2>/dev/null
+# The revert must survive the stick: without the uninstaller AND the stock
+# hex on eMMC, `sh /opt/ad4-klipper/ad4-uninstall-persistent.sh` is a no-op
+# and the MCU can only be restored by re-plugging the stick.
+cp -f "$WORK_DIR/ad4-uninstall-persistent.sh" "$BASE/" 2>/dev/null
+cp -f "$WORK_DIR/factory-HD.hex"     "$BASE/" 2>/dev/null
 # klipper hex: accept either name on the stick -> klipper.hex on eMMC
 if [ -f "$WORK_DIR/klipper.hex" ]; then
   cp -f "$WORK_DIR/klipper.hex" "$BASE/klipper.hex" 2>/dev/null
 elif [ -f "$WORK_DIR/klipper-ad4.hex" ]; then
   cp -f "$WORK_DIR/klipper-ad4.hex" "$BASE/klipper.hex" 2>/dev/null
 fi
-chmod +x "$BASE/ad4-daemon.sh" "$BASE/ad4-bridge" "$BASE/IAPCommand" 2>/dev/null
+chmod +x "$BASE/ad4-daemon.sh" "$BASE/ad4-bridge" "$BASE/IAPCommand" \
+         "$BASE/ad4-uninstall-persistent.sh" 2>/dev/null
 sync
 
 # The C bridge is REQUIRED for a no-stick boot (no python3 on SoC).

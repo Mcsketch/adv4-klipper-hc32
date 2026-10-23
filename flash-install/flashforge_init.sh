@@ -39,8 +39,11 @@
 #   ad4-revcheck.sh           read-only NA-vs-HD MCU probe
 #   ad4-net.conf              OPTIONAL SOC_IP= SOC_NET= BRIDGE_PORT=
 #   ad4-access.conf           OPTIONAL ROOT_PASS= (kept out of git)
-#   RESTORE                   OPTIONAL: flash factory-HD.hex (full revert)
+#   RESTORE                   OPTIONAL: revert — unwind the boot hook and
+#                             flash factory-HD.hex back onto the MCU
 #   NO_FLASH                  OPTIONAL: skip MCU flashing, do SoC access only
+#                             (with RESTORE: unwind the hook, leave the MCU
+#                             image alone — vendor UI back, MCU still Klipper)
 #   PERSISTENT                OPTIONAL: install eMMC boot hook + reboot
 #
 # OUTPUT (where to read it without a console):
@@ -291,8 +294,12 @@ check_base() {
 # Flag-file modes:
 #   RESTORE  -> flash factory-HD.hex (full stock restore)
 #   NO_FLASH -> skip MCU flashing entirely (SoC access + bridge only)
+#   RESTORE + NO_FLASH -> unwind the SoC hook only, leave the MCU image
+#             alone (non-destructive revert; see the warning below)
 #   (neither) -> flash klipper.hex
-if [ -f "$WORK_DIR/RESTORE" ]; then
+if [ -f "$WORK_DIR/RESTORE" ] && [ -f "$WORK_DIR/NO_FLASH" ]; then
+  IMG=""; FLAG=restore-noflash; MODE=skip; FLASH_SKIP=1
+elif [ -f "$WORK_DIR/RESTORE" ]; then
   IMG="$WORK_DIR/factory-HD.hex"; FLAG=restore; MODE=factory; FLASH_SKIP=0
 elif [ -f "$WORK_DIR/NO_FLASH" ]; then
   IMG=""; FLAG=noflash; MODE=skip; FLASH_SKIP=1
@@ -432,11 +439,27 @@ else
   RC=0; USED="skip"
 fi
 
-# ---- RESTORE = full revert, reboot to clean stock -------------
+# ---- RESTORE = revert, reboot to clean stock ------------------
 if [ -f "$WORK_DIR/RESTORE" ]; then
-  if [ -f /opt/ad4-klipper/enable ] && [ -f "$WORK_DIR/ad4-uninstall-persistent.sh" ]; then
+  # The enable flag is NOT the only trace of an install: the soft toggle
+  # (rm enable) leaves /opt/auto_run.sh patched, and keying off the flag
+  # alone would reflash the MCU and leave the gate in place forever.
+  NEED_UNWIND=0
+  [ -f /opt/ad4-klipper/enable ] && NEED_UNWIND=1
+  grep -qF "/opt/ad4-klipper/ad4-daemon.sh" /opt/auto_run.sh /etc/init.d/rcS 2>/dev/null && NEED_UNWIND=1
+  [ -f /opt/auto_run.sh.ad4-orig ] && NEED_UNWIND=1
+  if [ "$NEED_UNWIND" = 1 ] && [ -f "$WORK_DIR/ad4-uninstall-persistent.sh" ]; then
     LOGF "unwinding persistent hook (ad4-uninstall-persistent.sh --no-mcu)"
     sh "$WORK_DIR/ad4-uninstall-persistent.sh" --no-mcu >> "$LOG" 2>&1
+  elif [ "$NEED_UNWIND" = 1 ]; then
+    LOGF "!! ad4-uninstall-persistent.sh not on the stick: MCU reflashed but the boot hook stays patched"
+  else
+    LOGF "nothing to unwind (no enable flag, no patched rc file, no backup)"
+  fi
+  if [ "$FLAG" = "restore-noflash" ]; then
+    LOGF "NOTE: NO_FLASH was set, so the MCU still runs the KLIPPER image."
+    LOGF "      The vendor UI is back but cannot drive that firmware; run a"
+    LOGF "      RESTORE stick WITHOUT NO_FLASH to put the stock MCU image back."
   fi
   echo "restore complete" >> "$STATUS"; sync
   LOGF "restore complete. rebooting to clean stock."; sleep 2

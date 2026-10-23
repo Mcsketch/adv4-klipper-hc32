@@ -17,6 +17,7 @@ Options (environment variables):
 | `NO_FLASH=1` | do not touch the MCU — SoC access + bridge only |
 | `NO_PERSISTENT=1` | one-shot stick, no eMMC changes |
 | `RESTORE=1` | reflash `factory-HD.hex` and unwind the boot hook |
+| `RESTORE=1 NO_FLASH=1` | unwind the boot hook only, leave the MCU image alone |
 
 ## At boot the stick does, in order
 
@@ -50,9 +51,24 @@ rm    /opt/ad4-klipper/enable   # vendor UI back on next boot
 touch /opt/ad4-klipper/enable   # Klipper daemon back
 ```
 
-Full revert: build the stick with `RESTORE=1` (reflashes the stock MCU image
-and runs `ad4-uninstall-persistent.sh --no-mcu` for you). The untouched
-original is at `/opt/auto_run.sh.ad4-orig`.
+Three revert paths, deepest first:
+
+```sh
+# 1. on the SoC, no stick — full revert incl. the MCU image
+sh /opt/ad4-klipper/ad4-uninstall-persistent.sh
+
+# 2. stick with RESTORE=1 — same thing, run for you (it flashes the MCU
+#    itself, so it calls the uninstaller with --no-mcu)
+RESTORE=1 ./build-stick.sh /Volumes/MYSTICK
+
+# 3. stick with RESTORE=1 + NO_FLASH=1 — vendor UI back, MCU untouched
+#    (still Klipper, so the vendor app will not drive the motors)
+RESTORE=1 NO_FLASH=1 ./build-stick.sh /Volumes/MYSTICK
+```
+
+The uninstaller and `factory-HD.hex` are both copied to `/opt/ad4-klipper`
+at install time, so path 1 works with no stick in hand. The untouched stock
+boot file stays at `/opt/auto_run.sh.ad4-orig`.
 
 ## Root password
 

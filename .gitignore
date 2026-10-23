@@ -39,3 +39,4 @@ FlashForge-Hacks-main/
 
 # cross-compiled ARM binaries — rebuild from *.c
 bridge/*_arm
+stm32isp-ad4/*_arm

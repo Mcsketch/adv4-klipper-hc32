@@ -3,6 +3,18 @@
 Facts extracted from the official firmware package (V2.2.4 / control 2.3.0, build
 `20230216`) and the eMMC backup. Target board: **HC32F460 (HD revision)**.
 
+> **SETTLED 2026-10-22 — heater/sensor map (PROVEN by firmware RE + live heating):**
+> hotend heater **PA1** (TMRA2 Ch2, fw clamps 250/300C) · bed heater **PA7**
+> (TMRA1 Ch5, fw clamps 200/130C) · hotend NTC **PA0** (ADC1 CH0) · bed NTC
+> **PA5** (ADC1 CH5) · hotend fan **PC2** (spins >50C) · chamber fan **PB9**
+> (TMRA4). ADC DR is **right-aligned 12-bit** (`& 0xFFF`; the old `>>4` was
+> wrong). **PC10 = USART1_TX @9600, NOT a TMC UART.** PC0 is NOT an ADC input
+> in the factory design. Stepper/endstop pins remain TRACED GUESSES.
+> Live proof: M140 S60 → bed 14.9→36.6C in 60s at power 1.0; M104 S60 →
+> hotend 60.17C, PID settled 3.4%; both sensors read ~14.5C at ~13C room.
+> RE artifacts: `/tmp/heater-re/` (hd.bin, hd.asm, luts.txt); asm addr
+> − 0x08000000 = runtime, − 0x0800C000 = file offset.
+
 ---
 
 ## 1. System architecture
@@ -158,7 +170,8 @@ Key facts:
 Port clock: `CONFIG_CLOCK_FREQ=200000000` (200 MHz). `CONFIG_WANT_TMCUART=y` (TMC2209-over-UART
 supported by the port, `tmcuart.c`). The port does **not** implement `temperature_mcu`.
 
-### 3.3 Board-traced pins (traced on the physical mainboard, kept as authoritative)
+### 3.3 Board pins (traced on the physical mainboard; heater/sensor rows now
+corrected by firmware RE + live tests — the trace alone was NOT authoritative)
 
 | Function | Pin | Note |
 |---|---|---|
@@ -169,18 +182,18 @@ supported by the port, `tmcuart.c`). The port does **not** implement `temperatur
 | X endstop | ^PC3 | |
 | Y endstop | ^PC1 | |
 | Z endstop | !PB5 | |
-| Hotend heater | PA1 | |
-| Bed heater | PC4 | |
-| Bed thermistor | PA0 | valid ADC ✅ |
-| Hotend thermistor | **unknown — probe** | must be one of the valid ADC pins; PB7 (stock template) is invalid |
-| Hotend fan | PC2 (`heater_fan`) | |
-| Part fan | PA5 | |
-| Controller fan | PC5 | |
-| Chamber fan | PB9 | |
+| Hotend heater | PA1 (PROVEN) | fw RE: PORT_SetFunc AF4 @0x800f1e2 → TMRA2 Ch2; fw clamps 250/300C. Live: M104 S60 reached 60.17C. was: PA1 "traced" — now confirmed |
+| Bed heater | **PA7** (PROVEN) | fw RE: AF4 @0x800f0d6 → TMRA1 Ch5; fw clamps 200/130C. Live: M140 S60 → 14.9→36.6C in 60s. **was: PC4 — disproven by fw RE** |
+| Hotend thermistor | **PA0** (PROVEN) | ADC1 CH0; fw converts R = 4700·adc/(4095−adc) — byte-for-byte Klipper's Thermistor formula → pullup 4700 correct. **was: "bed thermistor" — wrong** |
+| Bed thermistor | **PA5** (PROVEN) | ADC1 CH5; bed LUT keyed on RAW ADC (no ohm conversion). **was: "part fan PA5" — wrong** |
+| Hotend fan | PC2 (PROVEN) | `heater_fan`, auto-starts >50C (observed live) |
+| Part fan | **unknown — probe** | **was: PA5 — that is the bed NTC.** Only other fan in fw is PB9 (below); may be the part fan |
+| Controller fan | PC5 | GUESS (traced) |
+| Chamber fan | PB9 (PROVEN as PWM) | fw RE: AF4 @0x8011036 → TMRA4. Whether it is chamber vs part fan: GUESS |
 | LED | **unknown — probe** | stock template: PB12 (unconfirmed) |
-| TMC2209 UART (shared) | PC10 | 4:1 analog mux, COM = PC10 |
-| Mux select A / B | PB10 / PB1 | |
-| Mux channel map | X = ch0, E = ch1, Y = ch2, Z = ch3 | `select_pins` per axis as in the config |
+| TMC2209 UART (shared) | ~~PC10~~ **unknown** | **DISPROVEN 2026-10-22:** fw RE shows PC10 = AF32 USART1_TX @9600 (@0x8016c9c), not a TMC UART. Real TMC config pins unknown; tmc2209 blocks disabled in printer.cfg |
+| Mux select A / B | PB10 / PB1 | GUESS — tied to the disproven PC10 mux theory |
+| Mux channel map | X = ch0, E = ch1, Y = ch2, Z = ch3 | GUESS — same |
 | MCU ↔ SoC UART | SoC `/dev/ttyS1` @ 115200 | uses MCU USART0; becomes **inactive for Klipper** after the serial move to PA3/PA2 |
 
 ---
@@ -202,27 +215,36 @@ four LUTs — `0x1A6AC, 0x1A88C, 0x1A974, 0x1A4CC` (i.e. VMA `0x0801A6AC / 0x080
 descriptors below are keyed to those addresses. (In the NA image the same address holds
 unrelated data, not a pointer array.) The descriptors (VMA → content):
 
-| VMA | Content | Interpretation |
-|---|---|---|
-| `0x0801A4CC` | pair list climbing to ≈ 263 °C | **hotend, high-temp nozzle curve** |
-| `0x0801A6AC` | 8 B/entry (u32 temp×10, u32 adc): (10.2 °C, 300), (11.0, 295), (11.9, 290), (12.8, 285) … | **bed** (30+ entries, 10.2 °C → ≥ 147 °C) |
-| `0x0801A88C` | small/secondary range | secondary sensor |
-| `0x0801A974` | small/secondary range | secondary sensor |
+**Resolved 2026-10-22** — the consumer path was found by disassembly (was: "not
+resolvable"; the indirect path is a runtime fetcher):
 
-Two distinct hotend curves exist in the image (standard: ADC 0→384, 8.1 °C → 215.2 °C;
-high-temp up to ≈ 408 °C tabulated), matching the interchangeable nozzles (0.3/0.4/0.6 mm,
-rated up to 265 °C).
+- LUT lookup `0x8013304(raw, sensor_id, maxtemp)` → fetcher `0x8015cac`; tables are
+  8-byte `{key, value}` pairs, binary search over idx 0..59; gate byte `0x1FFF84F2`
+  (0 = bypass LUT).
+- **sensor_id 0 = HOTEND** (base `0x0801A6AC`): key = **OHMS**, value = °C —
+  (102 Ω, 300C), (110, 295), (119, 290) … (10490, 85). **was: "bed, (temp×10, adc)"
+  — misparse; the pairs are (ohms, temp).**
+- **sensor_id 3 = BED**: key = **RAW ADC** (no ohm conversion), error shutdown >130C.
+- Hotend ADC consumer `0x8016d14`: averages 20 DMA samples, converts
+  `R = 4700·avg/(4095−avg)` @0x8016d36–42, error shutdown ≥300C.
+  Bed ADC consumer `0x80133c0`: 20-sample average, feeds raw ADC to the LUT.
+- **ADC1 seq-A channel mask `0x21` = CH0 + CH5 only** → exactly PA0 (hotend) and
+  PA5 (bed). PC0 is not sampled by the factory fw.
+- The **second hotend table is VESTIGIAL**: code exists (`0x8013490`, called only
+  from `0x80184fa`) but its raw globals `0x1FFF8500/02/04` are only initialized
+  (3170 / 15458 / 114) and never fed by the ADC. The live hotend always uses
+  LUT0 (1 Ω → 300C). **One curve covers both the 240C and 265C hotends.**
 
-Facts and limits of this section:
+Facts and limits (updated):
 
-- The **existence** of the four descriptors and their **value content** are byte-verified.
-- The **consumer function** that loads a given table was **not resolvable from the flat image**
-  (literal-pool, `movw/movt`, and base-normalized searches all return zero references — the
-  code reaches the tables through an indirect/indexed path). The table→physical-thermistor
-  mapping is therefore **value-based inference**, to be confirmed by the live probe
-  (warm each sensor, observe which `[temperature_sensor]` rises).
-- The tables are **temperature ↔ ADC-value** LUTs, not resistance curves; the absolute ADC
-  scaling (gain, Vref) must be validated live with `QUERY_ADC`.
+- Table contents and the consumer chain are now byte-verified + live-confirmed
+  (room-temp readings and heater tests match the curves).
+- Absolute ADC scaling **RESOLVED**: DR is right-aligned 12-bit (0..4095), pullup
+  4700 Ω — the fw ohm formula is identical to Klipper's `Thermistor.calc_temp`.
+  The old "LUT scale 0..384" impression came from the (ohms, temp) misparse.
+- Klipper fits fitted from these LUTs (in printer.cfg): `ad4_hotend`
+  55C/29559Ω, 70C/17285Ω, 260C/189Ω (max err 0.68C over 20–300C); `ad4_bed`
+  29C/81221.9Ω, 110C/5200.5Ω, 118C/4214.5Ω (max err 0.53C over 20–130C).
 
 ### 4.2 SoC side — nozzle calibration model (the "12"/"14" values)
 

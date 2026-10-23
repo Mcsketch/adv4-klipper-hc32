@@ -10,7 +10,7 @@
 #
 # What it does:
 #   1. Flash the MCU (klipper, or factory if RESTORE present)
-#      via the C flasher (IAPCommand). Anti-brick: the flasher
+#      via the C flasher (stm32isp-ad4). Anti-brick: the flasher
 #      refuses any image whose base is <= 0x00008000. NOTE (session-5
 #      RE): the HC32F460 has no ROM ISP — the bootloader at 0x0..0xBFFF
 #      is FLASH-resident, so it IS erasable; that guard is exactly what
@@ -27,7 +27,7 @@
 # Stick layout (FAT32, files at root — build-stick.sh puts them there):
 #   flashforge_init.sh        this script
 #   screwflag                 empty file (skips the vendor machine-type check)
-#   IAPCommand                vendor ARM flasher (does the GPIO strapping)
+#   stm32isp-ad4              our ARM flasher (does the GPIO strapping; -s probes the chip)
 #   klipper.hex               Klipper @ 0x0000C000
 #   factory-HD.hex            known-good restore image (never delete)
 #   ad4-bridge                static C TCP<->/dev/ttyS1 relay (the bridge)
@@ -37,6 +37,10 @@
 #   ad4-install-persistent.sh installs the eMMC boot hook
 #   ad4-uninstall-persistent.sh removes it again
 #   ad4-revcheck.sh           read-only NA-vs-HD MCU probe
+#   ad4-screen                OPTIONAL: paints the 800x480 panel and reads
+#                             the touchscreen (installer menu + progress).
+#                             Without it everything still runs from flags.
+#   ad4-rev                   OPTIONAL: one word (NA or HD) shown on the panel
 #   ad4-net.conf              OPTIONAL SOC_IP= SOC_NET= BRIDGE_PORT=
 #   ad4-access.conf           OPTIONAL ROOT_PASS= (kept out of git)
 #   RESTORE                   OPTIONAL: revert — unwind the boot hook and
@@ -123,77 +127,24 @@ pid_alive() {
 }
 
 # ---- sound (buzzer) ---------------------------------------------
-# The board's sound is a PWM piezo. The vendor's own driver is the
-# standalone `play` binary: it opens the /dev/pwm char device (NOT the
-# /sys/class/pwm sysfs nodes), exports pwm1, and ioctls it to play the
-# tune built into it (its main() is hardcoded: buzzerPlay::play(TuneId 7)
-# -> the boot/"voice" sound, ~4 s). We prefer it (vendor-proven, no
-# reverse-engineering of the ioctl). If `play` is absent we fall back to
-# writing the /sys/class/pwm sysfs node directly (best-effort). Sound is
-# always a bonus — if nothing is available we log and continue.
-PLAY_BIN=""
-if [ -x "$WORK_DIR/play" ]; then PLAY_BIN="$WORK_DIR/play"; fi
-[ -n "$PLAY_BIN" ] || PLAY_BIN=$(command -v play 2>/dev/null)
-
-# sysfs fallback (only used when `play` is missing)
-PWM_BASE="${PWM_BASE:-/sys/class/pwm}"
-PWM_DIR=""; PWM_OK=0
-pwm_setup() {
-  for base in "$PWM_BASE" /sys/devices/10000000.palmbus/10005000.pwm/pwm; do
-    for chip in pwmchip0 pwmchip1 pwmchip2 pwmchip3; do
-      d="$base/$chip"; [ -d "$d" ] || continue
-      if [ ! -d "$d/pwm0" ] && [ -e "$d/export" ]; then
-        echo 0 > "$d/export" 2>/dev/null
-        i=0; while [ ! -d "$d/pwm0" ] && [ $i -lt 20 ]; do sleep 0.1 2>/dev/null || break; i=$((i+1)); done
-      fi
-      if [ -e "$d/pwm0/enable" ]; then PWM_DIR="$d"; PWM_OK=1; break; fi
-    done
-    [ "$PWM_OK" = 1 ] && break
-  done
-  return $([ "$PWM_OK" = 1 ] && echo 0 || echo 1)
-}
-tone() { # $1=period ns, $2=on-duration seconds  (sysfs fallback only)
-  [ "$PWM_OK" = 1 ] || return 0
-  echo "$1" > "$PWM_DIR/pwm0/period"    2>/dev/null
-  echo $(( $1 / 2 )) > "$PWM_DIR/pwm0/duty_cycle" 2>/dev/null
-  echo 1 > "$PWM_DIR/pwm0/enable" 2>/dev/null
-  sleep "$2" 2>/dev/null
-  echo 0 > "$PWM_DIR/pwm0/enable" 2>/dev/null
-}
-# chime: $1 = ok | fail | start
-chime() {
-  case "$1" in
-    start) MSG="chime: start blip" ;;
-    ok)    MSG="chime: flash-DONE" ;;
-    fail)  MSG="chime: flash-FAILED" ;;
-  esac
-  if [ -n "$PLAY_BIN" ]; then
-    LOGF "$MSG  (via play, /dev/pwm)"
-    # `play` is self-timed (~4 s); run it in the background so a hang
-    # can't block the flash. No args: its main() is hardcoded.
-    ( "$PLAY_BIN" >/dev/null 2>&1 & ) 2>/dev/null
-    return 0
-  fi
-  # sysfs fallback
-  if [ "$PWM_OK" = 1 ]; then
-    LOGF "$MSG  (via sysfs $PWM_DIR)"
-    case "$1" in
-      start) tone 666667 0.12 ;;
-      ok)    tone 400000 0.18; sleep 0.05 2>/dev/null; tone 285714 0.30 ;;
-      fail)  i=0; while [ $i -lt 3 ]; do tone 1000000 0.25; sleep 0.18 2>/dev/null; i=$((i+1)); done ;;
-    esac
-    echo 0 > "$PWM_DIR/pwm0/enable" 2>/dev/null
-  else
-    LOGF "$MSG  (NO sound path: play missing, no sysfs node - skipped)"
-  fi
-}
-if [ -n "$PLAY_BIN" ]; then
-  LOGF "sound ready: $PLAY_BIN (vendor play, /dev/pwm)"
-else
-  pwm_setup
-  [ "$PWM_OK" = 1 ] && LOGF "sound ready: sysfs $PWM_DIR" \
-                    || LOGF "sound: NO path available (play missing + no sysfs node) - will skip"
+# The piezo is driven by the vendor sunxi PWM driver through the /dev/pwm
+# char device. This kernel exports no /sys/class/pwm pwmchipN, so the
+# ioctls in ad4-buzz (decoded from the vendor `play` binary, whose main() is
+# a hardcoded buzzerPlay::play(TuneId 7)) are the only path that makes
+# sound. Sound is always a bonus: no binary or no /dev/pwm and we log on.
+BUZZ="$WORK_DIR/ad4-buzz"
+BUZZ_OK=0
+[ -x "$BUZZ" ] && [ -e /dev/pwm ] && BUZZ_OK=1
+if [ "$BUZZ_OK" = 1 ]; then LOGF "sound ready: $BUZZ (/dev/pwm)"; else
+  LOGF "sound: skipped (ad4-buzz or /dev/pwm missing)"
 fi
+# chime: $1 = tap | mark | start | ok | fail. "ok" is the completion riff
+# (~5 s), so it is backgrounded: sound must never hold up a flash.
+chime() {
+  [ "$BUZZ_OK" = 1 ] || { LOGF "chime: $1 (no sound path - skipped)"; return 0; }
+  LOGF "chime: $1"
+  ( "$BUZZ" "$1" >/dev/null 2>&1 & ) 2>/dev/null
+}
 
 LOGF "================ AD4 flashforge_init (no-python) ================"
 LOGF "pid=$$  uid=$(id -u 2>/dev/null)  argv: $0 $1 $2"
@@ -244,12 +195,46 @@ if [ -f "$WORK_DIR/ad4-access.conf" ]; then
   LOGF "  ROOT_PASS overridden (${#ROOT_PASS} chars)"
 fi
 
+# ---- on-panel screen (optional) --------------------------------
+# ad4-screen paints the 800x480 framebuffer (/dev/fb0) and reads the
+# TSC2007 touch (/dev/input/event0). auto_run.sh runs THIS before it
+# launches the vendor Qt GUI, so at install time the panel is ours.
+# It is strictly optional: no binary, no /dev/fb0 or no touch -> we fall
+# back to the stick's flag files, exactly as before. A screen failure can
+# never abort an install.
+SCR="$WORK_DIR/ad4-screen"
+SCR_OK=0
+[ -x "$SCR" ] && [ -e /dev/fb0 ] && SCR_OK=1
+if [ "$SCR_OK" = 1 ]; then LOGF "panel: $SCR ready (/dev/fb0 present)"; else
+  LOGF "panel: skipped (binary or /dev/fb0 missing) - flag files decide the mode"
+fi
+MCU_HINT="unknown"
+[ -f "$WORK_DIR/ad4-rev" ] && MCU_HINT=$(head -c 8 "$WORK_DIR/ad4-rev" 2>/dev/null)
+if [ -f /opt/ad4-klipper/enable ]; then INSTALLED_TXT="yes (boot hook on)"
+elif [ -f /opt/auto_run.sh.ad4-orig ]; then INSTALLED_TXT="installed, toggled off"
+else INSTALLED_TXT="no (stock boot)"; fi
+STICK_FILES=""
+for f in klipper.hex factory-HD.hex stm32isp-ad4 ad4-bridge dropbear \
+         ad4-daemon.sh ad4-install-persistent.sh ad4-uninstall-persistent.sh; do
+  [ -f "$WORK_DIR/$f" ] && STICK_FILES="$STICK_FILES $f"
+done
+# SCR <subcommand> [args] - paints one screen; output goes to the log only.
+SCRX() {
+  [ "$SCR_OK" = 1 ] || return 0
+  AD4_MCU="$MCU_HINT" AD4_IP="$SOC_IP" AD4_PORT="$BRIDGE_PORT" \
+  AD4_INSTALLED="$INSTALLED_TXT" AD4_STICK="$STICK_FILES" \
+    "$SCR" "$@" >> "$LOG" 2>&1
+  return 0
+}
+SCRX splash
+
 # ---- inventory of what's on the stick -------------------------
 LOGF "stick inventory ($WORK_DIR):"
 ls -la "$WORK_DIR" >> "$LOG" 2>&1
-for f in screwflag play IAPCommand klipper.hex factory-HD.hex ad4-bridge ad4-serial-bridge.py \
+for f in screwflag stm32isp-ad4 klipper.hex factory-HD.hex ad4-bridge ad4-serial-bridge.py \
          ad4-net.conf ad4-access.conf ad4-daemon.sh ad4-install-persistent.sh \
-         ad4-uninstall-persistent.sh ad4-revcheck.sh RESTORE PERSISTENT NO_FLASH; do
+         ad4-uninstall-persistent.sh ad4-revcheck.sh ad4-screen ad4-buzz ad4-rev \
+         RESTORE PERSISTENT NO_FLASH; do
   [ -f "$WORK_DIR/$f" ] && LOGF "    present: $f ($(wc -c < "$WORK_DIR/$f" 2>/dev/null | tr -d ' ') bytes)" \
                         || LOGF "    absent : $f"
 done
@@ -291,28 +276,78 @@ check_base() {
 }
 
 # ---- select image + guard -------------------------------------
-# Flag-file modes:
+# The flag files set the DEFAULT; the panel menu can then override it by
+# touch (same four tokens, so an unattended stick behaves as before):
 #   RESTORE  -> flash factory-HD.hex (full stock restore)
 #   NO_FLASH -> skip MCU flashing entirely (SoC access + bridge only)
 #   RESTORE + NO_FLASH -> unwind the SoC hook only, leave the MCU image
 #             alone (non-destructive revert; see the warning below)
 #   (neither) -> flash klipper.hex
-if [ -f "$WORK_DIR/RESTORE" ] && [ -f "$WORK_DIR/NO_FLASH" ]; then
-  IMG=""; FLAG=restore-noflash; MODE=skip; FLASH_SKIP=1
-elif [ -f "$WORK_DIR/RESTORE" ]; then
-  IMG="$WORK_DIR/factory-HD.hex"; FLAG=restore; MODE=factory; FLASH_SKIP=0
-elif [ -f "$WORK_DIR/NO_FLASH" ]; then
-  IMG=""; FLAG=noflash; MODE=skip; FLASH_SKIP=1
-else
-  IMG="$WORK_DIR/klipper.hex";    FLAG=klipper; MODE=strict; FLASH_SKIP=0
+if [ -f "$WORK_DIR/RESTORE" ] && [ -f "$WORK_DIR/NO_FLASH" ]; then FLAG=restore-noflash
+elif [ -f "$WORK_DIR/RESTORE" ]; then FLAG=restore
+elif [ -f "$WORK_DIR/NO_FLASH" ]; then FLAG=noflash
+else FLAG=klipper
 fi
-LOGF "selected image: ${IMG:-(none, NO_FLASH)} (mode=$MODE, flag=$FLAG)"
+LOGF "stick flag default: $FLAG"
+
+# ---- which chip is actually in this printer? ------------------
+# The sync reply to 0x43 is the only revision marker that still works once
+# Klipper is in the app window: the flash-resident bootloader below 0xC000
+# answers it whatever is programmed above. It needs ttyS1 to ourselves (the
+# persistent daemon's bridge holds it) and it resets the MCU, so a NO_FLASH
+# run leaves the chip unprobed rather than disturbing a live MCU.
+IAP="$WORK_DIR/stm32isp-ad4"
+if [ "$MCU_HINT" = "unknown" ] && [ -x "$IAP" ] && [ "$FLAG" != "noflash" ]; then
+  # same stops the flash section does a bit later - the probe just needs the
+  # uart, and the vendor app is going down either way
+  pkill_safe "ffstartup-arm"; pkill_safe "adventurer4-arm"
+  kill_fd_holder /dev/ttyS1 2>/dev/null
+  PROBE=$("$IAP" -s 2>&1)
+  LOGF "mcu probe: $(echo "$PROBE" | tr '\n' ' ')"
+  case "$PROBE" in
+    *REV=HD*) MCU_HINT="HD / HC32F460" ;;
+    *REV=NA*) MCU_HINT="NA / N32" ;;
+    *) LOGF "  no bootloader answer: chip stays '$MCU_HINT'" ;;
+  esac
+fi
+LOGF "MCU for the panel: $MCU_HINT"
+
+# ---- the panel gets the last word -----------------------------
+# menu prints the chosen token on stdout and exits 0; 1 = no touchscreen
+# (keep the flags); 2 = SKIP tapped, so change nothing and let the vendor
+# UI boot (auto_run.sh only suppresses it when we exit 0).
+if [ "$SCR_OK" = 1 ]; then
+  LOGF "panel menu up: tapping nothing for 25 s runs '$FLAG'"
+  CHOICE=$(AD4_MCU="$MCU_HINT" AD4_IP="$SOC_IP" AD4_PORT="$BRIDGE_PORT" \
+           AD4_INSTALLED="$INSTALLED_TXT" AD4_STICK="$STICK_FILES" \
+           "$SCR" menu --auto "$FLAG" 25 2>>"$LOG")
+  MRC=$?
+  LOGF "panel menu rc=$MRC token='${CHOICE:-none}'"
+  case "$MRC" in
+    2) LOGF "panel: SKIP tapped - nothing was changed, booting the vendor UI"
+       echo "skipped-at-panel" > "$STATUS" 2>/dev/null; sync
+       exit 2 ;;
+    0) case "$CHOICE" in
+         klipper|restore|noflash|restore-noflash) FLAG="$CHOICE" ;;
+         *) LOGF "panel: unexpected token '$CHOICE' - keeping the flag default" ;;
+       esac ;;
+    *) LOGF "panel: no usable touch input - keeping the flag default" ;;
+  esac
+fi
+case "$FLAG" in
+  restore-noflash) IMG="";                          MODE=skip;    FLASH_SKIP=1 ;;
+  restore)         IMG="$WORK_DIR/factory-HD.hex";  MODE=factory; FLASH_SKIP=0 ;;
+  noflash)         IMG="";                          MODE=skip;    FLASH_SKIP=1 ;;
+  *)               IMG="$WORK_DIR/klipper.hex";     MODE=strict;  FLASH_SKIP=0 ;;
+esac
+LOGF "selected image: ${IMG:-(none, no MCU flash)} (mode=$MODE, flag=$FLAG)"
 if [ "$FLASH_SKIP" = 1 ]; then
-  LOGF "NO_FLASH mode: skipping MCU flash (SoC access + bridge only)"
+  LOGF "no MCU flash this run (SoC access + bridge only)"
   RC=0
   # jump to the post-flash sections; the flash loop below is guarded
 else
-  [ -f "$IMG" ] || FATAL "image missing: $IMG"
+  SCRX status "checking the image" "hex base guard on $IMG" 10
+  [ -f "$IMG" ] || { SCRX fail "image missing" "$IMG is not on the stick"; FATAL "image missing: $IMG"; }
 
   LOGF "hex guard (awk) on $IMG ($MODE):"
   GUARD=$(check_base "$IMG" "$MODE")
@@ -320,6 +355,7 @@ else
   OK=$(printf '%s' "$GUARD" | awk -F'ok=' '{print $2}')
   if [ "$OK" != "1" ]; then
     LOGF "!! hex guard FAILED (ok=$OK). Refusing to flash. MCU left as-is (safe)."
+    SCRX fail "flash refused" "hex base guard failed on $IMG\nthe MCU was left untouched"
     echo "flash-refused($FLAG)" > "$STATUS"; sync; exit 1
   fi
   LOGF "hex guard PASSED"
@@ -373,50 +409,47 @@ fi
 sleep 1
 
 # ---- flash ----------------------------------------------------
-# The MCU is a Huada HC32F460. It has NO ROM ISP: the bootloader answering
-# the sync is FLASH-resident (inferred 0x0..0xBFFF, session-5 RE). Its sync
-# handshake (live-confirmed via strace of the vendor's unstripped
-# IAPCommand) is:
+# The MCU is a Huada HC32F460 (or a Nation N32 on NA boards). It has NO ROM
+# ISP: the bootloader answering the sync is FLASH-resident (0x0..0xBFFF,
+# session-5 RE). Its sync handshake (live-confirmed via strace of the
+# vendor's unstripped IAPCommand, and re-confirmed by our own probe) is:
 #     send 0x43  ->  reply 6 (NA revision) or 7 (HD revision)
 # (earlier drafts had 6/7 swapped). NOT the standard STM32F1 0x43->0x79.
-# So the authoritative flasher is the vendor IAPCommand (1030-byte frames:
-# [cmd][len:2LE][data:1024][crc16:2LE], CRC16-CCITT over cmd+data, ack 0x06).
-# Its signature (from the disassembly + a failed run):
-#     IAPCommand <NA.hex> <HD.hex> <comport>
-# We pass the same image for NA and HD; IAPCommand detects the revision at
-# sync and reads the matching file. Only the factory tool is used; the
-# open-source stm32isp-ad4 (std STM32F1 ops) was removed as a fallback
-# because this bootloader does not speak those commands.
+# stm32isp-ad4 is our own flasher and speaks that exact vendor protocol
+# (1030-byte frames: [cmd][len:2LE][data:1024][crc16:2LE], CRC16-CCITT over
+# cmd+data, ack 0x06) - it was transcribed from IAPCommand, so the vendor
+# binary is no longer needed. One image argument, not the vendor's two:
+#     stm32isp-ad4 -p /dev/ttyS1 <hex>
+# It carries the same anti-brick guard internally (refuses any record below
+# BOOTLOADER_TOP) plus the GPIO strapping (BOOT0 high, NRST pulse).
 do_flash() {
-  # $1 = tool tag (factory only — the open-source flasher was removed)
   case "$1" in
-    factory) "$WORK_DIR/IAPCommand" "$IMG" "$IMG" /dev/ttyS1 ;;
+    factory) "$IAP" -p /dev/ttyS1 -v "$IMG" ;;
   esac > "$WORK_DIR/iap.out" 2>&1
 }
-FAC_OK=0;  [ -x "$WORK_DIR/IAPCommand" ]   && FAC_OK=1
+FAC_OK=0;  [ -x "$IAP" ]   && FAC_OK=1
 if [ "$FLASH_SKIP" = 0 ]; then
-  [ "$FAC_OK" = 1 ] || FATAL "no flasher on stick (need IAPCommand)"
+  [ "$FAC_OK" = 1 ] || FATAL "no flasher on stick (need stm32isp-ad4)"
 fi
 
 RC=1; USED=""
-# Authoritative flasher ONLY: the vendor IAPCommand (correct HC32 ROM
-# protocol). The open-source stm32isp-ad4 targeted the std STM32F1 protocol
-# and always timed out at sync on this ROM — it is removed (cleanup).
-[ "$FAC_OK" = 1 ] || FATAL "no flasher on stick (need IAPCommand)"
+[ "$FAC_OK" = 1 ] || FATAL "no flasher on stick (need stm32isp-ad4)"
 
 if [ "$FLASH_SKIP" = 0 ]; then
 RC=1; USED=""
+SCRX status "flashing the MCU" "this takes about 40 seconds\ndo not power off the printer" 40
 for tag in factory factory; do
   [ "$FAC_OK" = 1 ] || continue
-  TOOLNAME="IAPCommand (vendor, correct HC32 protocol)"
+  TOOLNAME="stm32isp-ad4 (vendor HC32 protocol, our source)"
   LOGF "FLASH attempt via $TOOLNAME (image=$IMG)..."
   chime start
   do_flash "$tag"; RC=$?
   LOGF "$TOOLNAME rc=$RC"
   LOGF "----- flasher output -----"; cat "$WORK_DIR/iap.out" >> "$LOG" 2>&1
   LOGF "----- end flasher output -----"
-  # success = rc 0 AND the vendor's "STM32iap finished HD/NA." marker present
-  if [ "$RC" -eq 0 ] && grep -q "finished" "$WORK_DIR/iap.out" 2>/dev/null; then
+  # success = rc 0 AND the write marker. "STM32iap finished HD/NA." is printed
+  # unconditionally at the end, so it proves contact only, not a good write.
+  if [ "$RC" -eq 0 ] && grep -q "STM32Write: success" "$WORK_DIR/iap.out" 2>/dev/null; then
     USED="$TOOLNAME"; break
   fi
   echo "$FLAG rc=$RC ($TOOLNAME)" > "$STATUS"; sync
@@ -430,17 +463,22 @@ if [ -z "$USED" ]; then
   LOGF "   Likely cause: vendor still holding /dev/ttyS1, or no MCU contact."
   LOGF "   Re-run, or if the board is unresponsive: put a RESTORE file on the stick."
   chime fail
+  SCRX fail "flash failed" "no MCU contact - it is still bootable\nread ad4-flash.log on the stick"
   exit 1
 fi
 LOGF "flash OK via $USED. New MCU firmware is running."
 chime ok
+SCRX status "MCU flashed" "now setting up SoC access" 70
 else
-  LOGF "NO_FLASH: MCU flash skipped (RC=0, USED=skip)"
+  LOGF "MCU flash skipped (RC=0, USED=skip)"
   RC=0; USED="skip"
 fi
 
 # ---- RESTORE = revert, reboot to clean stock ------------------
-if [ -f "$WORK_DIR/RESTORE" ]; then
+# Keyed off the selected mode, not the file, so a RESTORE tapped on the
+# panel unwinds the hook exactly like a RESTORE flag file does.
+if [ "$FLAG" = restore ] || [ "$FLAG" = restore-noflash ]; then
+  SCRX status "restoring" "unwinding the boot hook" 80
   # The enable flag is NOT the only trace of an install: the soft toggle
   # (rm enable) leaves /opt/auto_run.sh patched, and keying off the flag
   # alone would reflash the MCU and leave the gate in place forever.
@@ -462,6 +500,7 @@ if [ -f "$WORK_DIR/RESTORE" ]; then
     LOGF "      RESTORE stick WITHOUT NO_FLASH to put the stock MCU image back."
   fi
   echo "restore complete" >> "$STATUS"; sync
+  SCRX done "restored" "stock firmware and vendor UI are back\nremove the stick, then power cycle"
   LOGF "restore complete. rebooting to clean stock."; sleep 2
   reboot 2>/dev/null || reboot -f 2>/dev/null || /sbin/reboot 2>/dev/null || true
   exit 0
@@ -508,6 +547,7 @@ if [ "$BRIDGE_UP" = 1 ]; then
   LOGF "bridge RUNNING on 0.0.0.0:$BRIDGE_PORT  [$BRIDGE_TAG]  soc_ip=$SOC_IP"
   LOGF "  next: on the MAC run  ad4-mac  (present as /dev/adv4_mcu), then start klippy"
   echo "bridge running ($BRIDGE_TAG)" >> "$STATUS"
+  SCRX status "bridge up" "mcu reachable at $SOC_IP:$BRIDGE_PORT\nssh root@$SOC_IP" 85
   tail -n 5 /var/log/ad4-bridge.log >> "$LOG" 2>/dev/null
 else
   LOGF "bridge NOT started (no C binary on stick)."
@@ -599,6 +639,7 @@ fi
 # ---- optional PERSISTENT eMMC hook ----------------------------
 if [ -f "$WORK_DIR/PERSISTENT" ]; then
   LOGF "PERSISTENT: installing eMMC boot hook"
+  SCRX status "installing the boot hook" "this survives power cycles\nthe printer reboots when it is done" 95
   echo "persistent: installing" > "$STATUS"
   if [ -f "$WORK_DIR/ad4-install-persistent.sh" ]; then
     sh "$WORK_DIR/ad4-install-persistent.sh" >> "$LOG" 2>&1
@@ -613,4 +654,13 @@ fi
 
 LOGF "================ DONE. flag=$FLAG rc=$RC ================"
 echo "done($FLAG) rc=$RC" > "$STATUS"; sync
+if [ "$RC" = 0 ]; then
+  if [ "$BRIDGE_UP" = 1 ]; then
+    SCRX done "klipper installed" "bridge on $SOC_IP:$BRIDGE_PORT\nssh root@$SOC_IP"
+  else
+    SCRX done "done" "no bridge running - see ad4-flash.log"
+  fi
+else
+  SCRX fail "finished with errors" "rc=$RC - read ad4-flash.log on the stick"
+fi
 exit "$RC"

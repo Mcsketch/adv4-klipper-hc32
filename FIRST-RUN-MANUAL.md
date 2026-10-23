@@ -1,169 +1,90 @@
-# AD4 → Klipper — First-Run Manual (the 7 easy steps)
+# AD4 — First-Run Manual
 
-Everything below is a copy-paste or a button click. The scripts do the rest.
-**No soldering.** If a step fails, see [If something goes wrong](#if-something-goes-wrong).
+How to go from a powered-off printer to a live Klipper stack. Everything here
+is **proven on this unit** (2026-10-22): heaters, sensors and the serial chain
+all verified working. The Klipper host is the **Mac** — no RPi needed.
 
-> **Read this first:** the printer's SoC does the MCU flashing (it owns the
-> reset/BOOT0 pins). The RPi/Orange Pi only *runs* Klipper. The two talk over
-> a private Ethernet cable. Your normal home LAN is never touched.
+## Topology
 
----
+```
+[HC32F460 MCU] --USART2 PA9/PA10 @115200--> SoC /dev/ttyS1
+[SoC 192.168.10.10]  ad4-bridge :5000  <--TCP--  klippy on the Mac
+```
 
-## 0. What you'll touch
+The SoC does the MCU flashing (it owns NRST/BOOT0). The Mac runs
+klippy + moonraker + Fluidd.
 
-- **RPi3** (or Orange Pi) — the Klipper host. **Raspberry Pi OS Bookworm Lite,
-  64-bit, headless** (pick "Enable SSH" in Raspberry Pi Imager so you can
-  log in).
-- **1 USB stick**, **FAT32**.
-- **1 Ethernet cable** — straight from the RPi to the **printer's** RJ45
-  (does **not** go to your router).
-
-**The two IPs (the "exotic" private subnet — won't fight your 192.168.1.x router):**
-
-| Device | IP |
-|---|---|
-| RPi wired port | **192.168.10.1** |
-| Printer SoC | **192.168.10.10** |
-
-If you want something less common still, it's a one-line change in
-`soc-hack/ad4-rpi-setup.sh` and `flashdisk/flashforge_init.sh` (the `*_IP=`
-lines) — tell me which and I'll set it.
-
----
-
-## Step 1 — Flash the RPi SD card
-
-1. Raspberry Pi Imager → your SD → **Raspberry Pi OS (Other) → Raspberry Pi
-   OS Lite (64-bit)**.
-2. OS Customization: **enable SSH**, set a hostname (e.g. `ad4`).
-3. Write it to the SD, put it in the RPi, plug in **power + the Ethernet cable
-   to the printer's RJ45**.
-
----
-
-## Step 2 — Put the repo on the RPi
-
-From your Mac (where this repo is):
+## 1. Reach the SoC
 
 ```sh
-rsync -av --exclude work/ ./ /path/to/usb-key/adv4-klip/   # copy to the stick
-```
-then on the RPi (after it's up):
-```sh
-ssh pi@<rpi-ip>
-sudo cp -r /media/*/adv4-klip /root/adv4-klip
+sshpass -p flashforge ssh -o StrictHostKeyChecking=no \
+    -o PubkeyAuthentication=no root@192.168.10.10
 ```
 
-> Or keep it simple: leave `adv4-klip/` on the stick, `cd` to it on the RPi.
+BusyBox (no pkill/pgrep/python3). `/opt/ad4-klipper/` holds `IAPCommand`,
+`ad4-bridge`, `ad4_identify`.
 
----
-
-## Step 3 — Make the USB flash key
-
-On your **Mac**, with the stick FAT32 and mounted:
+## 2. Make sure the bridge is up
 
 ```sh
-cd /path/to/adv4-klip/flashdisk
-./build-usb-stick.sh /Volumes/MYSTICK
+cd /opt/ad4-klipper && ./ad4-bridge 5000 /dev/ttyS1 115200 &
 ```
 
-It lays down the flash payload and **verifies the flasher's checksum and the
-Klipper image's base address** before it copies anything. (This is the
-"never bricked" guarantee.)
+Single-client: it frees the UART when the client (klippy) disconnects, so
+flashing and running never fight over ttyS1. Note: the bridge does **not**
+auto-start after a power-cycle yet — see PERSISTENT-INSTALL.md.
 
----
+## 3. Flash the MCU (vendor IAPCommand — the proven path)
 
-## Step 4 — Flash the printer (this is the "hack")
-
-Unplug the stick from the Mac → **plug it into the printer → power the
-printer on.** The printer's stock boot path runs the script on the stick and:
-
-1. flashes the MCU with Klipper,
-2. sets the SoC to **192.168.10.10**,
-3. starts the MCU-over-Ethernet bridge on port **5000**.
-
-Wait ~30–60 s, then unplug the stick. ✅ **Printer is now Klipper-ready.**
-
-> **No stick handy / want to go over the network?** That's the "RPi pulls it
-> over Ethernet" flow — see [Option B](#option-b--rpi-driven-flash-no-usb-stick).
-
----
-
-## Step 5 — Set up the RPi (one script)
-
-On the RPi:
-```sh
-cd /root/adv4-klip/soc-hack
-sudo ./ad4-rpi-setup.sh            # add  --moonraker  to get the web UI
-```
-Sets the RPi's IP to **192.168.10.1**, checks the cable is up, installs
-Klipper, and starts the MCU link. Done when it prints **DONE**.
-
----
-
-## Step 6 — First contact
+From the Mac, with klippy stopped (it must release the bridge):
 
 ```sh
-tail -f /var/log/klippy.log        # MCU connects, no "timed out"
-```
-Open Fluidd/Mainsail in a browser at **http://192.168.10.1:8080** (Fluidd) —
-`FIRMWARE_RESTART`, then `G28`, then `G1 X10 F300`. Watch it move. **Stop here
-and test.**
-
----
-
-## Step 7 — Use Klipper from your normal LAN (the 2nd NIC)
-
-The RPi needs a **second network port** so it can reach the *printer* (private
-`.10` subnet) **and** your *laptop/phone* (home LAN) at the same time.
-
-- **RPi3 model B+** has **2 built-in Ethernet ports** → perfect, nothing to buy.
-- **RPi3 model B (1 port)** or **Orange Pi** (often 1): add a **USB-Ethernet
-  adapter** (or a 2-port USB hub with two adapters). It shows up as `eth1`.
-
-Layout (what `ad4-rpi-setup.sh` already sets for port 1; port 2 = your normal
-LAN):
-
-```
-  [Printer SoC] 192.168.10.10 ──eth0── [RPi] ──eth1── [home router / your LAN]
+/Users/admin/adv4-klip/bridge/ad4-mac-stop.sh
+scp -O /Users/admin/klipper-hc32/out/klipper-ad4.hex root@192.168.10.10:/opt/ad4-klipper/
+ssh ... 'cd /opt/ad4-klipper && ./IAPCommand klipper-ad4.hex klipper-ad4.hex /dev/ttyS1 115200'
 ```
 
-Put your **home** address on `eth1` (or leave it on DHCP — it just joins your
-existing LAN). **Fluidd then works from your laptop** at the RPi's home-LAN IP.
-If you want a second port added automatically, say the word and I'll extend the
-setup script to label the two ports.
+Two hex args (NA + HD image) — that's the vendor tool's calling convention.
+It never touches the bootloader region. Verify the sha256 on both sides.
 
----
+## 4. If the MCU is unresponsive: NRST pulse
 
-## If something goes wrong
+The SoC can hard-reset the MCU over GPIO:
 
-- **Printer back to stock (no tools, no SSH):** `touch RESTORE` on the USB
-  stick → re-plug → power the printer. It re-flashes the stock image.
-- **Klipper won't start / bad flash:** re-run Step 4. The MCU's recovery
-  (ROM-ISP) was never touched, so this always works.
-- **RPi can't see the printer:** check the cable is RPi↔printer (not RPi↔
-  router), and `ping 192.168.10.10` on the RPi.
-- **Recovery only, no internet:** nothing here needs the internet — the RPi
-  and the printer form their own private network.
+```sh
+echo 0 > /sys/class/gpio/gpio34/value; sleep 0.3; echo 1 > /sys/class/gpio/gpio34/value
+```
 
----
+(gpio34 = NRST, gpio35 = BOOT0 — keep BOOT0 at 0 or you boot ROM-ISP.)
+Liveness check: `cd /opt/ad4-klipper && ./ad4_identify 115200 /dev/ttyS1`
+— a healthy MCU answers with an identify blob.
 
-<a id="option-b--rpi-driven-flash-no-usb-stick"></a>
-## Option B — RPi-driven flash (no USB stick in the printer)
+## 5. Start the stack on the Mac
 
-*(Study only — not wired up yet.)* To make the **RPi do the flash over the
-cable**, the RPi needs a shell on the SoC. What's available today:
+```sh
+/Users/admin/adv4-klip/bridge/ad4-mac-start.sh
+```
 
-| Route | Does it give the RPi a SoC shell? | Notes |
-|---|---|---|
-| **SSH** | **Yes, if enabled** — this is the "backdoor" | The stock SoC Linux has `ssh`/`telnet` (the old guide's "Path A — over SSH"). The RPi would `ssh root@<soc>` and run the flash command itself. *Live check needed:* confirm the port is open + the root password on your specific unit (usually set on first boot / via the touch network menu). |
-| **Vendor touch network menu** | **No** | You *can* type the SoC's IP in on the printer screen, but it's just a config screen — it doesn't open a remote shell to run commands. It helps you *find* the SoC, not control it. |
-| **DHS server on the RPi** | **No** (only the IP) | A one-shot DHCP server on the RPi hands the SoC an IP so the RPi can *reach* it — useful for discovery, but it doesn't by itself flash anything. You still need SSH (above) to run the flash. |
-| **USB stick** | **n/a — already works** | This is the current, proven path (Steps 3–4). |
+Starts klippy (`serial: socket://192.168.10.10:5000`), moonraker (:7125) and
+Fluidd at **http://127.0.0.1:8081/** (strata keeps :8080). Stop with
+`ad4-mac-stop.sh`. Send gcode with:
 
-**Bottom line:** the cleanest "RPi does everything over the cable" flow is
-**RPi runs a DHCP server → learns the SoC's IP → `ssh root@<soc>` → run the
-flash command → bring up the bridge → set the static `.10` subnet.** The only
-unknown is the live SSH credential/port on your unit — that's the one thing to
-verify on the printer before building it out. The USB-stick path is the
-fallback that needs zero knowledge of that.
+```sh
+printf 'M105\n' > /Users/admin/adv4/links/gcode
+```
+
+## 6. First tests (all passed 2026-10-22)
+
+- `M105` / Fluidd temps: hotend (PA0) and bed (PA5) read room temp.
+- `M140 S60`: bed (PA7 heater) climbs ~22°C/min. `M140 S0` after.
+- `M104 S60`: hotend (PA1 heater) reaches 60°C, PC2 fan auto-starts >50°C.
+- **Stop before motion tests**: stepper/endstop pins are still unverified
+  guesses — see STATUS.md.
+
+## Recovery
+
+- Bad flash: re-run step 3 (bootloader is never erased).
+- MCU stuck: NRST pulse (step 4), then re-flash.
+- Full factory restore: factory HD firmware is archived in
+  `FlashForge-Hacks-main/Firmware/`; the USB-stick `flashforge_init.sh` path
+  can re-flash it (see PERSISTENT-INSTALL.md).

@@ -11,7 +11,7 @@
 # What it does:
 #   1. Copy the daemon package from the stick to /opt/ad4-klipper/
 #      (ad4-daemon.sh, ad4-serial-bridge.py, klipper-ad4.hex,
-#       IAPCommand, ad4-net.conf, mcu-klipper.ok marker).
+#       stm32isp-ad4, ad4-net.conf, mcu-klipper.ok marker).
 #   2. Gate the vendor watchdog in rcS: the line that launches
 #      ffstartup-arm becomes  if <enable> then <our daemon> else
 #      <vendor> fi .  So in Klipper mode the vendor stack (and its
@@ -48,7 +48,7 @@ mkdir -p "$BASE"
 cp -f "$WORK_DIR/ad4-daemon.sh"        "$BASE/" 2>/dev/null
 cp -f "$WORK_DIR/ad4-bridge"           "$BASE/" 2>/dev/null
 cp -f "$WORK_DIR/ad4-serial-bridge.py" "$BASE/" 2>/dev/null
-cp -f "$WORK_DIR/IAPCommand"           "$BASE/" 2>/dev/null
+cp -f "$WORK_DIR/stm32isp-ad4"         "$BASE/" 2>/dev/null
 cp -f "$WORK_DIR/ad4-net.conf"         "$BASE/" 2>/dev/null
 # bench helpers, so they are still there after the stick is gone
 cp -f "$WORK_DIR/ad4-revcheck.sh"      "$BASE/" 2>/dev/null
@@ -64,7 +64,7 @@ if [ -f "$WORK_DIR/klipper.hex" ]; then
 elif [ -f "$WORK_DIR/klipper-ad4.hex" ]; then
   cp -f "$WORK_DIR/klipper-ad4.hex" "$BASE/klipper.hex" 2>/dev/null
 fi
-chmod +x "$BASE/ad4-daemon.sh" "$BASE/ad4-bridge" "$BASE/IAPCommand" \
+chmod +x "$BASE/ad4-daemon.sh" "$BASE/ad4-bridge" "$BASE/stm32isp-ad4" \
          "$BASE/ad4-uninstall-persistent.sh" 2>/dev/null
 sync
 

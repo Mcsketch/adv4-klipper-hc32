@@ -7,7 +7,7 @@
 #   1. Remove the enable flag (so rcS runs the vendor launch).
 #   2. Restore the original rcS from its .ad4-orig backup.
 #   3. Stop the Klipper daemon + bridge.
-#   4. (If a factory hex + IAPCommand are present) re-flash the MCU
+#   4. (If a factory hex + stm32isp-ad4 are present) re-flash the MCU
 #      to the stock image, so the whole system is factory-clean.
 #   5. Reboot.
 #
@@ -84,13 +84,13 @@ kill_pat ad4-bridge
 
 # 4) re-flash MCU to stock (best effort, needs the files; skip if we
 #    just flashed factory)
-IAP="$BASE/IAPCommand"
+IAP="$BASE/stm32isp-ad4"
 FACTORY="$BASE/factory-HD.hex"
 [ -f "$FACTORY" ] || FACTORY="/mnt/factory-HD.hex"
 if [ "$SKIP_MCU" != "1" ] && [ -x "$IAP" ] && [ -f "$FACTORY" ]; then
   kill_pat ffstartup-arm
   sleep 1
-  "$IAP" "$FACTORY" "$FACTORY" && echo "MCU restored to stock" || echo "MCU restore failed"
+  "$IAP" -p /dev/ttyS1 "$FACTORY" && echo "MCU restored to stock" || echo "MCU restore failed"
 fi
 
 # 5) remove our package (optional; keeps things tidy). Kept so a

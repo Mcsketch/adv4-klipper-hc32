@@ -32,7 +32,7 @@ BRIDGE_PORT="5000"
 BRIDGE_C="$BASE/ad4-bridge"                 # static C bridge (no-python, preferred)
 BRIDGE_PY="$BASE/ad4-serial-bridge.py"      # python3 bridge (fallback if C missing)
 HEX="$BASE/klipper.hex"
-IAP="$BASE/IAPCommand"
+IAP="$BASE/stm32isp-ad4"
 WATCHDOG="$BASE/mcu-watchdog"
 WATCH_INTERVAL=60          # seconds between MCU health probes
 MAX_FAIL=3                 # consecutive fails before re-flash
@@ -135,7 +135,7 @@ mcu_reflash() {
   kill_vendor
   sleep 1
   if [ -x "$IAP" ] && [ -f "$HEX" ]; then
-    "$IAP" "$HEX" "$HEX" >>"$LOG" 2>&1
+    "$IAP" -p /dev/ttyS1 "$HEX" >>"$LOG" 2>&1
     if [ $? -eq 0 ]; then
       touch "$BASE/mcu-klipper.ok"
       log "MCU re-flash OK"
@@ -159,7 +159,7 @@ if [ -f "$BASE/mcu-klipper.ok" ]; then
 elif [ -f "$BASE/flash-at-install" ] && [ -x "$IAP" ] && [ -f "$HEX" ]; then
   # first boot right after install: flash once, then mark ok
   kill_vendor
-  "$IAP" "$HEX" "$HEX" >>"$LOG" 2>&1 && touch "$BASE/mcu-klipper.ok"
+  "$IAP" -p /dev/ttyS1 "$HEX" >>"$LOG" 2>&1 && touch "$BASE/mcu-klipper.ok"
   log "first-boot flash rc=$?"
 fi
 

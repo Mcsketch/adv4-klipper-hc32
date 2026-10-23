@@ -18,14 +18,18 @@ STICK="${1:-}"
 [ -d "$STICK" ] || { echo "ERROR: $STICK not a directory (mount the stick first)"; exit 1; }
 
 # --- sanity checks on the payloads -----------------------------
-# IAPCommand is the only flasher that speaks this bootloader's protocol.
-MD5_WANT="919864f702cf3c07665234ab8de7896e"
-MD5_GOT="$(md5 -q "$HERE/IAPCommand" 2>/dev/null || md5sum "$HERE/IAPCommand" | cut -d' ' -f1)"
-[ "$MD5_GOT" = "$MD5_WANT" ] || {
-  echo "ERROR: IAPCommand md5 $MD5_GOT != $MD5_WANT (refusing to build stick)"; exit 1; }
-echo "IAPCommand md5 OK: $MD5_GOT"
+# Our own flasher replaces the vendor IAPCommand: it is a transcription of
+# that binary's exact HC32 protocol, so there is no vendor blob to pin an
+# md5 against any more. It lives with its source one directory up; rebuild
+# it from there (see the header of stm32isp-ad4.c) before building the stick.
+ISP_ARM="$HERE/../stm32isp-ad4/stm32isp-ad4_arm"
+[ -f "$ISP_ARM" ] || { echo "ERROR: $ISP_ARM missing - rebuild it with zig"; exit 1; }
+case "$(file -b "$ISP_ARM")" in
+  *ARM*) echo "stm32isp-ad4_arm OK (ARM, $(wc -c < "$ISP_ARM" | tr -d ' ') bytes, sha256 $(shasum -a 256 "$ISP_ARM" | cut -d' ' -f1))" ;;
+  *) echo "ERROR: $ISP_ARM is not an ARM binary"; exit 1 ;;
+esac
 
-for b in ad4-bridge dropbear; do
+for b in ad4-bridge ad4-screen ad4-buzz dropbear; do
   [ -f "$HERE/$b" ] || { echo "ERROR: $HERE/$b missing"; exit 1; }
   case "$(file -b "$HERE/$b")" in
     *ARM*) echo "$b OK (ARM)" ;;
@@ -62,10 +66,11 @@ printf "klipper.hex min abs addr 0x%08X, sha256 %s\n" "$MINABS" \
 echo "==> building stick at $STICK"
 for f in flashforge_init.sh ad4-daemon.sh ad4-install-persistent.sh \
          ad4-uninstall-persistent.sh ad4-revcheck.sh ad4-setrootpw.sh \
-         ad4-serial-bridge.py ad4-bridge ad4-net.conf IAPCommand dropbear \
+         ad4-serial-bridge.py ad4-bridge ad4-screen ad4-buzz ad4-net.conf dropbear \
          klipper.hex factory-HD.hex; do
   cp -f "$HERE/$f" "$STICK/$f"
 done
+cp -f "$ISP_ARM" "$STICK/stm32isp-ad4"
 : > "$STICK/screwflag"
 
 # Root password: only written when overridden, so the value never lands in git.

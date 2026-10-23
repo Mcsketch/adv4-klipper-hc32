@@ -1,4 +1,4 @@
-# flash-install
+# new-usb-flash
 
 One folder = one USB stick. Everything needed to take a stock Adventurer 4
 to Klipper (and back) lives here; `flashdisk/` is the older scratch copy.
@@ -22,14 +22,23 @@ Options (environment variables):
 ## At boot the stick does, in order
 
 1. kills the vendor app so `/dev/ttyS1` is free,
-2. flashes the MCU with `klipper.hex` through the vendor `IAPCommand`
-   (refuses any image based at or below `0x00008000` — the HC32F460
-   bootloader is flash-resident, that guard is what keeps the board alive),
-3. sets `eth0` to `192.168.10.10/24`,
-4. starts `ad4-bridge` (TCP `:5000` <-> `/dev/ttyS1` @115200),
-5. installs `dropbear` + sets the root password,
-6. with the `PERSISTENT` flag: copies the package to `/opt/ad4-klipper`,
+2. probes the MCU (`stm32isp-ad4 -s`) so the panel can show which chip this
+   printer has — `HD / HC32F460` or `NA / N32`,
+3. puts the menu on the touchscreen (KLIPPERIZE / RESTORE / SKIP); the stick's
+   flag files are the default and the fallback when there is no panel,
+4. flashes the MCU through `stm32isp-ad4`, our own flasher (it refuses any
+   record below `0x0000C000` — the HC32F460 bootloader is flash-resident,
+   that guard is what keeps the board alive),
+5. sets `eth0` to `192.168.10.10/24`,
+6. starts `ad4-bridge` (TCP `:5000` <-> `/dev/ttyS1` @115200),
+7. installs `dropbear` + sets the root password,
+8. with the `PERSISTENT` flag: copies the package to `/opt/ad4-klipper`,
    gates the vendor UI out of `/opt/auto_run.sh`, and reboots.
+
+The piezo beeps on every accepted touch, and a finished flash plays the
+opening 17-note guitar hook (vibrato and all) on the buzzer. That note table
+is generated, not hand-written:
+`python3 -I tools/gen-riff.py indochine-l_aventurier.midi`.
 
 Everything is logged to `ad4-flash.log` **on the stick** — pull it and read
 that file if the printer seems unresponsive.
@@ -96,7 +105,9 @@ password is one stick-boot away. Default is `flashforge`.
 | `build-stick.sh` | assembles the stick from this folder |
 | `klipper.hex` | Klipper for HC32F460, positioned @ `0x0000C000`, PA9/PA10 @115200 |
 | `factory-HD.hex` | stock HD app image (`Adventurer4-HD-IAP-2.3.0-20230216`), the restore image |
-| `IAPCommand` | vendor ARM flasher; the only tool that speaks this bootloader |
+| `stm32isp-ad4` | our ARM flasher (source in `../stm32isp-ad4/`): same HC32 protocol as the vendor tool, plus a `-s` chip probe |
+| `ad4-screen` | static ARM panel UI: touchscreen menu, live status while flashing, chip shown in the header |
+| `ad4-buzz` / `.c` + `ad4_buzzer.h` | static ARM buzzer player: the `/dev/pwm` ioctls (decoded from the vendor `play` binary) and the cues, including the completion riff |
 | `ad4-bridge` / `.c` | static ARM (zig) TCP<->UART relay — the bridge |
 | `dropbear` | dropbearmulti 2022.83 (dropbear/dropbearkey/ssh/scp) |
 | `ad4-daemon.sh` | boot-time net + bridge, what the persistent hook runs |
@@ -113,7 +124,7 @@ password is one stick-boot away. Default is `flashforge`.
 ```sh
 cd ~/klipper-hc32 && make                    # board.config = hc32f460, PA9/PA10, 115200
 python3 -I ~/adv4-klip/tools/make-positioned-ihex.py \
-        out/klipper.bin 0xC000 ~/adv4-klip/flash-install/klipper.hex
+        out/klipper.bin 0xC000 ~/adv4-klip/new-usb-flash/klipper.hex
 ```
 
 Do **not** ship `out/klipper-ad4.hex` (what `make` leaves behind). It is `objcopy`
@@ -121,7 +132,7 @@ output, and for an image that straddles a 64K page `objcopy` switches to
 type-02 *extended segment* records instead of type-04 — a loader that ignores
 those writes the second page at `0x00000000`, straight over the flash-resident
 bootloader. `make-positioned-ihex.py` emits one type-04 record per page, which
-is the layout the factory image and `IAPCommand` are proven to consume.
+is the layout the factory image and the vendor flasher are proven to consume.
 
 Current `klipper.hex`: 28488 bytes @ `0x0000C000..0x00012F48`,
 `sha256 00c3c429d1ff978b2e92bc59c586a88fb41cb4106cc969a9e0ac202d83c218eb`.

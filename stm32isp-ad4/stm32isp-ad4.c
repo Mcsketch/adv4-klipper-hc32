@@ -3,7 +3,7 @@
  * from the SoC, including the board GPIO strapping a generic tool cannot know.
  *
  * Everything protocol-shaped in here is transcribed from the factory
- * "IAPCommand" binary (flash-install/IAPCommand), which is UNSTRIPPED and
+ * "IAPCommand" binary (new-usb-flash/IAPCommand), which is UNSTRIPPED and
  * carries debug_info — so the flow below is read off its disassembly, not
  * inferred. Its main():
  *
@@ -391,7 +391,9 @@ int main(int argc, char **argv){
      * detector. Re-pulse NRST periodically: the bootloader only listens right
      * after a reset taken while GPIO 35 is high. */
     int connected=0; unsigned char rev=0;
-    for(int tries=60; tries && !connected; tries--){
+    /* A probe runs on every boot before the panel menu, so it has to give up
+     * fast when the MCU will not answer; only a real flash may wait. */
+    for(int tries=probe_only?8:60; tries && !connected; tries--){
         tcflush(fd, TCIOFLUSH);
         unsigned char c = CMD_SYNC;
         if(ser_wr(fd,&c,1) != 1) break;
@@ -410,7 +412,11 @@ int main(int argc, char **argv){
     }
     fprintf(stderr,"Connected to board. (sync reply 0x%02x = %s)\n", rev,
             rev==SYNC_REV_HD ? "HD" : "NA");
-    if(probe_only){ leave_bootloader(); close(fd); return 0; }
+    if(probe_only){
+        /* one greppable line for the installer, which shows this on the panel */
+        fprintf(stderr,"REV=%s\n", rev==SYNC_REV_HD ? "HD" : "NA");
+        leave_bootloader(); close(fd); return 0;
+    }
 
     /* 3) load the image. */
     ihex_t h; int err=0; ihex_load(img,&h,&err);

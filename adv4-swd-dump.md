@@ -29,18 +29,36 @@ inference._
 | SoC GPIO34 pulses MCU NRST (15.68 ms low/high) | **PROVEN** (IAPCommand strace + sysfs value) |
 | SoC GPIO35 = MCU "BOOT0" | **NOT PROVEN** — IAPCommand touches gpio35 but its wiring to the MCU is unverified; HC32F460 has no BOOT0 pin at all |
 | Vendor bootloader occupies flash `0x0..0xBFFF` | **INFERRED** (app vectors at `0xC000`); the dump will confirm |
+| Debug pins are PA13, PA14, PA15, PB3, PB4; PA13=SWDIO, PA14=SWCLK | **CONFIRMED** — three independent sources agree: mainline Klipper `src/hc32f460/main.c` comment, the `en_debug_port_t` enum (5 bits, `ALL_DBG_PIN=0x1F`) in `hc32f460_gpio.h`, and the HC32F460 Rev1.3 datasheet LQFP100 pin table |
+| PA13/PA14 **physical** LQFP100 pin numbers | **UNCONFIRMED** — one search result puts PA13 at pin 72; the datasheet and ZLG schematic PDFs are raster scans with no text layer, so neither could be verified. Orient from the package pin-1 dot and count, or find the labelled test points |
 | SWD (SWDIO=PA13, SWCLK=PA14) is enabled on the shipped board | **UNVERIFIED** — try it; connect-under-reset is the fallback |
 | Debug pads exist / their location on the HD board | **UNKNOWN** — must be found on the PCB |
 
 ## Wiring — ST-Link V2 clone → HD board
 
-| ST-Link (2×10 2.54 mm header) | HD board |
+> **Corrected 2026-10-24.** An earlier revision of this section gave pin
+> *numbers* (SWDIO=7, SWCLK=9, NRST=15, 3.3V=1). **Those are the genuine
+> ST-LINK/V2 20-pin pod pinout and do NOT apply to the USB-stick clones.**
+> The clones carry a **2×5 (10-pin)** header with a different layout, and
+> layouts vary between production runs of the same seller. Connect by the
+> **silkscreen label**, never by pin position.
+
+| ST-Link clone (label on the case) | HD board |
 |---|---|
-| SWDIO (pin 7) | HC32F460 **PA13** (find the pad/via near the MCU; PA13/PA14 usually fan out to a test-point cluster) |
-| SWCLK (pin 9) | HC32F460 **PA14** |
-| GND (pins 2/4/6/8/10…) | board GND |
-| NRST (pin 15) — optional | MCU NRST net (same net the SoC drives via GPIO34) |
-| 3.3V (pin 1) — **leave unconnected** | power the board normally; common GND only |
+| `SWDIO` | HC32F460 **PA13** (find the pad/via near the MCU; PA13/PA14 usually fan out to a test-point cluster) |
+| `SWCLK` | HC32F460 **PA14** |
+| `GND` | board GND |
+| `RST` / `NRST` — optional | MCU NRST net (same net the SoC drives via GPIO34) |
+| `3.3V` — **leave unconnected** | power the board normally; common GND only |
+| `5V` — **leave unconnected** | — |
+
+**Three wires only: SWDIO, SWCLK, GND.** The printer powers its own MCU.
+Back-powering a running board through the programmer is the most likely way to
+damage it, and these clones expose both 3.3 V and 5 V on the same header.
+
+Before the first connection, confirm the clone's own pinout with a multimeter
+in continuity mode — the labels are reliable, the pin *order* is not. Identify
+board GND against a known ground (USB shield, mounting screw) the same way.
 
 All signals are 3.3 V logic — a stock ST-Link V2 clone is fine. Keep wires
 short (< 15 cm); SWD at default 1 MHz (drop `adapter speed` to 100–500 kHz if
@@ -50,7 +68,7 @@ clones are flaky).
 
 Two options, either works:
 
-1. **ST-Link owns reset**: wire NRST (pin 15) and use
+1. **ST-Link owns reset**: wire the clone's `RST`/`NRST` pin and use
    `reset_config srst_nogate` / `reset_config srst_connect`.
 2. **SoC owns reset** (no extra wire to the MCU): from the SoC,
    ```sh
@@ -86,6 +104,39 @@ reset as part of `init`) or the SoC-GPIO34 hold above.
 
 Alternative tool: `pyocd read 0x0 0x80000 hd-flash-full.bin -t cortex_m`
 (generic target; plain memory reads need no flash pack).
+
+## Keeping SWD alive past the first Klipper flash
+
+Mainline Klipper's `armcm_main()` carries a comment the rest of this document
+should be read against:
+
+```c
+// disable JTAG/SWD on pins PA13, PA14, PA15, PB3, PB4
+// SWD still works until the relevant pins are reconfigured. Proprietary
+// flash program (XHSC ISP) must be used to reflash afterwards.
+PORT_DebugPortSetting(ALL_DBG_PIN, Disable);
+```
+
+`PORT_DebugPortSetting(..., Disable)` clears the low 5 bits of `M4_PORT->PSPCR`
+(see `hc32f460_gpio.c`), which releases the debug *function* — but per the
+upstream comment the pins keep answering **until something reconfigures them as
+GPIO**.
+
+The fork's draft `printer.cfg` does exactly that:
+
+```
+[output_pin p_PA13]
+[output_pin p_PA14]
+```
+
+Those two sections are what would finally take SWDIO/SWCLK away. **Delete them
+from any config flashed to this unit** unless there is a demonstrated need for
+two more GPIOs — it costs nothing and may preserve debug access after Stage 2.
+
+This is *not* a reason to skip the pre-flash dump. PSPCR is still cleared on
+every boot, the pins' behaviour in that state is untested on this silicon, and
+the fallback (connect-under-reset) remains unproven on this board. Treat it as
+insurance on top of the dump, not a replacement for it.
 
 ## HC32F460 security bits — read before touching
 

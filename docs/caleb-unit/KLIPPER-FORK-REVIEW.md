@@ -149,6 +149,93 @@ which are not in the branch; Klipper refuses to start on a missing include.
 
 `[mcu] serial: socket://192.168.10.10:5000` hardcodes the author's SoC address.
 
+## 6. `flasher/stm32isp-ad4.c` — two defects found while investigating read-back
+
+Found 2026-10-24 while trying to establish whether the vendor bootloader
+exposes any read command. Both are in the flasher, not the firmware.
+
+### 6a. `st_getpid()` cannot succeed on this MCU (dead code, wrong ack)
+
+```c
+static int st_getpid(int fd, unsigned short *pid){
+    unsigned char c = CMD_GET; ser_wr(fd,&c,1);
+    if(!wait_ack(fd, ACK_OK)) return 0;        /* ACK_OK = 0x79 */
+    ...
+}
+```
+
+`wait_ack(fd, ACK_OK)` requires `0x79`. The file's own header documents at
+length that this ROM is **not** a plain STM32 and answers with `0x06`/`0x07`,
+never `0x79` — that HC32-specific handshake is the central point of the
+protocol comment at lines 65-82. So `wait_ack` spins its ~300 ms window and
+returns 0 unconditionally, and `st_getpid` returns failure **whether or not the
+bootloader implements get-PID**.
+
+Consequence for debugging: a get-PID probe is worthless as evidence. It cannot
+distinguish "command unsupported" from "command supported, acks with 0x06".
+This is the same defect class as the `-d` dump path, where `st_read` sends
+STM32 `CMD_READ 0x11`, never receives `0x79`, and the caller silently counts a
+chunk-fail and leaves the buffer zero-filled — which is why `-d` produces a
+zero file rather than an error.
+
+`st_getpid` currently has **no callers**; it is inherited from upstream
+stm32isp. Line 467 separately records a deliberate decision not to send `0x02`,
+because stray reply bytes can desync the per-frame `0x06` acks. That decision
+looks correct and should stand — the function should be deleted or fixed to
+expect `IAP_FRAME_OK`, not left as a trap for the next person debugging
+read-back.
+
+### 6b. HD/NA revision bytes are documented backwards vs. the code
+
+The usage block and the `#define`s disagree:
+
+| Location | Claim |
+|---|---|
+| Line 36 (usage comment) | `0x06 (HD/H32) or 0x07 (NA/N32)` |
+| Line 76 (protocol comment) | `0x06 (HD revision) or 0x07 (NA revision)` |
+| `#define SYNC_REV_HD` | `0x07` |
+| `#define SYNC_REV_NA` | `0x06` |
+
+The comments say `0x06`=HD; the code says `0x07`=HD. They cannot both hold.
+
+This is not cosmetic: the sync reply is the **revision detector**, and revision
+selects the flash base — `HD_BASE 0x0800C000` vs `NA_BASE 0x08010000`. The
+`-r` override exists, so a correct manual invocation is unaffected, but
+autodetect is ambiguous and the verbose line
+(`"sync reply 0x%02x = %s"`) will label the revision according to whichever of
+the two is wrong.
+
+Compounding it: `IAP_FRAME_OK` is also `0x06`, which the file acknowledges
+("Same value as the HD-sync byte; context disambiguates"). With the HD/NA
+mapping itself in doubt, that collision is harder to reason about than the
+comment implies.
+
+**Unresolved:** which byte this unit's HD chip actually returns. Settling it
+requires one sync with `-v` and reading the reply — not yet done, because it
+means resetting the MCU into ISP state.
+
+### 6c. Read-back may be address-range-limited rather than absent
+
+The dump-path comment records an empirical result:
+
+> reading at `0x08000000` is out of range for the HD ROM and every chunk times
+> out (hangs)
+
+...and prescribes `0x00000000..0x40000` (relative addressing) instead. That
+distinction implies out-of-range reads behave differently from in-range ones.
+But given 6a — `st_read` can never see its expected `0x79` ack — **no read at
+any address can report success**, so the zero-filled output is equally
+consistent with every read failing for the ack reason alone. The relative-vs-
+absolute addressing conclusion may be sound, but the evidence as recorded does
+not establish it.
+
+**Practical upshot:** the flasher cannot presently demonstrate that read-back
+works or that it does not. Read-back over UART is therefore not a dependable
+backup path, which is what makes an SWD dump before Stage 2 the only verified
+route to a byte-exact image of the stock firmware — and Klipper's startup
+`PORT_DebugPortSetting(ALL_DBG_PIN, Disable)` (§2) closes that window at first
+flash.
+
 ## Summary
 
 | Item | Status |
@@ -161,5 +248,8 @@ which are not in the branch; Klipper refuses to start on a missing include.
 | Serial on USART2 PA9/PA10 | **CONSISTENT** with independent firmware RE |
 | Heater / sensor / stepper / endstop pins | **UNCONFIRMED**, internally contradictory |
 | `printer.cfg` runs as-is | **NO** — missing includes, hardcoded IP, TODO-PROBE items |
+| `st_getpid()` can ever succeed on this MCU | **NO** — expects 0x79, ROM sends 0x06/0x07; dead code |
+| UART read-back works (or provably does not) | **UNDEMONSTRABLE** with current flasher (§6a, §6c) |
+| HD vs NA sync byte | **CONTRADICTORY** — comments say 0x06=HD, `#define`s say 0x07=HD |
 
 Nothing in this branch has been built or flashed on this unit.

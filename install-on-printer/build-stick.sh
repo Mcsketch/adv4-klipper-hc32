@@ -3,13 +3,20 @@
 # build-stick.sh — assemble the AD4 USB stick from THIS folder.
 #
 #   ./build-stick.sh /Volumes/MYSTICK
-#   AD4_ROOT_PASS='mypw' ./build-stick.sh /Volumes/MYSTICK   # custom root pw
 #   NO_PERSISTENT=1 ./build-stick.sh /Volumes/MYSTICK        # no eMMC changes
 #   NO_FLASH=1      ./build-stick.sh /Volumes/MYSTICK        # don't touch MCU
 #   RESTORE=1       ./build-stick.sh /Volumes/MYSTICK        # reflash factory MCU
+#   FACTORY=1       ./build-stick.sh /Volumes/MYSTICK        # full stock restore
+#   DUMP=1          ./build-stick.sh /Volumes/MYSTICK        # read MCU flash out, no writes
 #
 # Stick must already be FAT32 and mounted. Everything it needs is already
-# in this directory, so the folder is the single source of truth.
+# in this directory, so the folder is the single source of truth - except
+# factory/, which holds FlashForge's own firmware and is yours to fill in
+# (see factory/README.txt on the stick).
+#
+# With no flag file at all the stick defaults to KLIPPERIZE, and the panel
+# menu lets anyone tap a different choice: klipperize / restore mcu /
+# full factory / dump / skip.
 # =============================================================
 set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -67,19 +74,62 @@ echo "==> building stick at $STICK"
 for f in flashforge_init.sh ad4-daemon.sh ad4-install-persistent.sh \
          ad4-uninstall-persistent.sh ad4-revcheck.sh ad4-setrootpw.sh \
          ad4-serial-bridge.py ad4-bridge ad4-screen ad4-buzz ad4-net.conf dropbear \
-         klipper.hex factory-HD.hex; do
+         ad4-factory.sh ad4-dump.sh klipper.hex; do
   cp -f "$HERE/$f" "$STICK/$f"
 done
 cp -f "$ISP_ARM" "$STICK/stm32isp-ad4"
 : > "$STICK/screwflag"
 
-# Root password: only written when overridden, so the value never lands in git.
-if [ -n "${AD4_ROOT_PASS:-}" ]; then
-  printf 'ROOT_PASS=%s\n' "$AD4_ROOT_PASS" > "$STICK/ad4-access.conf"
-  echo "ad4-access.conf written (ROOT_PASS overridden)"
+# factory-HD.hex is a convenience copy of FlashForge's MCU image, so a plain
+# RESTORE works with no setup. It is NOT required: without it the same image
+# is resolved from factory/ or off the printer's own /opt/PROGRAM/control.
+if [ -f "$HERE/factory-HD.hex" ]; then
+  cp -f "$HERE/factory-HD.hex" "$STICK/factory-HD.hex"
 else
-  rm -f "$STICK/ad4-access.conf"
-  echo "using default root password (flashforge)"
+  rm -f "$STICK/factory-HD.hex"
+  echo "no factory-HD.hex here: RESTORE will resolve it from factory/ or the printer"
+fi
+
+# --- factory/: the user's own copy of FlashForge's upgrade key ---
+# FULL FACTORY needs FlashForge's four .tar.xz packages. They are their
+# copyrighted firmware, so this repo does not carry them - the user drops
+# them here. Never overwrite what is already on the stick.
+mkdir -p "$STICK/factory"
+if [ ! -f "$STICK/factory/README.txt" ]; then
+  cat > "$STICK/factory/README.txt" <<'EOF'
+FULL FACTORY RESTORE - put FlashForge's own upgrade key here.
+
+Copy the contents of FlashForge's "Adventurer4-2.2.4-2.3-20230216" folder
+into this factory/ folder, i.e. these four files:
+
+    control-*.tar.xz     the two MCU images (HD and NA)
+    kernel-*.tar.xz      uImage + script.bin on the boot partition
+    software-*.tar.xz    the vendor GUI and the stock /opt/auto_run.sh
+    library-*.tar.xz     ffstartup-arm, ffstartup.cfg, the Qt fonts
+
+The version number in each name does not matter - the restore matches on the
+prefix and takes whatever is there.
+
+Dropping the whole Adventurer4-... folder in here also works; the restore
+script descends into it. start.img / end.img are NOT used - they are raw
+eMMC images for a recovery tool, and the restore is a package swap.
+
+This firmware is FlashForge's, not ours: it is not in this repository and
+you have to supply it yourself. Without it, FULL FACTORY still reflashes
+the MCU from the copy already in the printer's /opt/PROGRAM/control, and
+leaves the rest of the SoC alone.
+EOF
+fi
+
+# Root password: a ROOT file here (first line = the password) is copied over
+# as-is. No file, and the installer's own default of 'flashforge' applies.
+# Never committed - see .gitignore.
+if [ -f "$HERE/ROOT" ]; then
+  cp -f "$HERE/ROOT" "$STICK/ROOT"
+  echo "ROOT copied to the stick (root password overridden)"
+else
+  rm -f "$STICK/ROOT"
+  echo "no ROOT file here: the printer keeps the default password (flashforge)"
 fi
 
 # --- mode flags ------------------------------------------------
@@ -87,8 +137,14 @@ if [ "${NO_PERSISTENT:-}" = "1" ]; then rm -f "$STICK/PERSISTENT"; echo "one-sho
 else : > "$STICK/PERSISTENT"; echo "persistent stick (eMMC boot hook, survives power)"; fi
 if [ "${NO_FLASH:-}" = "1" ]; then : > "$STICK/NO_FLASH"; echo "NO_FLASH (will NOT touch the MCU)"
 else rm -f "$STICK/NO_FLASH"; fi
-if [ "${RESTORE:-}" = "1" ]; then : > "$STICK/RESTORE"; echo "RESTORE (reflashes factory-HD.hex, unwinds the hook)"
+if [ "${RESTORE:-}" = "1" ]; then : > "$STICK/RESTORE"; echo "RESTORE (reflashes the stock MCU image, unwinds the hook)"
 else rm -f "$STICK/RESTORE"; fi
+# FACTORY wipes /opt/PROGRAM back to stock. The panel refuses to auto-run it,
+# so a FACTORY stick still needs a deliberate double tap on the printer.
+if [ "${FACTORY:-}" = "1" ]; then : > "$STICK/FACTORY"; echo "FACTORY (full stock restore - needs factory/ filled in)"
+else rm -f "$STICK/FACTORY"; fi
+if [ "${DUMP:-}" = "1" ]; then : > "$STICK/DUMP"; echo "DUMP (reads the MCU flash out through klipper, changes nothing)"
+else rm -f "$STICK/DUMP"; fi
 chmod +x "$STICK/flashforge_init.sh" 2>/dev/null || true
 
 # --- strip macOS metadata (the SoC must never see ._*) ---------
@@ -96,6 +152,9 @@ find "$STICK" -name '._*' -delete 2>/dev/null || true
 rm -f "$STICK/.DS_Store" 2>/dev/null || true
 rm -rf "$STICK/.Spotlight-V100" "$STICK/.fseventsd" 2>/dev/null || true
 
+echo
+echo "==> factory/ contents (FULL FACTORY reads these):"
+ls -la "$STICK/factory"
 echo
 echo "==> stick contents:"
 ls -la "$STICK"

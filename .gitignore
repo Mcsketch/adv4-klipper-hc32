@@ -40,3 +40,42 @@ FlashForge-Hacks-main/
 # cross-compiled ARM binaries — rebuild from *.c
 bridge/*_arm
 stm32isp-ad4/*_arm
+
+# FlashForge's own firmware and tools: never commit these. The user supplies
+# them in the installer's factory/ folder, and the printer keeps a copy of the
+# MCU hex in /opt/PROGRAM/control as a fallback. The folder itself ships (with
+# a README), its contents do not.
+vendor-local/
+work/ctrl/
+install-on-printer/factory/*
+!install-on-printer/factory/README.txt
+flashdisk/factory/*
+!flashdisk/factory/README.txt
+install-on-printer/factory-HD.hex
+install-on-printer/IAPCommand
+
+# Root password on the stick: plain text, never in git.
+install-on-printer/ROOT
+flashdisk/ROOT
+ROOT
+
+# Password research against the vendor account: local only, never published.
+brute8/
+
+# FlashForge's firmware zip: tracked before the *.zip rule above existed, so
+# name it explicitly. Get it from FlashForge and drop it in factory/.
+FlashForge-Adventurer-4-Firmware-V2.2.4-2.3.zip
+
+# Flash dumps are FlashForge's code. Anyone can make their own from the panel
+# (DUMP on the installer screen), so none of ours are committed.
+firmware/dumps/
+mcu-dump-full.bin
+work/hd.bin
+
+# vendor datasheet, tab sheets, scratch configs, root-level hex scratch
+*.pdf
+*.m4a
+*.gp4
+*.midi
+.config.bak*
+/*.hex

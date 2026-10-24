@@ -424,8 +424,11 @@ int main(int argc, char **argv){
 
     /* The wire protocol is self-addressing, so the hex base is only a sanity
      * check on the file. Normalise the NA image's absolute 0x08xxxxxx form
-     * down to a flash offset the same way IAPCommand's mmapPut does. */
-    uint32_t off = (h.base >= 0x08000000u) ? (h.base & 0x0000FFFFu) : h.base;
+     * down to a flash offset the same way IAPCommand's mmapPut does.
+     * Subtract, do not mask: the stock NA image sits at 0x08010000, and
+     * masking to 16 bits turns that into 0x000000, which the guard below
+     * would read as "this image overwrites the bootloader" and refuse. */
+    uint32_t off = (h.base >= 0x08000000u) ? (h.base - 0x08000000u) : h.base;
     fprintf(stderr,"loaded %s: %u bytes @ 0x%08x..0x%08x (flash offset "
                     "0x%06x..0x%06x)\n", img, h.len, h.base, h.base+h.len-1,
                     off, off+h.len-1);

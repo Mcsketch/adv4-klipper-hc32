@@ -1,23 +1,61 @@
-# new-usb-flash
+# install-on-printer
 
 One folder = one USB stick. Everything needed to take a stock Adventurer 4
 to Klipper (and back) lives here; `flashdisk/` is the older scratch copy.
 
 ## Build the stick
 
+Format the stick **FAT32** and copy this folder's contents to its root:
+
 ```sh
-./build-stick.sh /Volumes/MYSTICK            # stick must already be FAT32
+cp -r install-on-printer/* /Volumes/MYSTICK/
 ```
 
-Options (environment variables):
+Then add what only you can supply — FlashForge's own firmware, in `factory/`
+(see the next section) — and optionally a `ROOT` file for the root password.
 
-| var | effect |
+`build-stick.sh /Volumes/MYSTICK` does the same copy plus a few sanity checks
+(ARM binaries, `klipper.hex` load address). It is optional; the stick is just
+files on a FAT32 volume.
+
+Flag files you can drop on the stick to pick a mode without the touchscreen:
+
+| file | effect |
 | :-- | :-- |
-| `AD4_ROOT_PASS='pw'` | writes `ad4-access.conf` with that root password (never stored in git) |
-| `NO_FLASH=1` | do not touch the MCU — SoC access + bridge only |
-| `NO_PERSISTENT=1` | one-shot stick, no eMMC changes |
-| `RESTORE=1` | reflash `factory-HD.hex` and unwind the boot hook |
-| `RESTORE=1 NO_FLASH=1` | unwind the boot hook only, leave the MCU image alone |
+| *(none)* | klipperize: flash `klipper.hex`, set up SSH + bridge |
+| `PERSISTENT` | also install the eMMC boot hook, so it survives power cycles |
+| `NO_FLASH` | do not touch the MCU — SoC access + bridge only |
+| `RESTORE` | unwind the boot hook and flash the stock MCU image back |
+| `RESTORE` + `NO_FLASH` | unwind the boot hook only, leave the MCU image alone |
+| `FACTORY` | full stock restore (needs `factory/`; the panel still asks twice) |
+| `DUMP` | read the MCU flash out through Klipper, write nothing |
+
+With no flag at all the stick klipperizes, and the touchscreen menu lets
+anyone tap a different choice: klipperize / restore mcu / full factory /
+dump / skip.
+
+## factory/: FlashForge's firmware, supplied by you
+
+FlashForge's firmware is theirs, so it is **not in this repository**. Put it
+in a `factory/` folder on the stick — either the four packages or the whole
+`Adventurer4-2.2.4-2.3-20230216` folder dropped in as-is (the restore
+descends into it):
+
+```
+factory/control-*.tar.xz     the two MCU images (HD and NA)
+factory/kernel-*.tar.xz      uImage + script.bin on the boot partition
+factory/software-*.tar.xz    the vendor GUI and the stock /opt/auto_run.sh
+factory/library-*.tar.xz     ffstartup-arm, ffstartup.cfg, the Qt fonts
+```
+
+The version in each name does not matter — the restore matches on the prefix
+and takes whatever it finds. If no package is there, the MCU image is still
+available: the printer keeps a copy of both hexes in `/opt/PROGRAM/control/`,
+and the installer falls back to that. So a plain RESTORE works even with an
+empty `factory/`.
+
+`start.img` / `end.img` are not used — they are raw eMMC images for a
+recovery tool, and this restore is a package swap.
 
 ## At boot the stick does, in order
 
@@ -36,9 +74,11 @@ Options (environment variables):
    gates the vendor UI out of `/opt/auto_run.sh`, and reboots.
 
 The piezo beeps on every accepted touch, and a finished flash plays the
-opening 17-note guitar hook (vibrato and all) on the buzzer. That note table
-is generated, not hand-written:
-`python3 -I tools/gen-riff.py indochine-l_aventurier.midi`.
+opening guitar hook on the buzzer. That note table is generated, not
+hand-written: `python3 -I tools/gen-riff.py indochine-l_aventurier.midi`.
+It transposes the line up an octave on its own — the PWM divider cannot
+represent a period longer than ~2.7 ms, so notes under ~370 Hz come back as
+clicks while every ioctl still reports success.
 
 Everything is logged to `ad4-flash.log` **on the stick** — pull it and read
 that file if the printer seems unresponsive.
@@ -60,26 +100,43 @@ rm    /opt/ad4-klipper/enable   # vendor UI back on next boot
 touch /opt/ad4-klipper/enable   # Klipper daemon back
 ```
 
-Three revert paths, deepest first:
+Three revert paths, deepest first. Each is a file on the stick (or nothing at
+all), so `build-stick.sh` is never required to choose one:
 
 ```sh
 # 1. on the SoC, no stick — full revert incl. the MCU image
 sh /opt/ad4-klipper/ad4-uninstall-persistent.sh
 
-# 2. stick with RESTORE=1 — same thing, run for you (it flashes the MCU
+# 2. stick with a RESTORE file — same thing, run for you (it flashes the MCU
 #    itself, so it calls the uninstaller with --no-mcu)
-RESTORE=1 ./build-stick.sh /Volumes/MYSTICK
+touch /Volumes/MYSTICK/RESTORE
 
-# 3. stick with RESTORE=1 + NO_FLASH=1 — vendor UI back, MCU untouched
+# 3. RESTORE + NO_FLASH — vendor UI back, MCU untouched
 #    (still Klipper, so the vendor app will not drive the motors)
-RESTORE=1 NO_FLASH=1 ./build-stick.sh /Volumes/MYSTICK
+touch /Volumes/MYSTICK/RESTORE /Volumes/MYSTICK/NO_FLASH
 ```
 
-The uninstaller and `factory-HD.hex` are both copied to `/opt/ad4-klipper`
-at install time, so path 1 works with no stick in hand. The untouched stock
-boot file stays at `/opt/auto_run.sh.ad4-orig`.
+The uninstaller is copied to `/opt/ad4-klipper` at install time, so path 1
+works with no stick in hand. It re-flashes the MCU from whichever stock image
+it can find: its own copy, the stick's `factory/`, or the printer's
+`/opt/PROGRAM/control/`. The untouched stock boot file stays at
+`/opt/auto_run.sh.ad4-orig`.
 
 ## Root password
+
+Default is `flashforge`. To use your own, put a `ROOT` file on the stick whose
+first line is the password:
+
+```sh
+printf 'mypw\n' > /Volumes/MYSTICK/ROOT
+```
+
+Delete the file and the default applies again — the default lives in
+`flashforge_init.sh`, so a missing or empty `ROOT` is never an error. The file
+is read as data, never sourced, so any character is safe in the password. It
+is git-ignored; so is everything under `factory/`.
+
+To change it on an already-installed printer:
 
 ```sh
 sh ad4-setrootpw.sh 'newpass'          # on the SoC
@@ -94,17 +151,19 @@ sshpass -p OLD ssh -o StrictHostKeyChecking=no root@192.168.10.10 \
     "sh /tmp/ad4-setrootpw.sh 'newpass'"
 ```
 
-`flashforge_init.sh` re-applies `ROOT_PASS` on every stick boot, so a lost
-password is one stick-boot away. Default is `flashforge`.
+`flashforge_init.sh` re-applies the password on every stick boot, so a lost
+password is one stick-boot away.
 
 ## Files
 
 | file | what |
 | :-- | :-- |
 | `flashforge_init.sh` | the SoC-side script the vendor boot path runs from the stick |
-| `build-stick.sh` | assembles the stick from this folder |
+| `build-stick.sh` | optional: same copy as above, plus sanity checks |
 | `klipper.hex` | Klipper for HC32F460, positioned @ `0x0000C000`, PA9/PA10 @115200 |
-| `factory-HD.hex` | stock HD app image (`Adventurer4-HD-IAP-2.3.0-20230216`), the restore image |
+| `ad4-factory.sh` | full stock restore: MCU first, then the four packages. `probe` / `mcuhex` / `run` |
+| `ad4-dump.sh` | reads the MCU flash back out through Klipper (`check` / `peek` / `boot` / `full`) |
+| `ROOT` | optional, yours: first line = the root password you want |
 | `stm32isp-ad4` | our ARM flasher (source in `../stm32isp-ad4/`): same HC32 protocol as the vendor tool, plus a `-s` chip probe |
 | `ad4-screen` | static ARM panel UI: touchscreen menu, live status while flashing, chip shown in the header |
 | `ad4-buzz` / `.c` + `ad4_buzzer.h` | static ARM buzzer player: the `/dev/pwm` ioctls (decoded from the vendor `play` binary) and the cues, including the completion riff |
@@ -124,7 +183,7 @@ password is one stick-boot away. Default is `flashforge`.
 ```sh
 cd ~/klipper-hc32 && make                    # board.config = hc32f460, PA9/PA10, 115200
 python3 -I ~/adv4-klip/tools/make-positioned-ihex.py \
-        out/klipper.bin 0xC000 ~/adv4-klip/new-usb-flash/klipper.hex
+        out/klipper.bin 0xC000 ~/adv4-klip/install-on-printer/klipper.hex
 ```
 
 Do **not** ship `out/klipper-ad4.hex` (what `make` leaves behind). It is `objcopy`

@@ -53,9 +53,10 @@ cp -f "$WORK_DIR/ad4-net.conf"         "$BASE/" 2>/dev/null
 # bench helpers, so they are still there after the stick is gone
 cp -f "$WORK_DIR/ad4-revcheck.sh"      "$BASE/" 2>/dev/null
 cp -f "$WORK_DIR/ad4-setrootpw.sh"     "$BASE/" 2>/dev/null
-# The revert must survive the stick: without the uninstaller AND the stock
-# hex on eMMC, `sh /opt/ad4-klipper/ad4-uninstall-persistent.sh` is a no-op
-# and the MCU can only be restored by re-plugging the stick.
+# The revert must survive the stick: the uninstaller on eMMC is what makes
+# `sh /opt/ad4-klipper/ad4-uninstall-persistent.sh` work with no stick in
+# hand. A stock hex is copied too when the user supplies one on the stick;
+# otherwise the uninstaller falls back to the printer's /opt/PROGRAM/control.
 cp -f "$WORK_DIR/ad4-uninstall-persistent.sh" "$BASE/" 2>/dev/null
 cp -f "$WORK_DIR/factory-HD.hex"     "$BASE/" 2>/dev/null
 # klipper hex: accept either name on the stick -> klipper.hex on eMMC

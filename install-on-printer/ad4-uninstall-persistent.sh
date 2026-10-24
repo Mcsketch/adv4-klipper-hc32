@@ -83,14 +83,34 @@ kill_pat ad4-serial-bridge.py
 kill_pat ad4-bridge
 
 # 4) re-flash MCU to stock (best effort, needs the files; skip if we
-#    just flashed factory)
+#    just flashed factory). No stock .hex ships in this repo (it is
+#    FlashForge's), so resolve it at run time: a copy left by an earlier
+#    install, else the printer's own backup under /opt/PROGRAM/control.
 IAP="$BASE/stm32isp-ad4"
-FACTORY="$BASE/factory-HD.hex"
-[ -f "$FACTORY" ] || FACTORY="/mnt/factory-HD.hex"
-if [ "$SKIP_MCU" != "1" ] && [ -x "$IAP" ] && [ -f "$FACTORY" ]; then
-  kill_pat ffstartup-arm
-  sleep 1
-  "$IAP" -p /dev/ttyS1 "$FACTORY" && echo "MCU restored to stock" || echo "MCU restore failed"
+if [ "$SKIP_MCU" != "1" ] && [ -x "$IAP" ]; then
+  FACTORY=""
+  for c in "$BASE/factory-HD.hex" /mnt/factory-HD.hex; do
+    [ -f "$c" ] && { FACTORY="$c"; break; }
+  done
+  if [ -z "$FACTORY" ]; then
+    REV=$( "$IAP" -s 2>/dev/null | sed -n 's/.*REV=\([A-Z][A-Z]\).*/\1/p' )
+    [ -n "$REV" ] || REV=HD
+    for d in /opt/PROGRAM/control/*/; do
+      [ -d "$d" ] || continue
+      h=$(ls -1 "$d"Adventurer4-"$REV"-IAP-*.hex 2>/dev/null | head -n 1)
+      [ -f "$h" ] || h=$(ls -1 "$d"Adventurer4-*-IAP-*.hex 2>/dev/null | head -n 1)
+      [ -f "$h" ] && { FACTORY="$h"; break; }
+    done
+  fi
+  if [ -f "$FACTORY" ]; then
+    kill_pat ffstartup-arm
+    sleep 1
+    "$IAP" -p /dev/ttyS1 "$FACTORY" && echo "MCU restored to stock ($FACTORY)" \
+      || echo "MCU restore failed"
+  else
+    echo "!! no stock MCU image found: the boot hook is gone but the MCU keeps its image."
+    echo "   Put the control-*.tar.xz in factory/ on the stick and use the RESTORE stick."
+  fi
 fi
 
 # 5) remove our package (optional; keeps things tidy). Kept so a

@@ -21,8 +21,8 @@ sshpass -p flashforge ssh -o StrictHostKeyChecking=no \
     -o PubkeyAuthentication=no root@192.168.10.10
 ```
 
-BusyBox (no pkill/pgrep/python3). `/opt/ad4-klipper/` holds `IAPCommand`,
-`ad4-bridge`, `ad4_identify`.
+BusyBox (no pkill/pgrep/python3, no sftp-server). `/opt/ad4-klipper/` holds
+`stm32isp-ad4`, `ad4-bridge`, `ad4_identify`.
 
 ## 2. Make sure the bridge is up
 
@@ -34,18 +34,23 @@ Single-client: it frees the UART when the client (klippy) disconnects, so
 flashing and running never fight over ttyS1. Note: the bridge does **not**
 auto-start after a power-cycle yet — see PERSISTENT-INSTALL.md.
 
-## 3. Flash the MCU (vendor IAPCommand — the proven path)
+## 3. Flash the MCU (`stm32isp-ad4`)
 
 From the Mac, with klippy stopped (it must release the bridge):
 
 ```sh
 /Users/admin/adv4-klip/bridge/ad4-mac-stop.sh
-scp -O /Users/admin/klipper-hc32/out/klipper-ad4.hex root@192.168.10.10:/opt/ad4-klipper/
-ssh ... 'cd /opt/ad4-klipper && ./IAPCommand klipper-ad4.hex klipper-ad4.hex /dev/ttyS1 115200'
+cat /Users/admin/klipper-hc32/out/klipper.bin | sshpass -p flashforge \
+    ssh root@192.168.10.10 'cat > /tmp/klipper.bin'
+# position it above the bootloader, then flash it
+python3 -I ~/adv4-klip/tools/make-positioned-ihex.py /tmp/klipper.bin 0xC000 /tmp/klipper.hex
+cat /tmp/klipper.hex | sshpass -p flashforge ssh root@192.168.10.10 'cat > /opt/ad4-klipper/klipper.hex'
+ssh ... 'cd /opt/ad4-klipper && ./stm32isp-ad4 -p /dev/ttyS1 -v klipper.hex'
 ```
 
-Two hex args (NA + HD image) — that's the vendor tool's calling convention.
-It never touches the bootloader region. Verify the sha256 on both sides.
+Look for `STM32Write: success` in its output — rc 0 alone only proves
+contact. It refuses any hex record below `0x0000C000`, which is what keeps the
+flash-resident bootloader alive. Verify the sha256 on both sides.
 
 ## 4. If the MCU is unresponsive: NRST pulse
 

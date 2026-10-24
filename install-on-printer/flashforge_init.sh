@@ -24,12 +24,14 @@
 #      /opt/ad4-klipper and gate the vendor UI out of /opt/auto_run.sh,
 #      so steps 2-4 survive every boot without the stick.
 #
-# Stick layout (FAT32, files at root — build-stick.sh puts them there):
+# Stick layout (FAT32, files at root — copy them there by hand, see README.md):
 #   flashforge_init.sh        this script
 #   screwflag                 empty file (skips the vendor machine-type check)
 #   stm32isp-ad4              our ARM flasher (does the GPIO strapping; -s probes the chip)
 #   klipper.hex               Klipper @ 0x0000C000
-#   factory-HD.hex            known-good restore image (never delete)
+#   factory/                  OPTIONAL: FlashForge's own upgrade key (its four
+#                             .tar.xz packages) for a FULL FACTORY restore, and
+#                             the stock MCU hex for RESTORE. Not in this repo.
 #   ad4-bridge                static C TCP<->/dev/ttyS1 relay (the bridge)
 #   ad4-serial-bridge.py      python fallback bridge (SoC has no python3)
 #   dropbear                  SSH server binary installed to /opt/services/bin
@@ -42,9 +44,10 @@
 #                             Without it everything still runs from flags.
 #   ad4-rev                   OPTIONAL: one word (NA or HD) shown on the panel
 #   ad4-net.conf              OPTIONAL SOC_IP= SOC_NET= BRIDGE_PORT=
-#   ad4-access.conf           OPTIONAL ROOT_PASS= (kept out of git)
+#   ROOT                      OPTIONAL: first line = the root password you
+#                             want. No file, or an empty one, means 'flashforge'.
 #   RESTORE                   OPTIONAL: revert — unwind the boot hook and
-#                             flash factory-HD.hex back onto the MCU
+#                             flash the stock MCU image back onto the MCU
 #   NO_FLASH                  OPTIONAL: skip MCU flashing, do SoC access only
 #                             (with RESTORE: unwind the hook, leave the MCU
 #                             image alone — vendor UI back, MCU still Klipper)
@@ -187,12 +190,19 @@ SOC_IP="192.168.10.10"; SOC_NET="24"; BRIDGE_PORT="5000"
 if [ -f "$WORK_DIR/ad4-net.conf" ]; then
   LOGF "loading ad4-net.conf"; . "$WORK_DIR/ad4-net.conf"; LOGF "  SOC_IP=$SOC_IP BRIDGE_PORT=$BRIDGE_PORT"
 fi
-# SSH root password. Override it in ad4-access.conf (ROOT_PASS=...), which
-# build-stick.sh generates from AD4_ROOT_PASS — keep the real value out of git.
+# SSH root password. Put your own on the stick as a ROOT file whose first line
+# is the password; delete it and the default below applies. Read as data, not
+# sourced: a password is not shell code, and sourcing would mangle anything
+# with metacharacters in it. Never committed (see .gitignore).
 ROOT_PASS="flashforge"
-if [ -f "$WORK_DIR/ad4-access.conf" ]; then
-  LOGF "loading ad4-access.conf"; . "$WORK_DIR/ad4-access.conf"
-  LOGF "  ROOT_PASS overridden (${#ROOT_PASS} chars)"
+if [ -f "$WORK_DIR/ROOT" ]; then
+  ROOT_FILE_PW=$(head -n 1 "$WORK_DIR/ROOT" 2>/dev/null | tr -d '\r\n')
+  if [ -n "$ROOT_FILE_PW" ]; then
+    ROOT_PASS="$ROOT_FILE_PW"
+    LOGF "ROOT file found: password overridden (${#ROOT_PASS} chars)"
+  else
+    LOGF "ROOT file is empty: using the default password"
+  fi
 fi
 
 # ---- on-panel screen (optional) --------------------------------
@@ -213,9 +223,11 @@ MCU_HINT="unknown"
 if [ -f /opt/ad4-klipper/enable ]; then INSTALLED_TXT="yes (boot hook on)"
 elif [ -f /opt/auto_run.sh.ad4-orig ]; then INSTALLED_TXT="installed, toggled off"
 else INSTALLED_TXT="no (stock boot)"; fi
+FACT_TXT=""
 STICK_FILES=""
 for f in klipper.hex factory-HD.hex stm32isp-ad4 ad4-bridge dropbear \
-         ad4-daemon.sh ad4-install-persistent.sh ad4-uninstall-persistent.sh; do
+         ad4-daemon.sh ad4-install-persistent.sh ad4-uninstall-persistent.sh \
+         ad4-factory.sh ad4-dump.sh; do
   [ -f "$WORK_DIR/$f" ] && STICK_FILES="$STICK_FILES $f"
 done
 # SCR <subcommand> [args] - paints one screen; output goes to the log only.
@@ -223,6 +235,7 @@ SCRX() {
   [ "$SCR_OK" = 1 ] || return 0
   AD4_MCU="$MCU_HINT" AD4_IP="$SOC_IP" AD4_PORT="$BRIDGE_PORT" \
   AD4_INSTALLED="$INSTALLED_TXT" AD4_STICK="$STICK_FILES" \
+  AD4_FACTORY="$FACT_TXT" \
     "$SCR" "$@" >> "$LOG" 2>&1
   return 0
 }
@@ -232,12 +245,41 @@ SCRX splash
 LOGF "stick inventory ($WORK_DIR):"
 ls -la "$WORK_DIR" >> "$LOG" 2>&1
 for f in screwflag stm32isp-ad4 klipper.hex factory-HD.hex ad4-bridge ad4-serial-bridge.py \
-         ad4-net.conf ad4-access.conf ad4-daemon.sh ad4-install-persistent.sh \
+         ad4-net.conf ROOT ad4-daemon.sh ad4-install-persistent.sh \
          ad4-uninstall-persistent.sh ad4-revcheck.sh ad4-screen ad4-buzz ad4-rev \
-         RESTORE PERSISTENT NO_FLASH; do
-  [ -f "$WORK_DIR/$f" ] && LOGF "    present: $f ($(wc -c < "$WORK_DIR/$f" 2>/dev/null | tr -d ' ') bytes)" \
-                        || LOGF "    absent : $f"
+         ad4-factory.sh ad4-dump.sh RESTORE PERSISTENT NO_FLASH FACTORY DUMP; do
+  if [ -f "$WORK_DIR/$f" ]; then
+    # ROOT holds a password: log that it exists, never its size or contents.
+    [ "$f" = ROOT ] && { LOGF "    present: ROOT (password override)"; continue; }
+    LOGF "    present: $f ($(wc -c < "$WORK_DIR/$f" 2>/dev/null | tr -d ' ') bytes)"
+  else
+    LOGF "    absent : $f"
+  fi
 done
+for d in "$WORK_DIR"/factory "$WORK_DIR"/factory/Adventurer4-*; do
+  [ -d "$d" ] && LOGF "    present: $d/ ($(ls -1 "$d" 2>/dev/null | tr '\n' ' '))"
+done
+
+# ---- what can a full factory restore work from? ----------------
+# ad4-factory.sh probe reads the user's factory/ folder (FlashForge's own
+# upgrade key - not redistributed here) and, as a fallback, the control
+# package already sitting in the printer's /opt/PROGRAM. Nothing is
+# written; the untar goes to /tmp.
+FACTSH="$WORK_DIR/ad4-factory.sh"
+if [ -f "$FACTSH" ]; then
+  FACT=$(sh "$FACTSH" probe 2>>"$LOG")
+  LOGF "factory probe: $FACT"
+  n=$(printf '%s' "$FACT" | sed -n 's/.*pkgs=\([0-9]\).*/\1/p'); n=${n:-0}
+  case "$FACT" in *mcu_hd=yes*) MCUTXT="+mcu" ;; *) MCUTXT="" ;; esac
+  if [ "$n" = 0 ] && [ -z "$MCUTXT" ]; then
+    FACT_TXT="nothing in factory/"
+  else
+    FACT_TXT="$n/4 packages $MCUTXT"
+  fi
+  LOGF "panel factory line: '$FACT_TXT'"
+else
+  LOGF "ad4-factory.sh not on the stick: FULL FACTORY will be refused"
+fi
 
 # ---- anti-brick hex base guard, PURE awk (no python) ----------
 # Emits "minabs=0x... maxabs=0x... ok=0/1" and sets a global OK.
@@ -275,6 +317,23 @@ check_base() {
     }' "$1"
 }
 
+# ---- static IP on eth0 (also needed before any host round-trip) --
+net_up() {
+  LOGF "configuring eth0 = $SOC_IP/$SOC_NET"
+  if command -v ip >/dev/null 2>&1; then
+    ip addr flush dev eth0 2>/dev/null
+    ip addr add "$SOC_IP/$SOC_NET" dev eth0 2>/dev/null
+    ip link set eth0 up 2>/dev/null
+    LOGF "ip addr show eth0:"; ip addr show eth0 >> "$LOG" 2>&1
+  elif command -v ifconfig >/dev/null 2>&1; then
+    ifconfig eth0 "$SOC_IP" netmask 255.255.255.0 up 2>/dev/null
+    LOGF "ifconfig eth0:"; ifconfig eth0 >> "$LOG" 2>&1
+  else
+    LOGF "no 'ip' or 'ifconfig' - cannot set IP"
+  fi
+  sleep 1
+}
+
 # ---- select image + guard -------------------------------------
 # The flag files set the DEFAULT; the panel menu can then override it by
 # touch (same four tokens, so an unattended stick behaves as before):
@@ -283,7 +342,12 @@ check_base() {
 #   RESTORE + NO_FLASH -> unwind the SoC hook only, leave the MCU image
 #             alone (non-destructive revert; see the warning below)
 #   (neither) -> flash klipper.hex
-if [ -f "$WORK_DIR/RESTORE" ] && [ -f "$WORK_DIR/NO_FLASH" ]; then FLAG=restore-noflash
+#   FACTORY  -> full stock restore: vendor package swap + MCU image
+#               (needs the factory/ folder; never auto-fires from the panel)
+#   DUMP     -> read the MCU flash back out through klipper, change nothing
+if [ -f "$WORK_DIR/FACTORY" ]; then FLAG=factory
+elif [ -f "$WORK_DIR/DUMP" ]; then FLAG=dump
+elif [ -f "$WORK_DIR/RESTORE" ] && [ -f "$WORK_DIR/NO_FLASH" ]; then FLAG=restore-noflash
 elif [ -f "$WORK_DIR/RESTORE" ]; then FLAG=restore
 elif [ -f "$WORK_DIR/NO_FLASH" ]; then FLAG=noflash
 else FLAG=klipper
@@ -297,7 +361,11 @@ LOGF "stick flag default: $FLAG"
 # persistent daemon's bridge holds it) and it resets the MCU, so a NO_FLASH
 # run leaves the chip unprobed rather than disturbing a live MCU.
 IAP="$WORK_DIR/stm32isp-ad4"
-if [ "$MCU_HINT" = "unknown" ] && [ -x "$IAP" ] && [ "$FLAG" != "noflash" ]; then
+# 'dump' is excluded as well as 'noflash': the probe kills whoever holds
+# ttyS1 and resets the chip, which is exactly the bridge + running klipper
+# that a dump depends on.
+if [ "$MCU_HINT" = "unknown" ] && [ -x "$IAP" ] \
+   && [ "$FLAG" != "noflash" ] && [ "$FLAG" != "dump" ]; then
   # same stops the flash section does a bit later - the probe just needs the
   # uart, and the vendor app is going down either way
   pkill_safe "ffstartup-arm"; pkill_safe "adventurer4-arm"
@@ -320,6 +388,7 @@ if [ "$SCR_OK" = 1 ]; then
   LOGF "panel menu up: tapping nothing for 25 s runs '$FLAG'"
   CHOICE=$(AD4_MCU="$MCU_HINT" AD4_IP="$SOC_IP" AD4_PORT="$BRIDGE_PORT" \
            AD4_INSTALLED="$INSTALLED_TXT" AD4_STICK="$STICK_FILES" \
+           AD4_FACTORY="$FACT_TXT" \
            "$SCR" menu --auto "$FLAG" 25 2>>"$LOG")
   MRC=$?
   LOGF "panel menu rc=$MRC token='${CHOICE:-none}'"
@@ -328,7 +397,7 @@ if [ "$SCR_OK" = 1 ]; then
        echo "skipped-at-panel" > "$STATUS" 2>/dev/null; sync
        exit 2 ;;
     0) case "$CHOICE" in
-         klipper|restore|noflash|restore-noflash) FLAG="$CHOICE" ;;
+         klipper|restore|factory|dump|noflash|restore-noflash) FLAG="$CHOICE" ;;
          *) LOGF "panel: unexpected token '$CHOICE' - keeping the flag default" ;;
        esac ;;
     *) LOGF "panel: no usable touch input - keeping the flag default" ;;
@@ -338,8 +407,19 @@ case "$FLAG" in
   restore-noflash) IMG="";                          MODE=skip;    FLASH_SKIP=1 ;;
   restore)         IMG="$WORK_DIR/factory-HD.hex";  MODE=factory; FLASH_SKIP=0 ;;
   noflash)         IMG="";                          MODE=skip;    FLASH_SKIP=1 ;;
+  factory)         IMG="";                          MODE=skip;    FLASH_SKIP=1 ;;
+  dump)            IMG="";                          MODE=skip;    FLASH_SKIP=1 ;;
   *)               IMG="$WORK_DIR/klipper.hex";     MODE=strict;  FLASH_SKIP=0 ;;
 esac
+# factory-HD.hex is a convenience copy of FlashForge's MCU image. Without it
+# the same image is resolved from the user's factory/ folder, or off the
+# printer's own /opt/PROGRAM/control - so nothing copyrighted has to ship
+# on this stick for a RESTORE to work.
+if [ "$FLAG" = restore ] && [ ! -f "$IMG" ] && [ -f "$FACTSH" ]; then
+  case "$MCU_HINT" in *NA*) MREV=NA ;; *) MREV=HD ;; esac
+  IMG=$(sh "$FACTSH" mcuhex "$MREV" 2>>"$LOG")
+  [ -f "$IMG" ] && LOGF "restore image from the factory source: $IMG"
+fi
 LOGF "selected image: ${IMG:-(none, no MCU flash)} (mode=$MODE, flag=$FLAG)"
 if [ "$FLASH_SKIP" = 1 ]; then
   LOGF "no MCU flash this run (SoC access + bridge only)"
@@ -359,6 +439,38 @@ else
     echo "flash-refused($FLAG)" > "$STATUS"; sync; exit 1
   fi
   LOGF "hex guard PASSED"
+fi
+
+# ---- DUMP: read the MCU flash out, change nothing ---------------
+# debug_read is a klipper command, so the only thing that can see the
+# flash-resident bootloader is klipper already running on the MCU. The
+# bridge and klipper therefore have to stay exactly as they are: this
+# path touches the network and nothing else, and it never flashes.
+if [ "$FLAG" = dump ]; then
+  if [ ! -f "$WORK_DIR/ad4-dump.sh" ]; then
+    SCRX fail "no ad4-dump.sh" "the dump script is missing from the stick"
+    echo "dump-skipped(no-script)" > "$STATUS"; sync; exit 1
+  fi
+  net_up
+  SCRX status "dumping flash" "reading the MCU through klipper\nabout 46 s - do not power off" 20
+  chime start
+  AD4_LOG="$WORK_DIR/ad4-dump.log" sh "$WORK_DIR/ad4-dump.sh" boot \
+      > "$WORK_DIR/ad4-dump.out" 2>&1
+  DR=$?
+  cat "$WORK_DIR/ad4-dump.out" >> "$LOG"
+  LOGF "ad4-dump.sh rc=$DR"
+  if [ "$DR" = 0 ]; then
+    chime ok
+    echo "dump complete (the .bin is on the host)" > "$STATUS"; sync
+    SCRX done "dump written" "adv4-bootloader.bin is in klipper's\nworking dir on the host, not on the stick"
+  else
+    chime fail
+    echo "dump failed rc=$DR" > "$STATUS"; sync
+    SCRX fail "dump failed" "klipper or moonraker unreachable\nsee ad4-dump.log on the stick"
+  fi
+  # exit 0 leaves a klipperized printer exactly as it was (vendor GUI still
+  # suppressed); the bridge was never touched.
+  exit 0
 fi
 
 # ---- stop the vendor stack (frees /dev/ttyS1 + GPIOs) ---------
@@ -407,6 +519,48 @@ else
   LOGF "ttyS1 ABSENT - /dev/ttyS*: $(ls -la /dev/ttyS* 2>&1)"
 fi
 sleep 1
+
+# ---- FULL FACTORY RESTORE --------------------------------------
+# Everything stock again: FlashForge's own /opt/PROGRAM package swap plus
+# the MCU image, all inside ad4-factory.sh. It reads the packages from the
+# user's factory/ folder (their copy of the upgrade key - FlashForge's
+# firmware, not redistributed here) and falls back to the printer's own
+# /opt/PROGRAM/control for the MCU hex. The vendor stack is already down
+# and ttyS1 is free, which is all the MCU write needs.
+if [ "$FLAG" = factory ]; then
+  if [ ! -f "$FACTSH" ]; then
+    SCRX fail "no ad4-factory.sh" "the restore script is missing from the stick"
+    echo "factory-skipped(no-script)" > "$STATUS"; sync
+    FATAL "ad4-factory.sh missing"
+  fi
+  SCRX status "full factory restore" "soc packages + mcu image\nseveral minutes - do not power off" 30
+  chime start
+  AD4_LOG="$WORK_DIR/ad4-factory.log" sh "$FACTSH" run \
+      > "$WORK_DIR/ad4-factory.out" 2>&1
+  FR=$?
+  cat "$WORK_DIR/ad4-factory.out" >> "$LOG"
+  LOGF "ad4-factory.sh run rc=$FR"
+  if [ "$FR" != 0 ]; then
+    chime fail
+    echo "factory restore FAILED rc=$FR" > "$STATUS"; sync
+    SCRX fail "factory restore failed" "read ad4-factory.log on the stick"
+    exit 1
+  fi
+  # The software package puts the STOCK auto_run.sh back, but only if the
+  # user supplied that package. Unwind the hook explicitly so a partial
+  # factory/ folder cannot leave the klipper gate in front of stock
+  # firmware - that combination is what makes a printer look bricked.
+  if [ -f "$WORK_DIR/ad4-uninstall-persistent.sh" ]; then
+    LOGF "unwinding the klipper boot hook (ad4-uninstall-persistent.sh --no-mcu)"
+    sh "$WORK_DIR/ad4-uninstall-persistent.sh" --no-mcu >> "$LOG" 2>&1
+  fi
+  chime ok
+  echo "factory restore complete" > "$STATUS"; sync
+  SCRX done "factory restored" "soc and mcu are stock again\nremove the stick, then power cycle"
+  LOGF "factory restore complete; rebooting into stock"; sleep 3
+  reboot 2>/dev/null || reboot -f 2>/dev/null || /sbin/reboot 2>/dev/null || true
+  exit 0
+fi
 
 # ---- flash ----------------------------------------------------
 # The MCU is a Huada HC32F460 (or a Nation N32 on NA boards). It has NO ROM
@@ -507,19 +661,7 @@ if [ "$FLAG" = restore ] || [ "$FLAG" = restore-noflash ]; then
 fi
 
 # ---- static IP on eth0 ----------------------------------------
-LOGF "configuring eth0 = $SOC_IP/$SOC_NET"
-if command -v ip >/dev/null 2>&1; then
-  ip addr flush dev eth0 2>/dev/null
-  ip addr add "$SOC_IP/$SOC_NET" dev eth0 2>/dev/null
-  ip link set eth0 up 2>/dev/null
-  LOGF "ip addr show eth0:"; ip addr show eth0 >> "$LOG" 2>&1
-elif command -v ifconfig >/dev/null 2>&1; then
-  ifconfig eth0 "$SOC_IP" netmask 255.255.255.0 up 2>/dev/null
-  LOGF "ifconfig eth0:"; ifconfig eth0 >> "$LOG" 2>&1
-else
-  LOGF "no 'ip' or 'ifconfig' - cannot set IP"
-fi
-sleep 1
+net_up
 
 # ---- bridge (static C binary; the SoC has NO python3) ---------
 # 'ad4-bridge' is a zig cross-compiled, byte-transparent TCP<->/dev/ttyS1

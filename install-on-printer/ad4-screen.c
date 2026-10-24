@@ -206,6 +206,7 @@ static void textc_wrap(const surf *s, int cx, int y, const char *t, int sc,
 #define C_OK     0x35d69au
 #define C_WARN   0xf0a848u
 #define C_ERR    0xff6b78u
+#define C_ERRD   0xb03a44u
 
 static void background(const surf *s) {
     blend_rect(s, 0, 0, s->w, s->h, C_BG0, C_BG1);
@@ -426,7 +427,7 @@ static long now_ms(void) {
 
 /* ------------------------------------------------------------ screens */
 typedef struct { int x, y, w, h; const char *label; const char *token;
-                 unsigned top, bot; int sc; } btn;
+                 unsigned top, bot; int sc; int danger; } btn;
 
 static void draw_btn(const surf *s, const btn *b) {
     rrect(s, b->x, b->y, b->w, b->h, 18, b->top, b->bot);
@@ -458,33 +459,57 @@ static const char *g_env(const char *k, const char *d) {
 }
 
 /* --------------------------------------------------------------- menu */
+/* Stacked, not side by side: portrait gives 432 px of width and a tap target
+ * the height of a finger. The two-line buttons are the jobs that end with a
+ * flash; DUMP only reads, and FULL FACTORY is the one that can lose work, so
+ * it is red and needs a second tap. */
+static const btn MENU[] = {
+    { 24, 336, 432, 112, "KLIPPERIZE\ninstall klipper",
+      "klipper", C_ACC, C_ACCD, 2, 0 },
+    { 24, 456, 432,  80, "RESTORE MCU\nstock firmware only",
+      "restore", 0x5a6a80u, 0x39465au, 2, 0 },
+    { 24, 544, 432,  80, "FULL FACTORY\nsoc + mcu, wipes klipper",
+      "factory", C_ERRD, 0x6d2530u, 2, 1 },
+    { 24, 632, 432,  56, "DUMP FLASH",
+      "dump", C_CARD2, C_CARD, 2, 0 },
+    { 24, 696, 432,  44, "SKIP",
+      "skip", C_CARD2, C_CARD, 2, 0 },
+};
+#define MENU_N ((int)(sizeof MENU / sizeof MENU[0]))
+
+/* One paint path for the first frame, the countdown and the confirm, so the
+ * three can never drift apart. */
+static void paint_menu(surf *s, const char *chip, const char *const *lines,
+                       int ask, const char *hint, int hintcol) {
+    background(s);
+    header(s, "ADVENTURER 4  KLIPPER", chip, C_ACC);
+    info_lines(s, 118, lines, 4);
+    if (ask >= 0)
+        textc(s, s->w / 2, 300, "tap it again to confirm", 2, C_ERR);
+    for (int i = 0; i < MENU_N; i++) {
+        const btn *b = &MENU[i];
+        if (i == ask)
+            rrect(s, b->x, b->y, b->w, b->h, 18, C_ERR, C_ERRD);
+        draw_btn(s, b);
+    }
+    textc(s, s->w / 2, 754, hint, 2, hintcol);
+}
+
 static int cmd_menu(const char *dump, const char *autotok, int autosec) {
     surf s;
     if (fb_open(&s) < 0) return 1;
-    background(&s);
 
     char chip[48];
     snprintf(chip, sizeof chip, "MCU %s", g_env("AD4_MCU", "?"));
-    header(&s, "ADVENTURER 4  KLIPPER", chip, C_ACC);
 
     char l0[160], l1[160], l2[160], l3[160];
-    snprintf(l0, sizeof l0, "SoC      = %s :%s", g_env("AD4_IP", "?"), g_env("AD4_PORT", "?"));
-    snprintf(l1, sizeof l1, "MCU      = %s", g_env("AD4_MCU", "unknown"));
-    snprintf(l2, sizeof l2, "Installed  = %s", g_env("AD4_INSTALLED", "unknown"));
-    snprintf(l3, sizeof l3, "Stick      = %s", g_env("AD4_STICK", "klipper.hex"));
+    snprintf(l0, sizeof l0, "MCU      = %s", g_env("AD4_MCU", "unknown"));
+    snprintf(l1, sizeof l1, "Installed= %s", g_env("AD4_INSTALLED", "unknown"));
+    snprintf(l2, sizeof l2, "Stick    = %s", g_env("AD4_STICK", "klipper.hex"));
+    snprintf(l3, sizeof l3, "Factory  = %s", g_env("AD4_FACTORY", "not checked"));
     const char *lines[] = { l0, l1, l2, l3 };
-    info_lines(&s, 118, lines, 4);
 
-    /* stacked, not side by side: portrait gives 432 px of width and a tap
-     * target the height of a finger */
-    btn b[] = {
-        { 24, 360, 432, 150, "KLIPPERIZE\ninstall klipper", "klipper", C_ACC, C_ACCD, 2 },
-        { 24, 524, 432, 150, "RESTORE\nback to factory",    "restore", 0x5a6a80u, 0x39465au, 2 },
-        { 24, 686, 432,  56, "SKIP",                        "skip",    C_CARD2, C_CARD, 2 },
-    };
-    for (unsigned i = 0; i < sizeof b / sizeof b[0]; i++) draw_btn(&s, &b[i]);
-
-    textc(&s, s.w / 2, 754, "nothing runs until you tap", 2, C_DIM);
+    paint_menu(&s, chip, lines, -1, "nothing runs until you tap", C_DIM);
 
 #ifdef AD4_DUMP
     (void)autotok; (void)autosec;
@@ -500,7 +525,19 @@ static int cmd_menu(const char *dump, const char *autotok, int autosec) {
         fb_close(&s, 0);
         return 1;
     }
-    long t0 = now_ms(), deadline = autotok ? t0 + (long)autosec * 1000 : 0;
+    long t0 = now_ms();
+    long deadline = autotok ? t0 + (long)autosec * 1000 : 0;
+    /* The countdown is the one path with no second tap in front of it, so a
+     * destructive token can never be the auto default - a FACTORY flag file
+     * on an unattended stick must not wipe /opt/PROGRAM by itself. */
+    for (int i = 0; i < MENU_N; i++) {
+        if (autotok && !strcmp(MENU[i].token, autotok) && MENU[i].danger) {
+            fprintf(stderr, "menu: '%s' is destructive, waiting for a tap\n", autotok);
+            autotok = 0;
+            deadline = 0;
+        }
+    }
+    int ask = -1;
     for (;;) {
         struct pollfd p = { .fd = fd, .events = POLLIN };
         long left = deadline ? deadline - now_ms() : 1000;
@@ -513,30 +550,45 @@ static int cmd_menu(const char *dump, const char *autotok, int autosec) {
         if (poll(&p, 1, (int)left) > 0) {
             int x, y;
             if (ts_read(fd, &c, &s, &x, &y) == 0) {
-                for (unsigned i = 0; i < sizeof b / sizeof b[0]; i++) {
-                    if (x >= b[i].x && x < b[i].x + b[i].w &&
-                        y >= b[i].y && y < b[i].y + b[i].h) {
-                        rrect(&s, b[i].x, b[i].y, b[i].w, b[i].h, 18, C_OK, C_ACCD);
-                        draw_btn(&s, &b[i]);
-                        buzz_cue(AD4_TAP);
-                        printf("%s\n", b[i].token);
-                        fflush(stdout);
-                        close(fd); fb_close(&s, 0);
-                        return strcmp(b[i].token, "skip") == 0 ? 2 : 0;
+                for (int i = 0; i < MENU_N; i++) {
+                    const btn *b = &MENU[i];
+                    if (!(x >= b->x && x < b->x + b->w &&
+                          y >= b->y && y < b->y + b->h))
+                        continue;
+                    if (ask >= 0 && i != ask) {
+                        /* While a destructive action is armed, every other tap
+                         * only cancels it: a slip from one button to the next
+                         * must not trade a mis-tap for a wiped /opt/PROGRAM. */
+                        ask = -1;
+                        deadline = 0;
+                        buzz_cue(AD4_MARK);
+                        paint_menu(&s, chip, lines, ask,
+                                   "cancelled", C_DIM);
+                        break;
                     }
+                    if (b->danger && ask != i) {
+                        ask = i;
+                        deadline = 0;      /* never auto-fire a confirmed wipe */
+                        buzz_cue(AD4_MARK);
+                        paint_menu(&s, chip, lines, ask,
+                                   "any other tap cancels", C_WARN);
+                        break;
+                    }
+                    rrect(&s, b->x, b->y, b->w, b->h, 18, C_OK, C_ACCD);
+                    draw_btn(&s, b);
+                    buzz_cue(AD4_TAP);
+                    printf("%s\n", b->token);
+                    fflush(stdout);
+                    close(fd); fb_close(&s, 0);
+                    return strcmp(b->token, "skip") == 0 ? 2 : 0;
                 }
             }
         }
         if (deadline) {   /* repaint the countdown */
-            background(&s);
-            header(&s, "ADVENTURER 4  KLIPPER", chip, C_ACC);
-            info_lines(&s, 118, lines, 4);
-            for (unsigned i = 0; i < sizeof b / sizeof b[0]; i++) draw_btn(&s, &b[i]);
             int left_s = (int)((deadline - now_ms() + 999) / 1000);
             char cd[64];
-            snprintf(cd, sizeof cd, "auto %s in %ds", autotok, left_s);
-            textc(&s, s.w / 2, 754, cd, 2, C_WARN);
-            textc(&s, s.w / 2, 776, "tap SKIP to stop", 2, C_DIM);
+            snprintf(cd, sizeof cd, "auto %s in %ds - tap SKIP to stop", autotok, left_s);
+            paint_menu(&s, chip, lines, ask, cd, C_WARN);
         }
     }
 #endif

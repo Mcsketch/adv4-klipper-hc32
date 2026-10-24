@@ -45,15 +45,20 @@ vendor app and driven by Klipper through the bridge.
 ## Step 1 — Build the USB stick (on your Mac)
 
 ```sh
-cd <repo>/flashdisk
-./build-usb-stick.sh /Volumes/MYSTICK     # stick already FAT32 + mounted
+cp -r <repo>/install-on-printer/* /Volumes/MYSTICK/   # stick already FAT32 + mounted
 ```
 
-The builder verifies the flasher's md5 and the Klipper hex's base address
-before copying, then lays down: `flashforge_init.sh`, `IAPCommand`,
-`klipper.hex` (positioned at `0x0000C000`), `factory-HD.hex`,
-`ad4-serial-bridge.py`, `ad4-net.conf`, `screwflag`. See `flashdisk/README.md`
-for the anti-brick details.
+Then drop FlashForge's own firmware into `/Volumes/MYSTICK/factory/` if you
+want the full factory restore available on the printer — it is their
+copyrighted firmware, so the repo does not carry it.
+
+`install-on-printer/build-stick.sh /Volumes/MYSTICK` does the same copy plus
+sanity checks (ARM binaries, `klipper.hex` load address). Either way the stick
+gets: `flashforge_init.sh`, `stm32isp-ad4` (our flasher), `ad4-screen`,
+`ad4-buzz`, `ad4-bridge`, `dropbear`, `klipper.hex` (positioned at
+`0x0000C000`), `ad4-factory.sh`, `ad4-dump.sh`, `ad4-net.conf`, `screwflag`.
+See `install-on-printer/README.md` for the anti-brick details and the flag
+files that pick a mode.
 
 ---
 

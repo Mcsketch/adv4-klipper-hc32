@@ -56,9 +56,11 @@ export PATH="/Users/admin/toolchains/xpack-arm-none-eabi-gcc-14.2.1-1.1/bin:$PAT
 make -j4 && arm-none-eabi-objcopy -O ihex out/klipper.elf out/klipper-ad4.hex
 
 /Users/admin/adv4-klip/bridge/ad4-mac-stop.sh          # frees ttyS1 (bridge is single-client)
-sshpass -p flashforge scp -O out/klipper-ad4.hex root@192.168.10.10:/opt/ad4-klipper/
+# no sftp-server on this busybox: pipe the hex over ssh instead of scp
+cat out/klipper-ad4.hex | sshpass -p flashforge ssh root@192.168.10.10 \
+  'cat > /opt/ad4-klipper/klipper.hex'
 sshpass -p flashforge ssh root@192.168.10.10 \
-  'cd /opt/ad4-klipper && ./IAPCommand klipper-ad4.hex klipper-ad4.hex /dev/ttyS1 115200'
+  'cd /opt/ad4-klipper && ./stm32isp-ad4 -p /dev/ttyS1 -v klipper.hex'
 # reset + liveness:
 sshpass -p flashforge ssh root@192.168.10.10 \
   'echo 0 > /sys/class/gpio/gpio34/value; sleep 0.3; echo 1 > /sys/class/gpio/gpio34/value; cd /opt/ad4-klipper && ./ad4_identify 115200 /dev/ttyS1'
@@ -66,10 +68,14 @@ sshpass -p flashforge ssh root@192.168.10.10 \
 /Users/admin/adv4-klip/bridge/ad4-mac-start.sh
 ```
 
-Notes: `IAPCommand` takes **two** hex args (NA + HD images — pass the same
-file twice). The bootloader at `0x00000..0x0BFFF` is flash-resident — never
-write below `0x0000C000`. Our `stm32isp-ad4` port currently **fake-succeeds**;
-the vendor tool is the working flasher until it is rewritten. Full details:
+Notes: `stm32isp-ad4` (source in `stm32isp-ad4/`) is our own flasher — the
+vendor `IAPCommand`'s HC32 protocol, plus a `-s` chip probe and a hard guard
+that refuses any record below `0x0000C000`, where the flash-resident
+bootloader lives. Verify a write by its `STM32Write: success` marker, not by
+the exit status alone: rc 0 only proves contact. And build the image
+positioned (`tools/make-positioned-ihex.py out/klipper.bin 0xC000 …`), not
+with plain `objcopy` — for an image straddling a 64K page `objcopy` emits
+type-02 records a simple loader reads as base `0x00000000`. Full details:
 `KLIPPER-AD4-FLASH-GUIDE.md`.
 
 ## Pin map (PROVEN 2026-10-22: firmware RE + live tests)
@@ -110,7 +116,7 @@ klippy `[mcu] serial: socket://192.168.10.10:5000` — direct TCP, no socat PTY
 |---|---|
 | `bridge/` | **current** SoC + Mac scripts: `ad4-mac-start.sh` / `ad4-mac-stop.sh`, `ad4-fluidd-proxy.py`, `ad4-bridge.c`, `ad4_identify.c`, probes |
 | `stm32isp-ad4/` | our flasher, source for the vendor `IAPCommand` protocol: writes, verifies, and probes the chip (`-s`); what the stick ships |
-| `new-usb-flash/` | USB-stick unattended flash + persistent eMMC install path (panel UI, bridge, buzzer) |
+| `install-on-printer/` | USB-stick flash + persistent eMMC install path (panel UI, bridge, buzzer, factory restore, dump) |
 | `klipper-port/` | the Klipper board files (also live in `/Users/admin/klipper-hc32`) |
 | `flash-images/` | validated Intel-HEX images |
 | `work/` | factory binaries, straces, decoded images (RE evidence) |
@@ -157,8 +163,9 @@ klippy `[mcu] serial: socket://192.168.10.10:5000` — direct TCP, no socat PTY
 - **MCU bad flash:** re-run the flash cycle (bootloader is never touched).
 - **MCU silent:** NRST pulse → `ad4_identify`; if still dead, power-cycle the
   printer, restart the bridge, retry.
-- **Back to stock MCU:** `stm32isp-ad4` with the factory hexes in
-  `stm32isp-ad4/` (or the USB stick with a `RESTORE` flag — see `new-usb-flash/`).
+- **Back to stock MCU:** the USB stick with a `RESTORE` flag (see
+  `install-on-printer/`). No stock hex is committed — the image comes from the
+  stick's `factory/` folder or from the printer's own `/opt/PROGRAM/control/`.
 - **SoC broken:** rewrite the `FFAD4-BKUP.zip` eMMC image.
 
 ## Provenance

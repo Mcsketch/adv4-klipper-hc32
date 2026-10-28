@@ -371,6 +371,11 @@ int main(int argc, char **argv){
             img = argv[i];
         }
     }
+    if(probe_only){
+        fprintf(stderr,"-s refused (2026-10-27): the vendor IAP erases the application pages as soon as\n"
+                       "it is synced, so a probe IS a flash erase. Read the chip over SWD instead.\n");
+        return 2;
+    }
     if(!img && !probe_only){
         fprintf(stderr,"usage: %s [-p /dev/ttyS1] [-v] <hex>\n", argv[0]);
         fprintf(stderr,"       %s [-p /dev/ttyS1] -s        (probe revision, "

@@ -355,29 +355,15 @@ fi
 LOGF "stick flag default: $FLAG"
 
 # ---- which chip is actually in this printer? ------------------
-# The sync reply to 0x43 is the only revision marker that still works once
-# Klipper is in the app window: the flash-resident bootloader below 0xC000
-# answers it whatever is programmed above. It needs ttyS1 to ourselves (the
-# persistent daemon's bridge holds it) and it resets the MCU, so a NO_FLASH
-# run leaves the chip unprobed rather than disturbing a live MCU.
+# 2026-10-27: the boot-time probe is GONE. Syncing the vendor IAP (0x43 after a
+# reset taken with GPIO35 high) makes it ERASE the application pages before a
+# single frame is written - proven by SWD read-back on the NA unit. A "probe"
+# is therefore a flash erase, never read-only. The revision now comes from the
+# ad4-rev file on the stick (8 chars, e.g. "NA / N32"); without it the panel
+# shows 'unknown'. The flasher itself still does the sync - as the first step
+# of a real write, which is the only time it is allowed.
 IAP="$WORK_DIR/stm32isp-ad4"
-# 'dump' is excluded as well as 'noflash': the probe kills whoever holds
-# ttyS1 and resets the chip, which is exactly the bridge + running klipper
-# that a dump depends on.
-if [ "$MCU_HINT" = "unknown" ] && [ -x "$IAP" ] \
-   && [ "$FLAG" != "noflash" ] && [ "$FLAG" != "dump" ]; then
-  # same stops the flash section does a bit later - the probe just needs the
-  # uart, and the vendor app is going down either way
-  pkill_safe "ffstartup-arm"; pkill_safe "adventurer4-arm"
-  kill_fd_holder /dev/ttyS1 2>/dev/null
-  PROBE=$("$IAP" -s 2>&1)
-  LOGF "mcu probe: $(echo "$PROBE" | tr '\n' ' ')"
-  case "$PROBE" in
-    *REV=HD*) MCU_HINT="HD / HC32F460" ;;
-    *REV=NA*) MCU_HINT="NA / N32" ;;
-    *) LOGF "  no bootloader answer: chip stays '$MCU_HINT'" ;;
-  esac
-fi
+LOGF "mcu probe disabled (IAP sync erases the app); revision from ad4-rev: $MCU_HINT"
 LOGF "MCU for the panel: $MCU_HINT"
 
 # ---- the panel gets the last word -----------------------------

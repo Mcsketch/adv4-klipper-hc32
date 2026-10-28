@@ -60,8 +60,8 @@ recovery tool, and this restore is a package swap.
 ## At boot the stick does, in order
 
 1. kills the vendor app so `/dev/ttyS1` is free,
-2. probes the MCU (`stm32isp-ad4 -s`) so the panel can show which chip this
-   printer has — `HD / HC32F460` or `NA / N32`,
+2. reads the chip revision from the stick's `ad4-rev` file (the old
+   `stm32isp-ad4 -s` probe is gone since 2026-10-27: syncing the IAP erases the app),
 3. puts the menu on the touchscreen (KLIPPERIZE / RESTORE / SKIP); the stick's
    flag files are the default and the fallback when there is no panel,
 4. flashes the MCU through `stm32isp-ad4`, our own flasher (it refuses any
@@ -164,7 +164,7 @@ password is one stick-boot away.
 | `ad4-factory.sh` | full stock restore: MCU first, then the four packages. `probe` / `mcuhex` / `run` |
 | `ad4-dump.sh` | reads the MCU flash back out through Klipper (`check` / `peek` / `boot` / `full`) |
 | `ROOT` | optional, yours: first line = the root password you want |
-| `stm32isp-ad4` | our ARM flasher (source in `../stm32isp-ad4/`): same HC32 protocol as the vendor tool, plus a `-s` chip probe |
+| `stm32isp-ad4` | our ARM flasher (source in `../stm32isp-ad4/`): same HC32 protocol as the vendor tool, plus a `-s` chip probe (DESTRUCTIVE: sync = app erase; refused since 2026-10-27) |
 | `ad4-screen` | static ARM panel UI: touchscreen menu, live status while flashing, chip shown in the header |
 | `ad4-buzz` / `.c` + `ad4_buzzer.h` | static ARM buzzer player: the `/dev/pwm` ioctls (decoded from the vendor `play` binary) and the cues, including the completion riff |
 | `ad4-bridge` / `.c` | static ARM (zig) TCP<->UART relay — the bridge |
@@ -173,7 +173,7 @@ password is one stick-boot away.
 | `ad4-install-persistent.sh` | installs the eMMC boot hook, then reboots |
 | `ad4-uninstall-persistent.sh` | restores stock boot |
 | `ad4-setrootpw.sh` | root password change + SSH persistence check |
-| `ad4-revcheck.sh` | read-only NA-vs-HD MCU probe (`07`=HD, `06`=NA) |
+| `ad4-revcheck.sh` | DISABLED 2026-10-27: it was never read-only, the IAP erases the app on sync |
 | `ad4-net.conf` | `SOC_IP` / `SOC_NET` / `BRIDGE_PORT` |
 | `screwflag` | empty; skips the vendor machine-type check |
 | `ad4-serial-bridge.py` | python fallback (the SoC has no python3 — dead weight) |

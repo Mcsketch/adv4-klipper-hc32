@@ -1,5 +1,8 @@
 #!/bin/sh
-# ad4-revcheck.sh — which MCU is in this ADV4? Read-only, no flash writes.
+# ad4-revcheck.sh — DISABLED 2026-10-27. This was NOT read-only: the vendor IAP
+# erases the application pages the moment it is synced (SWD-proven, NA unit).
+echo "ad4-revcheck.sh is disabled: syncing the IAP erases the MCU app. Read the chip over SWD (work/swd/swd-probe.sh)." >&2
+exit 2
 #
 # Sequence copied from the vendor IAPCommand (main 0x10a0c, stm32Init 0x11654,
 # stm32Sync 0x1152c, gpio_out 0x11800):

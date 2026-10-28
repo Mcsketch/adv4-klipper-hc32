@@ -188,8 +188,8 @@ which pulses NRST (GPIO34, 15.68 ms) and sends a single `0x43`, nothing else.
 
 So on this NA board **GPIO35 is the IAP-mode strap** (high + reset = vendor
 bootloader answers; low = it hands over). `0x06` = the NA revision byte,
-exactly what `stm32isp-ad4.c` expects. The 10-24 stick probe's silence was
-not the board.
+exactly what `stm32isp-ad4.c` expects. (The stick never probed on 10-24: its
+`-s` probe is skipped under NO_FLASH — fortunate, see below.)
 
 **Observed afterwards (unresolved):** once the bootloader had been synced,
 the MCU answered nothing in app mode — the restarted vendor GUI got no
@@ -208,8 +208,8 @@ it is synced** — a bare `0x43` with GPIO35 high is already destructive on this
 board. Rules that follow:
 - never sync the IAP (nasync, `stm32isp-ad4 -s`, IAPCommand) unless a complete
   image write follows in the same run;
-- the stick's boot-time revision probe (`stm32isp-ad4 -s`) must go — it only
-  "failed" on 10-24, it was never harmless.
+- the stick's boot-time revision probe (`stm32isp-ad4 -s`) is removed; the
+  revision comes from an `ad4-rev` file on the stick instead.
 Recovery = the vendor's own path: `IAPCommand <NA hex> <HD hex>` on the SoC
 (kit staged in `/tmp/iap`, copies in `prodesk:~/ad4-backup`), then SWD compare
 against `n32-flash-full-20261027-1942.bin`.

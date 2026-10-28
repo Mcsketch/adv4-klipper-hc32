@@ -23,6 +23,9 @@ pin nearest the `J16` text / C147 / TOP_FAN side; `GND` is nearest the `FFP0187_
 | SWDIO | SWDIO |
 | GND | GND |
 
+Caleb's clone, by its silkscreen (2×5, odd pins one row, even pins the other): 1 RST, 2 SWCLK, 3 SWIM,
+4 SWDIO, 5 GND, 6 GND, 7 3.3V, 8 3.3V, 9 5V, 10 5V. Used: **2 → SWCLK, 4 → SWDIO, 5 → GND**. Nothing on 1, 3, 7–10.
+
 J16 carries no NRST, so the clone's `RST` wire has nowhere to go. Connect-under-reset fallback is
 the SoC-side `gpio34` hold-low (see "Reset control").
 

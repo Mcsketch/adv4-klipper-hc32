@@ -183,7 +183,8 @@ What we **can** say with confidence from the image:
 |---|---|---|
 | Processor model | **`Nation N32G452`** (or `N32G455`) → `MACH_N32G45x` | `choice "Processor model"` |
 | `MCU` | `stm32f103xe` (auto default for `MACH_N32G45x`) | `config MCU … default "stm32f103xe" if MACH_N32G45x` |
-| `CLOCK_FREQ` | **`128000000`** (external) — or `64000000` if `STM32_CLOCK_REF_INTERNAL` | `default 128000000 if MACH_N32G45x` |
+| `CLOCK_FREQ` | **`144000000`** (mainline `020d25e`; older trees said 128 MHz) — or `64000000` if `STM32_CLOCK_REF_INTERNAL` | `default 144000000 if MACH_N32G45x` |
+| Clock reference | **12 MHz crystal** (`STM32_CLOCK_REF_12M`) — board crystal Y1 is marked `12.000`, read from the 2026-10-27 board photo | PLL ×12 |
 | `FLASH_SIZE` | **`0x20000`** (128 KiB) | `default 0x20000 if MACH_N32G45x` |
 | `RAM_SIZE` | **`0x10000`** (64 KiB) | `default 0x10000 if MACH_N32G45x` |
 | Bootloader offset | **`64KiB bootloader`** → `STM32_FLASH_START_10000` → `FLASH_APPLICATION_ADDRESS = 0x8010000` | `default 0x8010000 if STM32_FLASH_START_10000` |
@@ -198,13 +199,12 @@ What we **can** say with confidence from the image:
 ### 3.2 `menuconfig` selection
 
 ```
-Processor model: Nation N32G452          (or Nation N32G455)
-Clock Reference: (external, default)     -> CLOCK_FREQ = 128000000
-  (choose "Internal clock" only if you must; then CLOCK_FREQ = 64000000)
+Processor model: Nation N32G455
+Clock Reference: 12 MHz crystal          -> CLOCK_FREQ = 144000000
 Bootloader offset: 64KiB bootloader       -> FLASH_APPLICATION_ADDRESS = 0x8010000
-Communication interface: Serial
-  - choose a free TX/RX pair (see 3.3)
-Baud Rate: 250000 (default)
+Communication interface: Serial (on USART1 PA10/PA9)   (see 3.3)
+Enable extra low-level configuration options: y        (makes Baud visible)
+Baud Rate: 115200                         (the SoC UART is stuck at 115200, see KLIPPER-AD4-FLASH-GUIDE.md)
 ```
 
 ### 3.3 Serial pins — PA7/PA8 conflict
@@ -214,12 +214,11 @@ shares the same pinmap, so **avoid PA7/PA8** for the host↔MCU UART. The N32G45
 serial options are the `STM32_SERIAL_*` choices (PA9/PA10 = USART1, PA2/PA3 = USART2,
 PD5/PD6 = USART2, PB10/PB11 = USART3). For AD4-NA:
 
-- **Recommended:** a pair not used by steppers/endstops/fans. On AD4 the TMC mux is on
-  PC10 and the fan/heater pins occupy PA1/PC2/PC4/PC5/PA5/PB9, so a safe default is
-  **USART1 PA9 (TX) / PA10 (RX)** — confirm against the board pin map before flashing,
-  since NA may differ from the HC32 pinmap.
-- Do **not** reuse the factory SoC↔MCU UART (MCU USART0) for Klipper host comms if it is
-  still wired to the SoC; pick a dedicated pair.
+- **Corrected 2026-10-27 from the SWD dump:** on the NA board the SoC↔MCU link *is*
+  **USART1 (PA9 TX / PA10 RX)** — both the vendor bootloader and the app reference only
+  `USART1` (`0x40013800`) and `GPIOA` (plus `UART4` in the app); there is no USART2 use at
+  all. Klipper must reuse exactly that UART, because the host path is the SoC bridge
+  (`/dev/ttyS1` ↔ TCP :5000), so the build is `STM32_SERIAL_USART1` at **115200**.
 
 ### 3.4 Ready `[mcu]` + build snippet
 
@@ -267,6 +266,15 @@ make                           # -> out/klipper.bin  (app @ 0x08010000)
 
 Flash with a tool that targets **`0x08010000`** and only the app window (see §4–5 for why
 Klippventurer's current default does not do this).
+
+### 3.5 Built 2026-10-27 (prodesk, mainline `020d25e`, gcc 13.2.1)
+
+`work/n32/klipper-n32g455.defconfig` is the exact config (`cp` it to `~/klipper/.config`,
+`make olddefconfig && make`). Result: 42172 B, vectors `SP 0x20010000 / reset 0x08016F89`,
+hex starts at `0x08010000`, `out/autoconf.h` reads `CONFIG_SERIAL_BAUD 115200`,
+`CONFIG_CLOCK_FREQ 144000000`, `CONFIG_CLOCK_REF_FREQ 12000000`. Images in `work/n32/`
+(git-ignored, sha256 in `work/n32/SHA256SUMS`); the same hex is on the FlashForge stick as
+`klipper.hex`, replacing the HC32F460 build, with `NO_FLASH` still in place. **Not flashed.**
 
 ---
 

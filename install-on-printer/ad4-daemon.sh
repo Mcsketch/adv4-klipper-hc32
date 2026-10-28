@@ -9,7 +9,8 @@
 # It does, every boot:
 #   1. Keep the vendor stack OFF (nothing respawns it, because our
 #      hook replaces ffstartup-arm's launch — but belt & suspenders).
-#   2. Set eth0 to the static IP (192.168.10.10/24 default).
+#   2. Bring eth0 up: DHCP by default (ETH_MODE=dhcp, resident udhcpc),
+#      or the static 192.168.10.10/24 point-to-point layout (ETH_MODE=static).
 #   3. Start the MCU serial<->network bridge on :5000 (self-heals:
 #      if it dies, the watchdog loop restarts it).
 #   4. OPTIONAL MCU self-heal: if /opt/ad4-klipper/mcu-watchdog exists,
@@ -19,6 +20,10 @@
 #   5. Keep WiFi up: wpa_supplicant on /etc/wpa_supplicant.conf + udhcpc on
 #      wlan0. On a stock printer the vendor GUI does this; with the GUI gated
 #      off, a WiFi-only printer would otherwise be unreachable.
+#   6. No-network fallback: if neither wlan0 nor eth0 has an IPv4 address
+#      for NET_FALLBACK_SECS (default 360) after start, drop the enable flag
+#      and reboot into the vendor UI, which brings WiFi + SSH back. A marker
+#      file (net-fallback) records that it happened.
 #   NA / N32 units: the daemon NEVER flashes the MCU (stm32isp-ad4 is HD-only
 #      and the vendor IAP erases the app on sync). ad4-rev decides, see below.
 #
@@ -26,12 +31,14 @@
 # BRIDGE_PORT), same keys as the one-shot disk version.
 # =============================================================
 
-BASE="/opt/ad4-klipper"
+BASE="${AD4_BASE:-/opt/ad4-klipper}"
 LOG="/var/log/ad4-klipper.log"
 
+ETH_MODE="dhcp"
 SOC_IP="192.168.10.10"
 SOC_NET="24"
 BRIDGE_PORT="5000"
+NET_FALLBACK_SECS="360"
 [ -f "$BASE/ad4-net.conf" ] && . "$BASE/ad4-net.conf"
 
 BRIDGE_C="$BASE/ad4-bridge"                 # static C bridge (no-python, preferred)
@@ -81,11 +88,32 @@ kill_vendor() {
   # They never write to the port, so they are harmless holders.
 }
 
-# ---- 2) static IP (idempotent) -------------------------------
+# ---- 2) eth0 (idempotent) -------------------------------------
+# ETH_MODE=dhcp (default): eth0 up + a resident udhcpc (-b retries in the
+# background until a lease arrives and renews it). Caleb's unit sits on the
+# home LAN (2026-10-27), where a static 192.168.10.x would be unreachable.
+# ETH_MODE=static: the original point-to-point cable layout
+# (host 192.168.10.1 <-> SoC SOC_IP/SOC_NET).
 set_ip() {
-  ip addr flush dev eth0 2>/dev/null
-  ip addr add "$SOC_IP/$SOC_NET" dev eth0 2>/dev/null
   ip link set eth0 up 2>/dev/null
+  if [ "$ETH_MODE" = "static" ]; then
+    ip addr flush dev eth0 2>/dev/null
+    ip addr add "$SOC_IP/$SOC_NET" dev eth0 2>/dev/null
+  elif ! pid_alive "udhcpc -i eth0"; then
+    udhcpc -i eth0 -b -p /var/run/udhcpc.eth0.pid >>"$LOG" 2>&1
+    log "eth0: udhcpc started (dhcp mode)"
+  fi
+}
+eth_ok() {
+  if [ "$ETH_MODE" = "static" ]; then
+    ip addr show eth0 2>/dev/null | grep -q "$SOC_IP"
+  else
+    pid_alive "udhcpc -i eth0"
+  fi
+}
+have_ip() {
+  ifconfig wlan0 2>/dev/null | grep -q "inet addr:" && return 0
+  ifconfig eth0 2>/dev/null | grep -q "inet addr:"
 }
 
 # ---- 2b) WiFi (idempotent) -----------------------------------
@@ -105,10 +133,19 @@ wifi_up() {
     wpa_cli -i wlan0 enable_network all >/dev/null 2>&1
     log "wifi: wpa_supplicant started on wlan0 ($WIFI_CONF)"
   fi
+  # associated? (driver may come up late at boot; enable_network is idempotent)
+  if pid_alive wpa_supplicant; then
+    if ! wpa_cli -i wlan0 status 2>/dev/null | grep -q "wpa_state=COMPLETED"; then
+      wpa_cli -i wlan0 enable_network all >/dev/null 2>&1
+    fi
+  fi
   if ! pid_alive "udhcpc -i wlan0"; then
-    # -b: keep retrying in the background, stay resident so the lease renews
-    udhcpc -i wlan0 -b -p /var/run/udhcpc.wlan0.pid >>"$LOG" 2>&1
-    log "wifi: udhcpc started on wlan0"
+    # -b: keep retrying in the background, stay resident so the lease renews.
+    # -r: ask for the address the interface already has (GUI/previous lease),
+    #     so a live switch from GUI to daemon keeps the same IP.
+    cur=`ifconfig wlan0 2>/dev/null | sed -n 's/.*inet addr:\([0-9.]*\).*/\1/p'`
+    udhcpc -i wlan0 -b ${cur:+-r $cur} -p /var/run/udhcpc.wlan0.pid >>"$LOG" 2>&1
+    log "wifi: udhcpc started on wlan0${cur:+ (requesting $cur)}"
   fi
 }
 
@@ -125,7 +162,7 @@ start_bridge() {
     nohup "$BRIDGE_C" "$BRIDGE_PORT" /dev/ttyS1 115200 >>"$LOG" 2>&1 &
     sleep 1
     if pid_alive ad4-bridge >/dev/null 2>&1; then
-      log "bridge up (static C) on 0.0.0.0:$BRIDGE_PORT (eth0=$SOC_IP/$SOC_NET)"
+      log "bridge up (static C) on 0.0.0.0:$BRIDGE_PORT"
     else
       log "C bridge FAILED to start (see $LOG)"
     fi
@@ -134,7 +171,7 @@ start_bridge() {
         --uart /dev/ttyS1 --baud 115200 >>"$LOG" 2>&1 &
     sleep 1
     if pid_alive ad4-serial-bridge.py >/dev/null 2>&1; then
-      log "bridge up (python3) on 0.0.0.0:$BRIDGE_PORT (eth0=$SOC_IP/$SOC_NET)"
+      log "bridge up (python3) on 0.0.0.0:$BRIDGE_PORT"
     else
       log "python bridge FAILED to start (see $LOG)"
     fi
@@ -194,7 +231,7 @@ mcu_reflash() {
 }
 
 # ---- main ----------------------------------------------------
-log "=== ad4-daemon start (base=$BASE ip=$SOC_IP/$SOC_NET port=$BRIDGE_PORT) ==="
+log "=== ad4-daemon start (base=$BASE eth=$ETH_MODE${ETH_MODE:+ }${SOC_IP} port=$BRIDGE_PORT) ==="
 kill_vendor
 set_ip
 wifi_up
@@ -212,13 +249,29 @@ fi
 start_bridge
 
 fails=0
+noip=0
 while :; do
   # self-heal the SoC runtime every 10s
   sleep 10
-  ip link show eth0 >/dev/null 2>&1 || set_ip
-  ip addr show eth0 2>/dev/null | grep -q "$SOC_IP" || set_ip
+  eth_ok || set_ip
   bridge_alive || start_bridge
   wifi_up
+
+  # no-network fallback (see header, item 6). Counts address-less seconds since
+  # start; a router outage does not trigger it (the lease address stays on the
+  # interface). 0 disables.
+  if have_ip; then
+    noip=0
+  else
+    noip=$((noip+10))
+    if [ "$NET_FALLBACK_SECS" -gt 0 ] && [ "$noip" -ge "$NET_FALLBACK_SECS" ]; then
+      log "NO IPv4 on wlan0/eth0 for ${noip}s: removing enable flag, rebooting to the vendor UI (restores WiFi+SSH)"
+      date > "$BASE/net-fallback"; cp "$LOG" "$BASE/net-fallback.log" 2>/dev/null
+      rm -f "$BASE/enable"
+      sync
+      reboot
+    fi
+  fi
 
   # optional MCU watchdog
   if [ -f "$WATCHDOG" ]; then

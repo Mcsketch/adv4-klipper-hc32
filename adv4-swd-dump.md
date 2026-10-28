@@ -71,11 +71,19 @@ Later dumps the same day (all in `prodesk:~/ad4-backup/`, hashes in `dumps.sha25
   `7136a881b3be397c64a9b36218afbe6bb7548b6acc7647d17a8096960d60cb39`.
 - `n32-flash-full-20261027-2040.bin` — after the IAPCommand stock restore: byte-identical to 1942
   (sha256 `ad97e705…`). Dumping the running MCU (halt → dump 10.4 s → resume) did not disturb the vendor app.
-- Post-Klipper dump (Klipper `020d25e` flashed 21:03 the same day): **not taken yet** — openocd failed at
-  the USB layer (`reset device failed`, then `open failed`); the usbipd share of the ST-Link (busid 1-2)
-  had never been persisted and a `usbipd detach` lost it. Needs `usbipd bind --busid 1-2` as administrator
-  on the HP, then `swd-dump.sh` and `cmp <(dd if=<dump> bs=1 skip=65536 count=42172)
-  ../klipper-n32g455-020d25e.bin` (the script's own NA compare will report MISMATCH — expected now).
+- Post-Klipper dump (Klipper `020d25e` flashed 21:03 the same day): **blocked, not taken.** After the
+  usbipd share was re-bound (admin `usbipd bind --busid 1-2`; a `detach` had dropped it) openocd reaches
+  the probe (`STLINK V2J27S6`, target 3.26 V) and the SW-DP, but `target n32g455.cpu examination failed`:
+  Klipper idles in `wfi` with DBGMCU `DBG_SLEEP` clear, so the N32 stops HCLK in sleep and AHB-AP memory
+  reads fail. Stock firmware never slept, which is why the three dumps above worked. Connect-under-reset
+  (SoC holds GPIO34 = NRST low, `swd-dump-resethalt.sh` would set DEMCR `VC_CORERESET`, SoC releases)
+  fails earlier with `init mode failed (unable to connect to the target)`: on the N32G455 the SW-DP itself
+  is unreachable while NRST is low, unlike an STM32F1. Klipper booted normally after the release
+  (`klipper-identify.py` → `020d25e`, which remains the functional verification). Options left, each
+  needing an explicit go: dump from inside the IAP bootloader window (GPIO35 high + reset, never send
+  `0x43`; a stray `0x43` on ttyS1 in that window erases the app), or make Klipper set
+  `DBGMCU_CR.DBG_SLEEP` at boot (one line in `src/stm32/stm32f1.c`, needs a reflash). DEMCR/DBGMCU
+  writes are debug-register writes, not flash.
 
 Flash map from the dump:
 

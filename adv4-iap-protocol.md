@@ -261,8 +261,9 @@ on `/tmp` or the stick: kill `adventurer4-arm ffstartup-arm`, then
 `cd /opt/PROGRAM/control/2.3.0 && ./IAPCommand Adventurer4-NA-IAP-2.3.0-20230216.hex
 Adventurer4-HD-IAP-2.3.0-20230216.hex`, then `stty -F /dev/ttyS1 -parenb` (or reboot).
 
-SWD read-back of the Klipper image is still owed: the first openocd run after the flash failed
-at the USB layer (`reset device failed`, then `open failed`) — the usbipd attach had gone stale,
-and `usbipd detach` dropped the share, which had never been persisted with `bind`. Re-run
-`usbipd bind --busid 1-2` as administrator on the HP, then `swd-dump.sh` and
-`cmp <(dd if=<dump> bs=1 skip=65536 count=42172) work/klipper-n32g455-020d25e.bin`.
+SWD read-back of the Klipper image: **blocked** (details in `adv4-swd-dump.md`). The usbipd share
+was re-bound and the probe connects, but the N32 cannot be examined while Klipper sleeps in `wfi`
+(DBGMCU `DBG_SLEEP` clear → HCLK off), and connect-under-reset through GPIO34 fails because the
+N32's SW-DP is dead while NRST is low. Functional verification stands: `klipper-identify.py` →
+`020d25e`. Options left, each needing a go: a dump from the IAP window without ever sending `0x43`,
+or a Klipper one-liner setting `DBGMCU_CR.DBG_SLEEP` plus a reflash.

@@ -86,3 +86,4 @@ work/swd/*.log
 # N32 Klipper images: rebuilt from work/n32/klipper-n32g455.defconfig
 work/n32/*.bin
 work/n32/*.hex
+work/n32/nasync

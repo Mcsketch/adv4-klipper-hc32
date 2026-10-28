@@ -111,6 +111,11 @@ kill_fd_holder() {
     [ "$tgt" = "$dev" ] || continue
     pid=$(echo "$fd" | cut -d/ -f3)
     case "$pid" in $$) continue ;; esac   # never kill ourselves
+    # wpa_supplicant / wpa_cli inherit the vendor GUI's ttyS1 fd and never
+    # write to it; killing them drops WiFi (live NA unit, 2026-10-27).
+    case "$(tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null)" in
+      *wpa_supplicant*|*wpa_cli*) continue ;;
+    esac
     kill -9 "$pid" 2>/dev/null
     found="${found}${pid} "
   done

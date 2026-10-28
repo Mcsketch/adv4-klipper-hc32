@@ -100,6 +100,15 @@ rm    /opt/ad4-klipper/enable   # vendor UI back on next boot
 touch /opt/ad4-klipper/enable   # Klipper daemon back
 ```
 
+In Klipper mode `ad4-daemon.sh` starts the bridge on `:5000`, sets `eth0`
+static, and keeps WiFi up itself (`wpa_supplicant` on
+`/etc/wpa_supplicant.conf`, `enable_network all`, then `udhcpc` on `wlan0`),
+because on a stock printer the vendor GUI is what does that. It never kills
+`wpa_supplicant` to free `/dev/ttyS1`: that process holds an inherited handle
+and never writes. On an NA / N32 board the daemon never flashes the MCU; the
+stick's `ad4-rev` decides, and the only flash path there is the vendor
+`IAPCommand` (`work/n32/iap-flash.sh`).
+
 Three revert paths, deepest first. Each is a file on the stick (or nothing at
 all), so `build-stick.sh` is never required to choose one:
 
@@ -117,9 +126,13 @@ touch /Volumes/MYSTICK/RESTORE /Volumes/MYSTICK/NO_FLASH
 ```
 
 The uninstaller is copied to `/opt/ad4-klipper` at install time, so path 1
-works with no stick in hand. It re-flashes the MCU from whichever stock image
-it can find: its own copy, the stick's `factory/`, or the printer's
-`/opt/PROGRAM/control/`. The untouched stock boot file stays at
+works with no stick in hand. It restores the MCU with the printer's own
+`IAPCommand` kit in `/opt/PROGRAM/control/` when it is there (both hexes; the
+tool picks NA or HD from the chip's reply), else, on HD boards only, with
+`stm32isp-ad4` and a factory HD hex (its own copy or the stick's `factory/`).
+It reads the revision from `ad4-rev` or the vendor's `/root/N32` / `/root/H32`
+marker and never syncs the IAP to find out, because that erases the app. The
+untouched stock boot file stays at
 `/opt/auto_run.sh.ad4-orig`.
 
 ## Root password

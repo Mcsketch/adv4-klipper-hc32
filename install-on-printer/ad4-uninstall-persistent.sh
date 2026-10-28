@@ -7,8 +7,10 @@
 #   1. Remove the enable flag (so rcS runs the vendor launch).
 #   2. Restore the original rcS from its .ad4-orig backup.
 #   3. Stop the Klipper daemon + bridge.
-#   4. (If a factory hex + stm32isp-ad4 are present) re-flash the MCU
-#      to the stock image, so the whole system is factory-clean.
+#   4. Re-flash the MCU to the stock image: with the vendor IAPCommand kit
+#      in /opt/PROGRAM/control (picks NA/HD itself; proven on the NA unit),
+#      else stm32isp-ad4 + a factory HD hex (HD units only). Never probes
+#      the chip: syncing the vendor IAP erases the app.
 #   5. Reboot.
 #
 # Usage: ad4-uninstall-persistent.sh [--no-mcu]
@@ -82,34 +84,53 @@ kill_pat ad4-klipper/ad4-daemon.sh
 kill_pat ad4-serial-bridge.py
 kill_pat ad4-bridge
 
-# 4) re-flash MCU to stock (best effort, needs the files; skip if we
-#    just flashed factory). No stock .hex ships in this repo (it is
-#    FlashForge's), so resolve it at run time: a copy left by an earlier
-#    install, else the printer's own backup under /opt/PROGRAM/control.
+# 4) re-flash MCU to stock (best effort; skip if we just flashed factory).
+#    The revision comes from a FILE, never from a probe: syncing the vendor
+#    IAP erases the application (NA unit, SWD-proven 2026-10-27), so
+#    `stm32isp-ad4 -s` must not run here. Trust order: $BASE/ad4-rev (copied
+#    from the stick), then the vendor's own marker /root/N32 or /root/H32
+#    (touched by its last flash).
+#    Preferred tool: the vendor IAPCommand in /opt/PROGRAM/control/*/ with
+#    both hexes - it selects the image from the chip's sync reply and is the
+#    path proven on the NA unit (work/n32/iap-flash.sh). It leaves ttyS1 in
+#    even parity, hence the stty. stm32isp-ad4 is the fallback for HD only.
 IAP="$BASE/stm32isp-ad4"
-if [ "$SKIP_MCU" != "1" ] && [ -x "$IAP" ]; then
-  FACTORY=""
-  for c in "$BASE/factory-HD.hex" /mnt/factory-HD.hex; do
-    [ -f "$c" ] && { FACTORY="$c"; break; }
+if [ "$SKIP_MCU" != "1" ]; then
+  REV=$(head -c 2 "$BASE/ad4-rev" 2>/dev/null)
+  [ -n "$REV" ] || { [ -e /root/N32 ] && REV=NA; }
+  [ -n "$REV" ] || { [ -e /root/H32 ] && REV=HD; }
+  kill_pat ffstartup-arm
+  kill_pat adventurer4-arm
+  sleep 1
+  DONE=0
+  for d in /opt/PROGRAM/control/*/; do
+    [ -x "$d/IAPCommand" ] || continue
+    NAHEX=$(ls -1 "$d"Adventurer4-NA-IAP-*.hex 2>/dev/null | head -n 1)
+    HDHEX=$(ls -1 "$d"Adventurer4-HD-IAP-*.hex 2>/dev/null | head -n 1)
+    [ -f "$NAHEX" ] && [ -f "$HDHEX" ] || continue
+    echo "restoring the stock MCU image with the vendor IAPCommand in $d"
+    ( cd "$d" && ./IAPCommand "$(basename "$NAHEX")" "$(basename "$HDHEX")" ) && DONE=1
+    stty -F /dev/ttyS1 -parenb 2>/dev/null
+    break
   done
-  if [ -z "$FACTORY" ]; then
-    REV=$( "$IAP" -s 2>/dev/null | sed -n 's/.*REV=\([A-Z][A-Z]\).*/\1/p' )
-    [ -n "$REV" ] || REV=HD
-    for d in /opt/PROGRAM/control/*/; do
-      [ -d "$d" ] || continue
-      h=$(ls -1 "$d"Adventurer4-"$REV"-IAP-*.hex 2>/dev/null | head -n 1)
-      [ -f "$h" ] || h=$(ls -1 "$d"Adventurer4-*-IAP-*.hex 2>/dev/null | head -n 1)
-      [ -f "$h" ] && { FACTORY="$h"; break; }
+  if [ "$DONE" = 1 ]; then
+    echo "MCU restored to stock (IAPCommand)"
+  elif [ "$REV" = "HD" ] && [ -x "$IAP" ]; then
+    FACTORY=""
+    for c in "$BASE/factory-HD.hex" /mnt/factory-HD.hex; do
+      [ -f "$c" ] && { FACTORY="$c"; break; }
     done
-  fi
-  if [ -f "$FACTORY" ]; then
-    kill_pat ffstartup-arm
-    sleep 1
-    "$IAP" -p /dev/ttyS1 "$FACTORY" && echo "MCU restored to stock ($FACTORY)" \
-      || echo "MCU restore failed"
+    [ -n "$FACTORY" ] || FACTORY=$(ls -1 /opt/PROGRAM/control/*/Adventurer4-HD-IAP-*.hex 2>/dev/null | head -n 1)
+    if [ -f "$FACTORY" ]; then
+      "$IAP" -p /dev/ttyS1 "$FACTORY" && echo "MCU restored to stock ($FACTORY)" \
+        || echo "MCU restore failed"
+    else
+      echo "!! no stock HD image found: the boot hook is gone but the MCU keeps its image."
+      echo "   Put the control-*.tar.xz in factory/ on the stick and use the RESTORE stick."
+    fi
   else
-    echo "!! no stock MCU image found: the boot hook is gone but the MCU keeps its image."
-    echo "   Put the control-*.tar.xz in factory/ on the stick and use the RESTORE stick."
+    echo "!! MCU not restored: revision '${REV:-unknown}' and no IAPCommand kit under /opt/PROGRAM/control/."
+    echo "   NA (N32) units are restored only through the vendor IAPCommand (adv4-iap-protocol.md)."
   fi
 fi
 

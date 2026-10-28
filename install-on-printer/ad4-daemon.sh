@@ -16,6 +16,11 @@
 #      periodically probe the MCU over the bridge and re-flash
 #      klipper-ad4.hex if it stops answering (only if the flasher is
 #      present). Off by default.
+#   5. Keep WiFi up: wpa_supplicant on /etc/wpa_supplicant.conf + udhcpc on
+#      wlan0. On a stock printer the vendor GUI does this; with the GUI gated
+#      off, a WiFi-only printer would otherwise be unreachable.
+#   NA / N32 units: the daemon NEVER flashes the MCU (stm32isp-ad4 is HD-only
+#      and the vendor IAP erases the app on sync). ad4-rev decides, see below.
 #
 # Tunables live in /opt/ad4-klipper/ad4-net.conf (SOC_IP/SOC_NET/
 # BRIDGE_PORT), same keys as the one-shot disk version.
@@ -71,7 +76,9 @@ pid_alive() {
 kill_vendor() {
   kill_pat ffstartup-arm
   kill_pat adventurer4-arm
-  fuser -k /dev/ttyS1 2>/dev/null
+  # NOT `fuser -k /dev/ttyS1`: wpa_supplicant / wpa_cli inherit the GUI's
+  # ttyS1 fd (seen live 2026-10-27, NA unit) and killing them drops WiFi.
+  # They never write to the port, so they are harmless holders.
 }
 
 # ---- 2) static IP (idempotent) -------------------------------
@@ -79,6 +86,30 @@ set_ip() {
   ip addr flush dev eth0 2>/dev/null
   ip addr add "$SOC_IP/$SOC_NET" dev eth0 2>/dev/null
   ip link set eth0 up 2>/dev/null
+}
+
+# ---- 2b) WiFi (idempotent) -----------------------------------
+# On a stock printer the vendor GUI starts WiFi: `wpa_supplicant -Dnl80211
+# -iwlan0 -c/etc/wpa_supplicant.conf -B`, `wpa_cli -i wlan0 enable_network
+# all` (the saved network sits in that file with disabled=1), then udhcpc.
+# Command lines taken from the live NA unit 2026-10-27. With the GUI gated
+# off the daemon has to do it, or a WiFi-only printer is unreachable.
+WIFI_CONF="/etc/wpa_supplicant.conf"
+wifi_up() {
+  [ -f "$WIFI_CONF" ] || return 0
+  [ -d /sys/class/net/wlan0 ] || return 0
+  if ! pid_alive wpa_supplicant; then
+    ifconfig wlan0 up 2>/dev/null
+    wpa_supplicant -Dnl80211 -iwlan0 -c"$WIFI_CONF" -B >>"$LOG" 2>&1
+    sleep 2
+    wpa_cli -i wlan0 enable_network all >/dev/null 2>&1
+    log "wifi: wpa_supplicant started on wlan0 ($WIFI_CONF)"
+  fi
+  if ! pid_alive "udhcpc -i wlan0"; then
+    # -b: keep retrying in the background, stay resident so the lease renews
+    udhcpc -i wlan0 -b -p /var/run/udhcpc.wlan0.pid >>"$LOG" 2>&1
+    log "wifi: udhcpc started on wlan0"
+  fi
 }
 
 # ---- 3) (re)start the MCU bridge -----------------------------
@@ -130,7 +161,21 @@ mcu_probe() {
   return 0
 }
 
+# ---- NA / N32 guard ------------------------------------------
+# stm32isp-ad4 was written for the HD board (HC32F460) and has never written
+# an N32 image; on an NA board the vendor IAP erases the application the
+# moment it is synced (SWD-proven 2026-10-27). So the daemon flashes only when
+# ad4-rev (copied from the stick by the installer) says HD. An NA unit is
+# flashed by hand through the vendor IAPCommand (work/n32/iap-flash.sh).
+mcu_flash_allowed() {
+  rev=$(head -c 2 "$BASE/ad4-rev" 2>/dev/null)
+  [ "$rev" = "HD" ] && return 0
+  log "MCU flash blocked: revision '${rev:-unknown}' (stm32isp-ad4 may only flash HD/HC32 units)"
+  return 1
+}
+
 mcu_reflash() {
+  mcu_flash_allowed || return 1
   log "MCU self-heal: re-flashing $HEX"
   kill_vendor
   sleep 1
@@ -152,11 +197,12 @@ mcu_reflash() {
 log "=== ad4-daemon start (base=$BASE ip=$SOC_IP/$SOC_NET port=$BRIDGE_PORT) ==="
 kill_vendor
 set_ip
+wifi_up
 
 if [ -f "$BASE/mcu-klipper.ok" ]; then
   # installed with the MCU already flashed; don't re-flash at boot
   :
-elif [ -f "$BASE/flash-at-install" ] && [ -x "$IAP" ] && [ -f "$HEX" ]; then
+elif [ -f "$BASE/flash-at-install" ] && [ -x "$IAP" ] && [ -f "$HEX" ] && mcu_flash_allowed; then
   # first boot right after install: flash once, then mark ok
   kill_vendor
   "$IAP" -p /dev/ttyS1 "$HEX" >>"$LOG" 2>&1 && touch "$BASE/mcu-klipper.ok"
@@ -172,6 +218,7 @@ while :; do
   ip link show eth0 >/dev/null 2>&1 || set_ip
   ip addr show eth0 2>/dev/null | grep -q "$SOC_IP" || set_ip
   bridge_alive || start_bridge
+  wifi_up
 
   # optional MCU watchdog
   if [ -f "$WATCHDOG" ]; then

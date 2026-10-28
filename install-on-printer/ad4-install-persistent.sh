@@ -11,7 +11,7 @@
 # What it does:
 #   1. Copy the daemon package from the stick to /opt/ad4-klipper/
 #      (ad4-daemon.sh, ad4-serial-bridge.py, klipper-ad4.hex,
-#       stm32isp-ad4, ad4-net.conf, mcu-klipper.ok marker).
+#       stm32isp-ad4, ad4-net.conf, ad4-rev, mcu-klipper.ok marker).
 #   2. Gate the vendor watchdog in rcS: the line that launches
 #      ffstartup-arm becomes  if <enable> then <our daemon> else
 #      <vendor> fi .  So in Klipper mode the vendor stack (and its
@@ -59,6 +59,11 @@ cp -f "$WORK_DIR/ad4-setrootpw.sh"     "$BASE/" 2>/dev/null
 # otherwise the uninstaller falls back to the printer's /opt/PROGRAM/control.
 cp -f "$WORK_DIR/ad4-uninstall-persistent.sh" "$BASE/" 2>/dev/null
 cp -f "$WORK_DIR/factory-HD.hex"     "$BASE/" 2>/dev/null
+cp -f "$WORK_DIR/factory-NA.hex"     "$BASE/" 2>/dev/null
+# ad4-rev (first two chars NA or HD) travels with the package: the daemon
+# refuses to flash an NA (N32) unit, and the uninstaller reads the revision
+# from this file, never from an IAP sync (which erases the app).
+cp -f "$WORK_DIR/ad4-rev"              "$BASE/" 2>/dev/null
 # klipper hex: accept either name on the stick -> klipper.hex on eMMC
 if [ -f "$WORK_DIR/klipper.hex" ]; then
   cp -f "$WORK_DIR/klipper.hex" "$BASE/klipper.hex" 2>/dev/null

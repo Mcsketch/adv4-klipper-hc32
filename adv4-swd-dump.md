@@ -65,6 +65,13 @@ Dump: `n32-flash-full-20261027-1942.bin` (512 KB, 9.5 s), sha256
 and on the HP in `work/swd/`; not committed. Bytes `0x08010000..0x0801AE5F` are **byte-identical to the
 vendor `Adventurer4-NA-IAP-2.3.0-20230216.hex`** (44640 B). Fill: 11137 × `0x00`, 416445 × `0xFF`.
 
+Later dumps the same day (all in `prodesk:~/ad4-backup/`, hashes in `dumps.sha256`, copies on the HP):
+- `n32-flash-full-20261027-2022.bin` — after the nasync sync experiment: app pages `0x10000–0x1AE5F`
+  (22 × 2 KiB) all `FF`, 44061 bytes differ from 1942, everything else identical. sha256
+  `7136a881b3be397c64a9b36218afbe6bb7548b6acc7647d17a8096960d60cb39`.
+- `n32-flash-full-20261027-2040.bin` — after the IAPCommand stock restore: byte-identical to 1942
+  (sha256 `ad97e705…`). Dumping the running MCU (halt → dump 10.4 s → resume) did not disturb the vendor app.
+
 Flash map from the dump:
 
 | Range | Content |

@@ -213,3 +213,29 @@ board. Rules that follow:
 Recovery = the vendor's own path: `IAPCommand <NA hex> <HD hex>` on the SoC
 (kit staged in `/tmp/iap`, copies in `prodesk:~/ad4-backup`), then SWD compare
 against `n32-flash-full-20261027-1942.bin`.
+
+**Restored 2026-10-27 20:37 MDT.** `IAPCommand Adventurer4-NA-IAP-2.3.0-20230216.hex
+Adventurer4-HD-IAP-2.3.0-20230216.hex` run from `/tmp/iap` on the SoC with the vendor
+GUI stopped (driver: `work/n32/iap-flash.sh`; transcript
+`prodesk:~/ad4-backup/iap-stock-restore-20261027.log`): `stm32 reset` → `Connected to
+board.` → `Update :NA` → 44 frames (0–43, two `send error. again` auto-resends, frames
+3 and 40) → `STM32iap finished NA.`, exit 0, 20 s wall; UART tx +47382 B, rx +47 B;
+`/root/N32` touched; GPIO34 left exported out=1, GPIO35 out=0. SWD read-back
+`n32-flash-full-20261027-2040.bin` is byte-identical to the pre-incident `…-1942.bin`
+(sha256 `ad97e705…`), option bytes `a5 5a ff ff`. After the GUI restart the printer
+answered `~M115` (v2.2.4), `~M105`, `~M119` over 8899 and showed temperatures on
+screen; still healthy after a power cycle (fresh boot: no `fe`/`pe` on ttyS1).
+
+Side effect worth a rule: **IAPCommand leaves `/dev/ttyS1` in even parity (8E1)** and
+`adventurer4-arm` does not reset it when it opens the port, so every byte from the MCU
+app (8N1) was counted as a framing or parity error (`/proc/tty/driver/uart`: `fe`+`pe`
+grew exactly as fast as `rx`) and text came back corrupted (`Z-m�x:0`). `stty -F
+/dev/ttyS1 -parenb` fixed it live; a reboot resets it too (which is why the vendor
+update flow reboots). Anything that flashes through IAPCommand and then lets the GUI
+or Klipper reopen the port must clear parity first.
+
+Also observed: with the app pages blank the core did not wait in IAP mode — it ended
+in the bootloader's own HardFault handler (pc `0x080007f8`, msp `0x200028d8`), i.e.
+the bootloader tried to run the blank app. No app validation (header/CRC) was seen;
+not proven absent. The IAP path (`iap-flash.sh <klipper hex>`, hex in the NA slot) is
+therefore the flash route for this unit; SWD stays read-only verification.

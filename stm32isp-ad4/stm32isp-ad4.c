@@ -70,12 +70,12 @@
 /* ---- SoC GPIO strapping (the board-specific part) ----------------------
  * Both numbers come straight out of IAPCommand: gpio_out(34, ...) is the NRST
  * pulse inside stm32Init, and stm32UpdateFLag(n) is literally gpio_out(35,n) —
- * high for the whole flash, low again at the end. What GPIO 35 does on the MCU
- * side is still NOT proven (the HC32F460 has no pin called BOOT0); all this
- * tool needs is the proven behaviour: high before the reset pulse, or the
- * bootloader stays silent. */
+ * high for the whole flash, low again at the end. Proven live on the NA/N32
+ * unit 2026-10-27 (adv4-iap-protocol.md): GPIO 35 is the IAP-mode strap —
+ * high before the reset pulse and the vendor bootloader answers 0x43 with
+ * 0x06; low and it hands over to the app, which stays silent. */
 #define NRST_GPIO   34
-#define BOOT0_GPIO  35      /* label only — see above */
+#define BOOT0_GPIO  35      /* IAP-mode strap (not a ROM BOOT0 pin) */
 #define NRST_US     15680   /* IAPCommand's usleep(15680) */
 #define GPIO_ROOT   "/sys/class/gpio"
 

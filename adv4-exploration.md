@@ -27,8 +27,8 @@ Facts extracted from the official firmware package (V2.2.4 / control 2.3.0, buil
 - The **MCU has no G-code engine**. It receives motion/temperature commands over serial
   (`/dev/ttyS1` at 115200 on the SoC) and runs a state machine plus embedded power-loss G-code.
 - The **SoC owns**: G-code parsing, UI, file management, the nozzle-calibration model,
-  and the MCU's **reset GPIO strapping** (GPIO34=NRST proven; GPIO35 driven
-  too, its "BOOT0" role unproven) — required for flashing.
+  and the MCU's **reset GPIO strapping** (GPIO34=NRST proven; GPIO35 = IAP-mode
+  strap, proven live on the NA unit 2026-10-27, see adv4-iap-protocol.md) — required for flashing.
 - Neither binary contains Marlin, Repetier, or any third-party firmware signature
   (verified by string scan: 0 hits).
 

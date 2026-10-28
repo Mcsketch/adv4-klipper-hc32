@@ -173,3 +173,29 @@ therefore the stub's, and the real app vector table (SP/reset) is at `0xC000`
 - [ ] Confirm the app really boots: if the stub is the gate, we may need to
       also write the stub (or a Klipper that passes its check) — or the ROM
       "jump" path that bypasses the stub entirely.
+
+## 2026-10-27 — NA/N32 unit: strap + sync verified live (nasync)
+
+Run from the SoC over WiFi (`192.168.1.219`, dropbear) with the vendor GUI
+stopped first (`ffstartup-arm` and `adventurer4-arm`; `wpa_supplicant` only
+inherits the GUI's ttyS1 fd and can stay). Tool: `work/n32/nasync` (9dbcccc),
+which pulses NRST (GPIO34, 15.68 ms) and sends a single `0x43`, nothing else.
+
+| GPIO35 during reset | result (6 tries / 2 tries) |
+|---|---|
+| **1** | `0x43` answered with **`0x06`** every time, 72–90 ms after the sync byte; no boot banner in the 300 ms before it |
+| **0** | silence (app mode; the app does not answer `0x43`) |
+
+So on this NA board **GPIO35 is the IAP-mode strap** (high + reset = vendor
+bootloader answers; low = it hands over). `0x06` = the NA revision byte,
+exactly what `stm32isp-ad4.c` expects. The 10-24 stick probe's silence was
+not the board.
+
+**Observed afterwards (unresolved):** once the bootloader had been synced,
+the MCU answered nothing in app mode — the restarted vendor GUI got no
+bytes back (ttyS1 rx counter frozen, port 8899 never opened), and raw
+`M119`/`M105`/`M115` on ttyS1 got no reply either; NRST reads high, strap
+low. Working hypothesis: the sync alone made the bootloader invalidate the
+application, so the next step is a **read-only SWD read-back** of
+`0x08010000` (J16, `work/swd/swd-probe.sh`) before deciding what to write.
+Transcript: `prodesk:~/ad4-backup/nasync-20261027.log`.

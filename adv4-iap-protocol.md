@@ -199,3 +199,17 @@ low. Working hypothesis: the sync alone made the bootloader invalidate the
 application, so the next step is a **read-only SWD read-back** of
 `0x08010000` (J16, `work/swd/swd-probe.sh`) before deciding what to write.
 Transcript: `prodesk:~/ad4-backup/nasync-20261027.log`.
+
+**Resolved 2026-10-27 (SWD read-back, J16):** `0x08010000` reads
+`ffffffff ffffffff ffffffff ffffffff`; the core is halted in the bootloader's
+HardFault handler (pc `0x080007f8`); bootloader vectors and option bytes
+(`a5 5a ff ff`) untouched. **The vendor IAP erases the application as soon as
+it is synced** — a bare `0x43` with GPIO35 high is already destructive on this
+board. Rules that follow:
+- never sync the IAP (nasync, `stm32isp-ad4 -s`, IAPCommand) unless a complete
+  image write follows in the same run;
+- the stick's boot-time revision probe (`stm32isp-ad4 -s`) must go — it only
+  "failed" on 10-24, it was never harmless.
+Recovery = the vendor's own path: `IAPCommand <NA hex> <HD hex>` on the SoC
+(kit staged in `/tmp/iap`, copies in `prodesk:~/ad4-backup`), then SWD compare
+against `n32-flash-full-20261027-1942.bin`.

@@ -16,6 +16,13 @@
 > GPIO35's "BOOT0" role is **unproven** (only GPIO34=NRST is confirmed). Sync
 > reply mapping is `0x06` = NA, `0x07` = HD (earlier drafts had it swapped).
 > Ground truth: `adv4-iap-protocol.md` (strace) and `adv4-swd-dump.md`.
+>
+> **Status 2026-10-27 (Caleb's unit = NA / N32G455, not HC32):** mainline Klipper `020d25e` is
+> running on the MCU, flashed with the vendor `IAPCommand` (hex in the NA slot) from the SoC and
+> confirmed with Klipper `identify` over `ad4-bridge`. The N32 recipe lives in `work/n32/`
+> (`klipper-n32g455.defconfig`, `iap-flash.sh`, `klipper-identify.py`); the record is at the
+> bottom of `adv4-iap-protocol.md` and in `adv4-swd-dump.md`. The HC32F460 material below
+> applies to HD boards only.
 
 ---
 

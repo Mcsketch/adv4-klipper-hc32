@@ -239,3 +239,30 @@ in the bootloader's own HardFault handler (pc `0x080007f8`, msp `0x200028d8`), i
 the bootloader tried to run the blank app. No app validation (header/CRC) was seen;
 not proven absent. The IAP path (`iap-flash.sh <klipper hex>`, hex in the NA slot) is
 therefore the flash route for this unit; SWD stays read-only verification.
+
+**Klipper flashed 2026-10-27 21:03 MDT.** Same path, Klipper hex in the NA slot:
+`sh /tmp/iap/iap-flash.sh klipper-n32g455-020d25e.hex` (mainline `020d25e`, defconfig
+`work/n32/klipper-n32g455.defconfig`, app base `0x08010000`) with the vendor GUI stopped.
+`Connected to board.` → `Update :NA` → 42 frames (0–41, no resends) → `STM32Write: success.`
+→ `STM32iap finished NA.`, exit 0, 20 s wall; UART tx +45322 B, rx +64 B (all counted as
+`fe`/`pe` because the port was 8E1, same as during the stock run). Then `stty -F /dev/ttyS1
+-parenb`, `ad4-bridge 5000 /dev/ttyS1 115200` on the SoC, and
+`work/n32/klipper-identify.py 192.168.1.219:5000` from prodesk: the MCU answers Klipper's
+`identify` (first block NAKed back to seq 0, as a fresh MCU does), 3821 compressed bytes in
+2.2 s with no retransmits → version `020d25e`, MCU `stm32f103xe` (Klipper's name for the
+N32G455 target), `CLOCK_FREQ 144000000`, `SERIAL_BAUD 115200`, 116 commands / 25 responses
+(`work/n32/klipper-n32g455-020d25e.identify.json`). Idle, the MCU emits a 13-byte
+`stats count=… sum=… sumsq=…` block every 5 s — Klipper's normal heartbeat, so `rx` grows
+with nobody connected.
+
+The vendor kit (IAPCommand + both hexes, md5s identical to `~/ad4-backup`) also lives
+permanently at `/opt/PROGRAM/control/2.3.0/` on the SoC, so a stock restore does not depend
+on `/tmp` or the stick: kill `adventurer4-arm ffstartup-arm`, then
+`cd /opt/PROGRAM/control/2.3.0 && ./IAPCommand Adventurer4-NA-IAP-2.3.0-20230216.hex
+Adventurer4-HD-IAP-2.3.0-20230216.hex`, then `stty -F /dev/ttyS1 -parenb` (or reboot).
+
+SWD read-back of the Klipper image is still owed: the first openocd run after the flash failed
+at the USB layer (`reset device failed`, then `open failed`) — the usbipd attach had gone stale,
+and `usbipd detach` dropped the share, which had never been persisted with `bind`. Re-run
+`usbipd bind --busid 1-2` as administrator on the HP, then `swd-dump.sh` and
+`cmp <(dd if=<dump> bs=1 skip=65536 count=42172) work/klipper-n32g455-020d25e.bin`.

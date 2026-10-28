@@ -71,6 +71,11 @@ Later dumps the same day (all in `prodesk:~/ad4-backup/`, hashes in `dumps.sha25
   `7136a881b3be397c64a9b36218afbe6bb7548b6acc7647d17a8096960d60cb39`.
 - `n32-flash-full-20261027-2040.bin` — after the IAPCommand stock restore: byte-identical to 1942
   (sha256 `ad97e705…`). Dumping the running MCU (halt → dump 10.4 s → resume) did not disturb the vendor app.
+- Post-Klipper dump (Klipper `020d25e` flashed 21:03 the same day): **not taken yet** — openocd failed at
+  the USB layer (`reset device failed`, then `open failed`); the usbipd share of the ST-Link (busid 1-2)
+  had never been persisted and a `usbipd detach` lost it. Needs `usbipd bind --busid 1-2` as administrator
+  on the HP, then `swd-dump.sh` and `cmp <(dd if=<dump> bs=1 skip=65536 count=42172)
+  ../klipper-n32g455-020d25e.bin` (the script's own NA compare will report MISMATCH — expected now).
 
 Flash map from the dump:
 

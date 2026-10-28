@@ -4,6 +4,54 @@ _Created 2026-10-20. **Method designed, NOT yet executed** — everything marked
 PROVEN below comes from firmware RE / live strace; everything else is plan or
 inference._
 
+## 2026-10-27 — Caleb's unit is the **NA** board (Nation N32G455), not HD
+
+Board photo (`Z:\_shared\20261027_191616.jpg`): silkscreen `FFP0187_Main_Board_V1.0.3 2021-8-28`;
+**U6 = "Nation N32G455 REL7 HBB32001"** — LQFP64 Cortex-M4F (REL7 = 64 pin, 512 KB flash, LQFP,
+−40..105 °C). Everything HC32F460-specific in this file (flash at `0x0`, app at `0xC000`, PSPCR
+security bits, the `work/hd.bin` compare) does **not** apply to this unit. `docs/caleb-unit/*`
+called the unit HD/H32 through 10-24; that was assumed, never measured, and is corrected.
+
+### J16 — dedicated SWD header (no pad hunting)
+White 4-pin JST-XH-style header **J16** beside U6, label printed next to each pin. `VCC` is the
+pin nearest the `J16` text / C147 / TOP_FAN side; `GND` is nearest the `FFP0187_Main_Board` text.
+
+| J16 pin | ST-Link clone (by its silkscreen label) |
+|---|---|
+| VCC | **leave unconnected** — the printer powers its own MCU |
+| SWCLK | SWCLK |
+| SWDIO | SWDIO |
+| GND | GND |
+
+J16 carries no NRST, so the clone's `RST` wire has nowhere to go. Connect-under-reset fallback is
+the SoC-side `gpio34` hold-low (see "Reset control").
+
+### N32G455 memory map (replaces the HC32F460 one for this unit)
+| Region | Address | Note |
+|---|---|---|
+| Main flash | `0x08000000..0x0807FFFF` (512 KB) | aliased at `0x0` when booted from flash |
+| Vendor IAP bootloader | `0x08000000..0x0800FFFF` (64 KB, inferred) | the NA IAP hex starts at `0x08010000` |
+| App | `0x08010000..` | NA 2.3.0 hex = 44640 B, SP `0x20003b78`, reset `0x080101ad` |
+| SRAM | `0x20000000` (144 KB) | |
+| Option bytes | `0x1FFFF800` | RDP byte `0xA5` = unprotected. **Never write**: clearing RDP = mass erase |
+| ROM bootloader | system memory | N32G45x **has** an STM32-style ROM ISP (BOOT0 = SoC gpio35) — a recovery path the HC32 lacks |
+| CPUID | `0xE000ED00` | expect `0x410FC24x` (Cortex-M4) |
+| SW-DP IDCODE | — | `0x2BA01477`, same DP as the HC32F460, so `ad4-swd.cfg` keeps it |
+
+Scripts: `work/swd/swd-probe.sh` (CPUID, DBGMCU id, vectors at `0x08000000`/`0x08010000`, option
+bytes; every read in `catch`), `work/swd/swd-dump.sh` (512 KB from `0x08000000` + option bytes,
+`0x08010000` region compared to `work/Adventurer4-NA-IAP-2.3.0-20230216.bin`, fill check).
+
+### Consequences for the Klipper plan
+- The `klipper-fork` branch and the stick's `klipper.hex` (`@ 0x0000C000`) are **HC32F460 builds:
+  wrong MCU for this unit. KLIPPERIZE stays untouched.** The NA build recipe is
+  `adv4-n32-thermistor.md` §3 (mainline `src/stm32`, 64 KiB bootloader →
+  `FLASH_APPLICATION_ADDRESS 0x08010000`); it names N32G452 — select **N32G455**.
+- Stock restore for this unit = `Adventurer4-NA-IAP-2.3.0-20230216.hex`, not the HD hex.
+  `flashforge_init.sh` ships only `factory-HD.hex`; swap it before any RESTORE.
+- Upstream `src/stm32/stm32f1.c` disables JTAG only and leaves SW-DP enabled (verify in the
+  checkout before relying on it); the `[output_pin p_PA13]/[p_PA14]` rule below still applies.
+
 ## Why SWD is the only dump path today
 
 - The vendor IAP bootloader (the thing `IAPCommand` / `stm32isp-ad4` talk to on
@@ -27,12 +75,12 @@ inference._
 |---|---|
 | SoC↔MCU link: USART2, TX=PA9 (FSEL 36), RX=PA10 (FSEL 37), 115200, DMA RX | **PROVEN** from factory app disasm (`0x14f64` descriptor: baud literal `0x1c200` at `0x14f74`, consumed by `USART_SetBaudRate` at `0x15144`; FSEL map from HDSC HAL `hc32f460_gpio.h`) |
 | SoC GPIO34 pulses MCU NRST (15.68 ms low/high) | **PROVEN** (IAPCommand strace + sysfs value) |
-| SoC GPIO35 = MCU "BOOT0" | **NOT PROVEN** — IAPCommand touches gpio35 but its wiring to the MCU is unverified; HC32F460 has no BOOT0 pin at all |
+| SoC GPIO35 = MCU "BOOT0" | **NOT PROVEN** — IAPCommand touches gpio35 but its wiring to the MCU is unverified; HC32F460 has no BOOT0 pin at all. The N32G455 on the NA board does have BOOT0, so gpio35→BOOT0 is plausible there |
 | Vendor bootloader occupies flash `0x0..0xBFFF` | **INFERRED** (app vectors at `0xC000`); the dump will confirm |
 | Debug pins are PA13, PA14, PA15, PB3, PB4; PA13=SWDIO, PA14=SWCLK | **CONFIRMED** — three independent sources agree: mainline Klipper `src/hc32f460/main.c` comment, the `en_debug_port_t` enum (5 bits, `ALL_DBG_PIN=0x1F`) in `hc32f460_gpio.h`, and the HC32F460 Rev1.3 datasheet LQFP100 pin table |
 | PA13/PA14 **physical** LQFP100 pin numbers | **UNCONFIRMED** — one search result puts PA13 at pin 72; the datasheet and ZLG schematic PDFs are raster scans with no text layer, so neither could be verified. Orient from the package pin-1 dot and count, or find the labelled test points |
 | SWD (SWDIO=PA13, SWCLK=PA14) is enabled on the shipped board | **UNVERIFIED** — try it; connect-under-reset is the fallback |
-| Debug pads exist / their location on the HD board | **UNKNOWN** — must be found on the PCB |
+| Debug pads exist / their location on the HD board | **UNKNOWN** — must be found on the PCB. **NA board (Caleb's unit): header J16, see the 2026-10-27 section** |
 
 ## Wiring — ST-Link V2 clone → HD board
 

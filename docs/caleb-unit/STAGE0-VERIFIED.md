@@ -1,6 +1,7 @@
 # Stage 0 — SoC access, verified on a second unit
 
-_Recorded 2026-10-24 on an independent Adventurer 4 (HD/H32 revision), firmware
+_Recorded 2026-10-24 on an independent Adventurer 4 (NA / N32G455 revision; written as
+"HD/H32" until 2026-10-27 — assumed, not measured; see `adv4-swd-dump.md`), firmware
 v2.2.4. This is a second-unit confirmation of the `NO_FLASH` path: the MCU was
 never flashed and never probed during any step below._
 

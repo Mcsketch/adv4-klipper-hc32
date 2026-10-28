@@ -1,6 +1,6 @@
 # AD4 HD board — full MCU flash dump via SWD
 
-_Created 2026-10-20. **Method designed, NOT yet executed** — everything marked
+_Created 2026-10-20. **Executed on Caleb's NA unit 2026-10-27** (results in that section); before that, everything marked
 PROVEN below comes from firmware RE / live strace; everything else is plan or
 inference._
 
@@ -44,6 +44,41 @@ the SoC-side `gpio34` hold-low (see "Reset control").
 Scripts: `work/swd/swd-probe.sh` (CPUID, DBGMCU id, vectors at `0x08000000`/`0x08010000`, option
 bytes; every read in `catch`), `work/swd/swd-dump.sh` (512 KB from `0x08000000` + option bytes,
 `0x08010000` region compared to `work/Adventurer4-NA-IAP-2.3.0-20230216.bin`, fill check).
+
+### Executed 2026-10-27 — results (read-only, nothing written)
+Run from the HP laptop: ST-Link V2 clone (`V2J27S6`, 0483:3748) on J16, forwarded into WSL with
+`usbipd` (bus id 1-2), OpenOCD 0.12, 480 kHz, printer running its stock UI. Target voltage 3.27 V.
+
+| Read | Value |
+|---|---|
+| CPUID `0xE000ED00` | `0x410FC241` (Cortex-M4 r0p1) |
+| DBGMCU_IDCODE `0xE0042000` | `0x8F584511` |
+| halted at | `pc 0x08015744`, `msp 0x20003b48` (inside the app) |
+| vectors `0x08000000` | `20002908 080001ad 080007ff 080007f7` (vendor IAP bootloader) |
+| vectors `0x08010000` | `20003b78 080101ad 08012749 08011d3d` (= NA 2.3.0 hex) |
+| `0x00000000` alias | same as `0x08000000` |
+| option bytes `0x1FFFF800` | `a5 5a ff ff ff…` → **RDP off, no read protection** |
+
+Dump: `n32-flash-full-20261027-1942.bin` (512 KB, 9.5 s), sha256
+`ad97e70503d7f53418387f3f007be60de971f15b9a7c05c8952527d1e420f8b1`, plus
+`n32-optbytes-20261027-1942.bin` (16 B). Kept in `prodesk:~/ad4-backup/` (hash re-verified there)
+and on the HP in `work/swd/`; not committed. Bytes `0x08010000..0x0801AE5F` are **byte-identical to the
+vendor `Adventurer4-NA-IAP-2.3.0-20230216.hex`** (44640 B). Fill: 11137 × `0x00`, 416445 × `0xFF`.
+
+Flash map from the dump:
+
+| Range | Content |
+|---|---|
+| `0x08000000..0x080014D0` | vendor IAP bootloader, ~5.3 KB (Keil startup; app-base literal `0x08010000` at `0x08001374`; G-code strings `M132 X Y Z A B`, `G1 Z15 F400`, `X-41 Y-40 F30` at `0x0800146C`) |
+| `0x08001800..0x0800FFFF` | **leftover Nations factory self-test firmware**, never erased (`HELLO NZ3601 FT/CP COS V1.09 … May 18 2020`, RTC/SD/USB/ADC/COMP tests, `ICC POWER OFF`, `dummby function`); dead code, nothing jumps there |
+| `0x08010000..0x0801AE5F` | FlashForge app = NA IAP 2.3.0 |
+| `0x0801AE60..0x0807FFFF` | erased (`0xFF`); no per-unit data region anywhere |
+
+Still unknown: whether the bootloader validates the app before jumping (disassemble
+`0x08000000..0x08001400`). Writing flash over SWD is **not** attempted and not yet possible with stock
+OpenOCD: its `stm32f1x` driver identifies by device id and `0x511` is not in its table, so a restore
+over SWD needs a small custom FPEC script or the vendor IAP path. The dump itself is the full-chip
+backup those paths would restore from.
 
 ### Consequences for the Klipper plan
 - The `klipper-fork` branch and the stick's `klipper.hex` (`@ 0x0000C000`) are **HC32F460 builds:

@@ -79,3 +79,7 @@ work/hd.bin
 *.midi
 .config.bak*
 /*.hex
+
+# SWD dumps (FlashForge code) and their run logs: kept in ~/ad4-backup, never committed
+work/swd/*.bin
+work/swd/*.log

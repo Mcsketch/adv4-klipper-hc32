@@ -186,10 +186,10 @@ corrected by firmware RE + live tests — the trace alone was NOT authoritative)
 | Bed heater | **PA7** (PROVEN) | fw RE: AF4 @0x800f0d6 → TMRA1 Ch5; fw clamps 200/130C. Live: M140 S60 → 14.9→36.6C in 60s. **was: PC4 — disproven by fw RE** |
 | Hotend thermistor | **PA0** (PROVEN) | ADC1 CH0; fw converts R = 4700·adc/(4095−adc) — byte-for-byte Klipper's Thermistor formula → pullup 4700 correct. **was: "bed thermistor" — wrong** |
 | Bed thermistor | **PA5** (PROVEN) | ADC1 CH5; bed LUT keyed on RAW ADC (no ohm conversion). **was: "part fan PA5" — wrong** |
-| Hotend fan | PC2 (PROVEN) | `heater_fan`, auto-starts >50C (observed live) |
-| Part fan | **unknown — probe** | **was: PA5 — that is the bed NTC.** Only other fan in fw is PB9 (below); may be the part fan |
+| Hotend fan | PC2 (PROVEN) | `heater_fan`, auto-starts >50C (observed live); it is the heatsink fan (NA unit, 2026-10-28) |
+| Part fan | **unknown — probe** | **was: PA5 — that is the bed NTC.** Not PB9 either: PB9 is the chamber fan (2026-10-28, below) |
 | Controller fan | PC5 | GUESS (traced) |
-| Chamber fan | PB9 (PROVEN as PWM) | fw RE: AF4 @0x8011036 → TMRA4. Whether it is chamber vs part fan: GUESS |
+| Chamber fan | PB9 (PROVEN) | fw RE: AF4 @0x8011036 → TMRA4. `M106 S255` on PB9 spun the chamber fan (NA unit, same PCB, 2026-10-28) |
 | LED | **unknown — probe** | stock template: PB12 (unconfirmed) |
 | TMC2209 UART (shared) | ~~PC10~~ **unknown** | **DISPROVEN 2026-10-22:** fw RE shows PC10 = AF32 USART1_TX @9600 (@0x8016c9c), not a TMC UART. Real TMC config pins unknown; tmc2209 blocks disabled in printer.cfg |
 | Mux select A / B | PB10 / PB1 | GUESS — tied to the disproven PC10 mux theory |

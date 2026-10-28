@@ -1,4 +1,7 @@
-# Klipper-mode persistent boot on the NA unit (2026-10-27; printing via boot stick since 2026-10-28)
+# Klipper-mode persistent boot on the NA unit (2026-10-27; stickless eMMC boot since 2026-10-28)
+
+> **Current state:** see the last section, "Update 2026-10-28 (2)". The
+> sections before it are the history, kept for the failures they record.
 
 Status at pause (22:45 MDT): the MCU runs Klipper 020d25e. The host stack on
 prodesk is installed and running. The SoC's cold boot into `ad4-daemon.sh`
@@ -100,10 +103,98 @@ after power-on. The repo stick script is kept as `flashforge_init.sh.repo`;
 - **Verified 2026-10-28:** identify, temperatures 19 °C ambient, QUERY_ENDSTOPS
   all open, hotend held 45 ±0.3 °C and bed 40 ±0.5 °C for 3 min, and survived
   a forced SoC reboot.
-- **Not verified yet:** fans, endstop triggering, homing and motion directions,
+- **Not verified yet** (fans since done, see below): fans, endstop triggering, homing and motion directions,
   Z endstop position (151.3 is the reference unit's value), extruder rotation
   distance. Do these with someone at the printer before the first print.
 - **After every printer power cycle,** Klipper on the host shows an error.
-  Press FIRMWARE_RESTART in Mainsail.
+  Press FIRMWARE_RESTART in Mainsail. (Superseded: the panel now does this
+  automatically, see below.)
 - The eMMC daemon path (`enable` flag) is still broken and unused; `enable`
   is removed on every stick boot.
+
+## Update 2026-10-28 (2): stickless boot from eMMC, panel, fans
+
+**Boot path (no USB stick):**
+- `work/n32/ad4-klipper-boot.sh` is installed as `/opt/ad4-klipper/klipper-boot.sh`.
+  `/opt/auto_run.sh` line 101 now reads
+  `if [ -f /opt/ad4-klipper/klipper-mode ]; then /opt/ad4-klipper/klipper-boot.sh & elif [ -f /opt/ad4-klipper/enable ]; then ...daemon & else ffstartup & fi`.
+  Backup: `/opt/auto_run.sh.pre-klipper-mode`.
+  Undo: `rm /opt/ad4-klipper/klipper-mode; sync; reboot -f` (vendor UI returns,
+  but it cannot drive an MCU that runs Klipper).
+- Order: panel splash -> eth0 192.168.100.20/24 -> `stty` ttyS1 115200 raw ->
+  `setsid ad4-bridge 5000` -> `setsid` respawn loop for
+  `ad4-screen klipper 192.168.100.10:8095` -> wait for wlan0 -> wpa_supplicant
+  -> **wait for `wpa_state=COMPLETED`** -> `udhcpc -b`. Log: `/tmp/ad4-boot.log`.
+- The script is backgrounded, so rcS is not parked: dropbear (line 102)
+  starts and `reboot` works again.
+- The stick's script is renamed `flashforge_init.sh.klipper-boot-v3` (inert).
+  Keep the stick as a rescue path: rename a script back to `flashforge_init.sh`.
+
+**What failed on the way:**
+- udhcpc 0.9.8 started before WiFi associates never gets an offer, and it has
+  no `-t`/`-T` to retry. wlan0 came up with no IP. Fix: poll `wpa_cli status`
+  for COMPLETED first (up to 60 s), then start udhcpc.
+- `ad4-screen klipper` segfaulted in `memcpy`: the back buffer was copied with
+  `stride * max(h, fh)` bytes, which overruns the 800x480 fb mmap when the
+  panel is rotated. Fix: `stride * (rot ? fh : h)`.
+- Moonraker listens on loopback only; the panel reaches it through Caddy on
+  :8095 instead.
+
+**Verified 2026-10-28:** a forced SoC reboot and a real cold power cycle with
+no stick. Up in ~22 s: eth0 .20, WiFi .219 (DHCP-reserved), bridge, panel.
+The panel sees "Lost communication" / "Unable to open" / "Unable to connect"
+and POSTs `/printer/firmware_restart` (at most once per 20 s); Klipper returned
+to ready unattended. Heater and MCU faults are not auto-restarted.
+
+**Panel (`ad4-screen klipper HOST:PORT`):** state chip, nozzle/bed temps, job
+file/progress/time, WiFi IP footer. Buttons: PAUSE/RESUME, CANCEL (confirm
+tap), PREHEAT (M104 S210, M140 S60), COOLDOWN, FIRMWARE RESTART. Touch taps
+are not yet tested by a person.
+
+**Fans (this unit, same FFP0187 PCB as the reference unit):**
+- `M106 S255` with `[fan] pin: PB9` spun the **chamber** fan. PB9 = chamber
+  fan, which settles the "chamber vs part: GUESS" row in `adv4-exploration.md`.
+  printer.cfg now has `[fan_generic chamber_fan]` on PB9.
+- PC2 (`heater_fan`) came on at ~57 °C nozzle and drives the **heatsink** fan
+  (confirmed by eye).
+- **The part-cooling fan pin is still unknown.** With no `[fan]`, slicer
+  M106/M107 print "Unknown command" and are skipped, so prints have no part
+  cooling. Next: find it in the M106 handler of the stock NA image
+  (`Adventurer4-NA-IAP-2.3.0-20230216`, offline). Do not probe with SET_PIN.
+
+**MCU link stays wired (re-measured 2026-10-28):** prodesk -> printer over
+WiFi pinged 4.8/8.6/44 ms (mdev 6.4); wired 0.14/0.17/0.27 ms. Klipper keeps
+the G-code on the host and streams moves to the MCU ~0.1-0.25 s ahead, so a
+WiFi stall stops the print; nothing is stored on the printer. The 8188fu
+driver loads with `rtw_power_mgnt=2` (iwconfig still reports "Power
+Management:off"). Decision: eth0 stays on the lab switch. Later option: a
+dedicated Pi as the Klipper host, wired to the AD4.
+
+**ST-Link is not needed in normal use.** Flashing goes through the stock IAP
+over ttyS1 (`IAPCommand`). SWD cannot attach while Klipper idles in `wfi`,
+and connect-under-reset does not work on the N32's debug port. Take it off
+J16 before closing the case; keep it for bootloader recovery only.
+
+**Slicer (Elegoo Slicer, OrcaSlicer family):** physical printer host type
+OctoPrint, host `192.168.1.10:8095` (Moonraker's OctoPrint-compatible upload),
+G-code flavor Klipper, bed 220x200. Start G-code: M140/M104 (slicer temps),
+M107, G90, M82, G28, M190, M109, G92 E0. End: G91, G1 E-3, G1 Z5, G90, M104 S0,
+M140 S0, M107, M84. The start G-code homes, so do not print until homing is
+verified.
+
+**Working config:** `work/n32/printer-n32.cfg` (copy of the live
+`~/printer_data/config/printer.cfg`).
+
+## Next (in order)
+
+With someone at the printer:
+1. `QUERY_ENDSTOPS` while pressing each switch by hand (X, Y, Z).
+2. `G28 X`, `G28 Y`, `G28 Z` one at a time, hand on the power switch; flip
+   `dir_pin` if an axis moves away from its switch.
+3. `Z_ENDSTOP_CALIBRATE` (151.3 is the reference unit's value), `SAVE_CONFIG`.
+4. `PID_CALIBRATE HEATER=extruder TARGET=210`, then `HEATER=heater_bed TARGET=60`.
+5. Extrude 100 mm and measure to check `rotation_distance` 33.5.
+6. First print.
+
+Offline: part-fan pin from firmware RE; fix `bridge/ad4-bridge.c` baud
+(`B115200`); have a person test the panel's touch buttons.

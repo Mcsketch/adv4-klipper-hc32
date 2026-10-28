@@ -18,6 +18,7 @@
  *   fail   TITLE [SUB]         error screen
  *   touch  [SECS]              diagnostic: live crosshair + tap-accuracy targets
  *   calib  [SECS]              four-mark touch calibration, writes AD4_CAL/CAL_PATH
+ *   klipper [HOST[:PORT]]      runs forever: Moonraker status + touch controls
  *
  * menu exit codes: 0 = a choice was made, 1 = no touchscreen (caller falls
  * back to the flag files), 2 = the user chose skip/abort.
@@ -48,6 +49,11 @@
 #include <linux/input.h>
 #include <poll.h>
 #include <time.h>
+#include <signal.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <net/if.h>
 #endif
 
 #include "ad4_font8x8.h"
@@ -886,6 +892,361 @@ static int cmd_splash(const char *dump) {
     return 0;
 }
 
+/* ------------------------------------------------------------ klipper */
+/* The panel's day job once the MCU runs Klipper. The vendor Qt GUI speaks
+ * Flashforge's MCU protocol and can never come back, so this polls Moonraker
+ * (through Caddy on the Klipper host, wired link by default) once a second and
+ * paints state, temperatures and job progress, with a few touch actions. The
+ * SoC has no python and busybox wget cannot POST, so HTTP is done by hand. */
+#ifdef __linux__
+/* Returns the HTTP status (body left in out), or -1 when the host is down. */
+static int http_req(const char *host, int port, const char *method,
+                    const char *path, char *out, int outn) {
+    struct sockaddr_in a;
+    memset(&a, 0, sizeof a);
+    a.sin_family = AF_INET;
+    a.sin_port = htons(port);
+    out[0] = 0;
+    if (inet_pton(AF_INET, host, &a.sin_addr) != 1) return -1;
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
+    fcntl(fd, F_SETFL, O_NONBLOCK);
+    connect(fd, (struct sockaddr *)&a, sizeof a);
+    struct pollfd p = { .fd = fd, .events = POLLOUT };
+    int err = 0;
+    socklen_t el = sizeof err;
+    if (poll(&p, 1, 1500) != 1 ||
+        getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &el) < 0 || err) {
+        close(fd);
+        return -1;
+    }
+    char req[512];
+    int n = snprintf(req, sizeof req,
+                     "%s %s HTTP/1.0\r\nHost: %s:%d\r\nContent-Length: 0\r\n\r\n",
+                     method, path, host, port);
+    if (write(fd, req, n) != n) { close(fd); return -1; }
+    int got = 0;
+    long end = now_ms() + 3000;
+    p.events = POLLIN;
+    while (got < outn - 1) {
+        long left = end - now_ms();
+        if (left <= 0 || poll(&p, 1, (int)left) != 1) break;
+        ssize_t r = read(fd, out + got, outn - 1 - got);
+        if (r <= 0) break;
+        got += (int)r;
+    }
+    close(fd);
+    out[got] = 0;
+    int code = -1;
+    sscanf(out, "HTTP/%*s %d", &code);
+    char *body = strstr(out, "\r\n\r\n");
+    if (body) memmove(out, body + 4, strlen(body + 4) + 1);
+    else out[0] = 0;
+    return code;
+}
+
+/* Moonraker answers compact JSON, so two lookups do: jobj() bounds the
+ * "name":{...} span, jval() finds "key": inside a span. */
+static const char *jobj(const char *js, const char *name, const char **end) {
+    char pat[48];
+    snprintf(pat, sizeof pat, "\"%s\":{", name);
+    const char *p = strstr(js, pat);
+    if (!p) return NULL;
+    p += strlen(pat) - 1;
+    int depth = 0, str = 0;
+    for (const char *q = p; *q; q++) {
+        if (str) {
+            if (*q == '\\' && q[1]) q++;
+            else if (*q == '"') str = 0;
+            continue;
+        }
+        if (*q == '"') str = 1;
+        else if (*q == '{') depth++;
+        else if (*q == '}' && --depth == 0) { *end = q; return p; }
+    }
+    return NULL;
+}
+
+static const char *jval(const char *b, const char *e, const char *key) {
+    char pat[48];
+    int n = snprintf(pat, sizeof pat, "\"%s\":", key);
+    const char *p = b ? strstr(b, pat) : NULL;
+    return (p && p < e) ? p + n : NULL;
+}
+
+static double jnum(const char *b, const char *e, const char *key) {
+    const char *v = jval(b, e, key);
+    return v ? strtod(v, NULL) : 0;
+}
+
+static void jstr(const char *b, const char *e, const char *key, char *out, int n) {
+    const char *v = jval(b, e, key);
+    int j = 0;
+    if (v && *v == '"')
+        for (v++; *v && *v != '"' && j < n - 1; v++) {
+            if (*v == '\\' && v[1]) {
+                v++;
+                if (*v == 'n') { out[j++] = ' '; continue; }
+                if (*v == 'u') { out[j++] = '?'; v += 4; continue; }
+            }
+            out[j++] = *v;
+        }
+    out[j] = 0;
+}
+
+typedef struct {
+    int online;                       /* Moonraker answered at all */
+    char kstate[16], kmsg[160];       /* klippy: ready/startup/shutdown/error */
+    char pstate[16], file[96];        /* print_stats */
+    double et, ett, bt, btt, prog, dur;
+} kstat;
+
+static void k_poll(const char *host, int port, kstat *k) {
+    static char buf[8192];
+    const char *b, *e;
+    memset(k, 0, sizeof *k);
+    int code = http_req(host, port, "GET", "/printer/info", buf, sizeof buf);
+    k->online = code > 0;
+    if (code != 200 || !(b = jobj(buf, "result", &e))) {
+        snprintf(k->kstate, sizeof k->kstate, "offline");
+        if ((b = jobj(buf, "error", &e))) jstr(b, e, "message", k->kmsg, sizeof k->kmsg);
+        return;
+    }
+    jstr(b, e, "state", k->kstate, sizeof k->kstate);
+    jstr(b, e, "state_message", k->kmsg, sizeof k->kmsg);
+    if (http_req(host, port, "GET",
+                 "/printer/objects/query?print_stats=state,filename,print_duration"
+                 "&extruder=temperature,target&heater_bed=temperature,target"
+                 "&display_status=progress", buf, sizeof buf) != 200)
+        return;
+    if ((b = jobj(buf, "print_stats", &e))) {
+        jstr(b, e, "state", k->pstate, sizeof k->pstate);
+        jstr(b, e, "filename", k->file, sizeof k->file);
+        k->dur = jnum(b, e, "print_duration");
+    }
+    if ((b = jobj(buf, "extruder", &e))) {
+        k->et = jnum(b, e, "temperature"); k->ett = jnum(b, e, "target");
+    }
+    if ((b = jobj(buf, "heater_bed", &e))) {
+        k->bt = jnum(b, e, "temperature"); k->btt = jnum(b, e, "target");
+    }
+    if ((b = jobj(buf, "display_status", &e))) k->prog = jnum(b, e, "progress");
+}
+
+/* A power cycle or SoC reboot drops the TCP link and Klipper parks in
+ * shutdown until someone sends FIRMWARE_RESTART. Only link loss is cleared
+ * automatically; a heater or MCU fault stays on screen for a human. */
+static int k_linkloss(const kstat *k) {
+    if (strcmp(k->kstate, "shutdown") && strcmp(k->kstate, "error")) return 0;
+    return strstr(k->kmsg, "Lost communication") || strstr(k->kmsg, "Unable to open") ||
+           strstr(k->kmsg, "Unable to connect");
+}
+
+static int k_busy(const kstat *k) {
+    return !strcmp(k->pstate, "printing") || !strcmp(k->pstate, "paused");
+}
+
+static unsigned k_chip(const kstat *k, const char **label) {
+    if (!k->online) { *label = "HOST OFFLINE"; return C_ERR; }
+    if (!strcmp(k->kstate, "startup")) { *label = "STARTING"; return C_WARN; }
+    if (strcmp(k->kstate, "ready")) { *label = "NOT READY"; return C_ERR; }
+    if (!strcmp(k->pstate, "printing")) { *label = "PRINTING"; return C_ACC; }
+    if (!strcmp(k->pstate, "paused")) { *label = "PAUSED"; return C_WARN; }
+    *label = "READY";
+    return C_OK;
+}
+
+#define KB(x, w, lab, tok, top, bot, dng) \
+    ((btn){ x, 600, w, 120, lab, tok, top, bot, 3, dng })
+
+static int k_buttons(const kstat *k, btn *b) {
+    if (!k->online || !strcmp(k->kstate, "startup")) return 0;
+    if (strcmp(k->kstate, "ready")) {
+        b[0] = KB(24, 432, "FIRMWARE RESTART", "restart", C_ACC, C_ACCD, 0);
+        return 1;
+    }
+    if (k_busy(k)) {
+        if (!strcmp(k->pstate, "printing"))
+            b[0] = KB(24, 208, "PAUSE", "pause", C_WARN, 0xa86f22u, 0);
+        else
+            b[0] = KB(24, 208, "RESUME", "resume", C_OK, 0x1f8a60u, 0);
+        b[1] = KB(248, 208, "CANCEL", "cancel", C_ERRD, 0x6d2530u, 1);
+        return 2;
+    }
+    b[0] = KB(24, 208, "PREHEAT", "preheat", C_ACC, C_ACCD, 0);
+    b[1] = KB(248, 208, "COOLDOWN", "cool", 0x5a6a80u, 0x39465au, 0);
+    return 2;
+}
+
+static const char *k_path(const char *tok) {
+    if (!strcmp(tok, "pause")) return "/printer/print/pause";
+    if (!strcmp(tok, "resume")) return "/printer/print/resume";
+    if (!strcmp(tok, "cancel")) return "/printer/print/cancel";
+    if (!strcmp(tok, "restart")) return "/printer/firmware_restart";
+    if (!strcmp(tok, "preheat")) return "/printer/gcode/script?script=M104%20S210%0AM140%20S60";
+    return "/printer/gcode/script?script=TURN_OFF_HEATERS";
+}
+
+static void k_temp(const surf *s, int x, int y, const char *label,
+                   double cur, double tgt) {
+    char v[16], t[32];
+    rrect(s, x, y, 208, 150, 18, C_CARD, C_CARD2);
+    text(s, x + 16, y + 14, label, 2, C_DIM);
+    snprintf(v, sizeof v, "%.0f", cur);
+    text(s, x + 16, y + 44, v, 6, C_TXT);
+    text(s, x + 16 + tw(v, 6) + 6, y + 44, "C", 2, C_DIM);
+    if (tgt > 0) snprintf(t, sizeof t, "target %.0f", tgt);
+    else snprintf(t, sizeof t, "off");
+    text(s, x + 16, y + 114, t, 2, tgt > 0 ? C_WARN : C_DIM);
+}
+
+static void k_paint(const surf *s, const kstat *k, const btn *b, int nb,
+                    int armed, const char *wifi, const char *note) {
+    const char *lab;
+    unsigned col = k_chip(k, &lab);
+    background(s);
+    header(s, "ADVENTURER 4", lab, col);
+    k_temp(s, 24, 118, "NOZZLE", k->et, k->ett);
+    k_temp(s, 248, 118, "BED", k->bt, k->btt);
+
+    rrect(s, 24, 290, 432, 280, 18, C_CARD, C_CARD2);
+    if (!k->online) {
+        text_wrap(s, 44, 310, "Klipper host not answering. Waiting for it.",
+                  2, C_TXT, 392);
+    } else if (strcmp(k->kstate, "ready")) {
+        text_wrap(s, 44, 310, k->kmsg[0] ? k->kmsg : k->kstate, 2, C_TXT, 392);
+    } else if (k->file[0] && strcmp(k->pstate, "standby")) {
+        int y = text_wrap(s, 44, 310, k->file, 2, C_TXT, 392);
+        char d[48];
+        int sec = (int)k->dur;
+        snprintf(d, sizeof d, "%s  %d:%02d:%02d", k->pstate,
+                 sec / 3600, sec / 60 % 60, sec % 60);
+        text(s, 44, y + 8, d, 2, C_DIM);
+        progress(s, 500, (int)(k->prog * 100 + 0.5), col);
+    } else {
+        text_wrap(s, 44, 310, "Idle. Send a job from Elegoo Slicer or Mainsail.",
+                  2, C_DIM, 392);
+    }
+
+    for (int i = 0; i < nb; i++) {
+        btn t = b[i];
+        if (i == armed) { t.top = C_ERR; t.bot = C_ERRD; }
+        draw_btn(s, &t);
+    }
+    if (armed >= 0) textc(s, s->w / 2, 732, "tap again to confirm", 2, C_ERR);
+    else if (note[0]) textc(s, s->w / 2, 732, note, 2, C_WARN);
+    char f[64];
+    snprintf(f, sizeof f, "wifi %s", wifi);
+    textc(s, s->w / 2, 766, f, 2, C_DIM);
+}
+
+static void if_ip(const char *ifn, char *out, int n) {
+    struct ifreq r;
+    memset(&r, 0, sizeof r);
+    strncpy(r.ifr_name, ifn, IFNAMSIZ - 1);
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd >= 0 && ioctl(fd, SIOCGIFADDR, &r) == 0)
+        inet_ntop(AF_INET, &((struct sockaddr_in *)&r.ifr_addr)->sin_addr, out, n);
+    else
+        snprintf(out, n, "not connected");
+    if (fd >= 0) close(fd);
+}
+
+static int cmd_klipper(const char *dump, const char *hostport) {
+    char host[64];
+    int port = 8095;
+    snprintf(host, sizeof host, "%s", hostport ? hostport : "192.168.100.10");
+    char *c = strchr(host, ':');
+    if (c) { *c = 0; port = atoi(c + 1); }
+    signal(SIGPIPE, SIG_IGN);
+
+    surf fbs, s;
+    int fbfd = -1;
+#ifdef AD4_DUMP
+    (void)fbfd;
+    if (!dump) { fprintf(stderr, "host build: use --dump\n"); return 1; }
+    memset(&fbs, 0, sizeof fbs);
+    fbs.fw = 800; fbs.fh = 480; fbs.w = 480; fbs.h = 800;
+    fbs.bpp = 16; fbs.stride = 960;
+    fbs.ro = 11; fbs.rl = 5; fbs.go = 5; fbs.gl = 6; fbs.bo = 0; fbs.bl = 5;
+#else
+    if ((fbfd = fb_open(&fbs)) < 0) return 1;
+#endif
+    /* Paint off-screen and copy once a frame, or the gradient redraw flickers. */
+    size_t len = (size_t)fbs.stride * (fbs.rot ? fbs.fh : fbs.h);
+    s = fbs;
+    s.mem = malloc(len);
+    if (!s.mem) return 1;
+
+    tscal tc;
+    int tfd = dump ? -1 : ts_open(&tc);
+    kstat k;
+    btn b[2];
+    int nb = 0, armed = -1, pressed = 0;
+    long next = 0, armed_t = 0, note_t = 0, rst_t = -60000;
+    char wifi[32] = "", note[48] = "";
+    for (;;) {
+        long t = now_ms();
+        if (armed >= 0 && t - armed_t > 5000) { armed = -1; next = 0; }
+        if (note[0] && t - note_t > 8000) note[0] = 0;
+        if (t >= next) {
+            k_poll(host, port, &k);
+            if_ip("wlan0", wifi, sizeof wifi);
+            if (k_linkloss(&k) && t - rst_t > 20000) {
+                char r[1024];
+                int rc = http_req(host, port, "POST", "/printer/firmware_restart", r, sizeof r);
+                fprintf(stderr, "klipper: link loss, firmware_restart -> %d\n", rc);
+                snprintf(note, sizeof note, "auto firmware restart");
+                note_t = rst_t = t;
+            }
+            nb = k_buttons(&k, b);
+            if (armed >= nb) armed = -1;
+            k_paint(&s, &k, b, nb, armed, wifi, note);
+#ifdef AD4_DUMP
+            if (dump) { dump_ppm(&s, dump); return 0; }
+#endif
+            memcpy(fbs.mem, s.mem, len);
+            next = now_ms() + 1000;
+        }
+        int wait = (int)(next - now_ms());
+        if (wait < 0) wait = 0;
+        if (tfd < 0) { poll(NULL, 0, wait); continue; }
+        struct pollfd p = { .fd = tfd, .events = POLLIN };
+        if (poll(&p, 1, wait) <= 0) continue;
+        int x, y, r;
+        /* ts_read reports every sample of a press; act on the first only */
+        while ((r = ts_read(tfd, &tc, &s, &x, &y)) >= 0) {
+            if (r == 1) { pressed = 0; continue; }
+            if (pressed) continue;
+            pressed = 1;
+            int hit = -1;
+            for (int i = 0; i < nb; i++)
+                if (x >= b[i].x && x < b[i].x + b[i].w &&
+                    y >= b[i].y && y < b[i].y + b[i].h) hit = i;
+            if (hit < 0 || (armed >= 0 && hit != armed)) {
+                if (armed >= 0) { armed = -1; next = 0; }
+                continue;
+            }
+            if (b[hit].danger && armed != hit) {
+                armed = hit;
+                armed_t = now_ms();
+                buzz_cue(AD4_MARK);
+                next = 0;
+                continue;
+            }
+            buzz_cue(AD4_TAP);
+            char rb[2048];
+            int rc = http_req(host, port, "POST", k_path(b[hit].token), rb, sizeof rb);
+            fprintf(stderr, "klipper: %s -> %d\n", b[hit].token, rc);
+            snprintf(note, sizeof note, "%s %s", b[hit].token, rc == 200 ? "ok" : "failed");
+            note_t = now_ms();
+            armed = -1;
+            next = 0;
+        }
+    }
+}
+#endif /* __linux__ */
+
 /* sh(1) cannot put a real newline inside a word, so the caller writes "\n". */
 static void unesc(char *d, const char *s, size_t n) {
     size_t j = 0;
@@ -903,6 +1264,7 @@ static void usage(void) {
         "       ad4-screen menu [--auto TOKEN SECS] [--dump FILE.ppm]\n"
         "       ad4-screen touch [SECS]\n"
         "       ad4-screen calib [SECS]\n"
+        "       ad4-screen klipper [HOST[:PORT]] [--dump FILE.ppm]\n"
         "env: AD4_MCU AD4_IP AD4_PORT AD4_INSTALLED AD4_STICK AD4_ROT AD4_CAL\n");
 }
 
@@ -923,6 +1285,9 @@ int main(int argc, char **argv) {
     if (!strcmp(mode, "splash")) return cmd_splash(dump);
     if (!strcmp(mode, "touch")) return cmd_touch(dump, npos > 0 ? atoi(pos[0]) : 0);
     if (!strcmp(mode, "calib")) return cmd_calib(npos > 0 ? atoi(pos[0]) : 0);
+#ifdef __linux__
+    if (!strcmp(mode, "klipper")) return cmd_klipper(dump, npos > 0 ? pos[0] : NULL);
+#endif
     if (!strcmp(mode, "status") || !strcmp(mode, "done") || !strcmp(mode, "fail")) {
         /* a trailing all-digits word is the percentage, never the title */
         int pct = -1;

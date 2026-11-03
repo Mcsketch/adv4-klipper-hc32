@@ -901,7 +901,7 @@ static int cmd_splash(const char *dump) {
 }
 
 /* ------------------------------------------------------------ boot */
-/* Boot animation: a pixel-art adventurer is printed on the bed row by row,
+/* Boot animation: a pixel-art superhero is printed on the bed row by row,
  * the nozzle snaking across each layer and every new pixel glowing hot before
  * it cools to its colour; then the nozzle parks, the figure hops, and the
  * title comes up. About 4 s; it exits on its last frame, which stays up.
@@ -911,30 +911,37 @@ static int cmd_splash(const char *dump) {
  * (printf'd with the frame number, 30 fps of virtual time); otherwise only
  * the last frame is written. */
 static const char *const HERO[] = {
-    "......KKKKK.....",
-    "....KKHHHHHKK...",
-    "...KHHHWWHHHHK..",
-    "...KHHHHHHHHHK..",
-    "..KhhhhhhhhhhhK.",
-    ".KhhhhhhhhhhhhhK",
-    "..KKKSSSSSSSKKK.",
-    "....KSSSSSSSK...",
-    "....KSKSSSKSK...",
-    "....KSKSSSKSK...",
-    "....KsSSSSSsK...",
-    ".....KsSKKSK....",
-    "....KRRRRRRRK...",
-    "...KBRRRBBBBBK..",
-    "..KBKBRRBBBBKBK.",
-    "..KBKBBBBBBBKBK.",
-    "..KSKbbYYbbbKSK.",
-    "...K.KPPPPPPK.K.",
-    ".....KPPKKPPK...",
-    ".....KPPK.KPPK..",
-    "....KOOOK.KOOOK.",
-    "....KKKKK.KKKKK.",
+    ".........KKKK.........",
+    ".......KKDDDDKK.......",
+    "......KDDDDDDDDK......",
+    "......KDSSSSSSDK......",
+    "......KNNNNNNNNK......",
+    "......KNWWNNWWNK......",
+    "......KSSSSSSSSK......",
+    "......KSSSssSSSK......",
+    ".......KsSSSSsK.......",
+    "........KKssKK........",
+    "......KKBBBBBBKK......",
+    "....KKBBBBBBBBBBKK....",
+    "...KRKBBYYYYYYBBKRK...",
+    "..KRKBBKBYYYYBKBBKRK..",
+    ".KRKBBKBBBYYBBBKBBKRK.",
+    ".KRKBKRKBBBBBBKRKBKRK.",
+    ".KRKWWKKBBBBBBKKWWKRK.",
+    "..KRKKWWKYYYYKWWKKRK..",
+    "..KRRRKKBBBBBBKKRRRK..",
+    "..KRRRKBBBBBBBBKRRRK..",
+    ".KRRRrKbBBKKBBbKrRRRK.",
+    ".KRRRrKbBBKKBBbKrRRRK.",
+    "KRRRRrKbBBKKBBbKrRRRRK",
+    "KRRRRrKbBBKKBBbKrRRRRK",
+    "KrRrRrKbBBKKBBbKrRrRrK",
+    ".KKKKKKRRRKKRRRKKKKKK.",
+    "......KRRRKKRRRK......",
+    ".....KRRRrKKrRRRK.....",
+    ".....KKKKKKKKKKKK.....",
 };
-#define HERO_W 16
+#define HERO_W 22
 #define HERO_H ((int)(sizeof HERO / sizeof HERO[0]))
 
 static const char *const NOZZLE[] = {
@@ -954,18 +961,17 @@ static const char *const NOZZLE[] = {
 static unsigned pal(char c) {
     switch (c) {
     case 'K': return 0x141022u;   /* outline */
-    case 'H': return 0xe0b96au;   /* helmet */
-    case 'h': return 0xb08640u;   /* brim */
-    case 'W': return 0xfff4d6u;   /* shine */
+    case 'D': return 0x2b2140u;   /* hair */
+    case 'N': return 0x16204au;   /* mask */
+    case 'W': return 0xfff4d6u;   /* eyes, gloves */
     case 'S': return 0xf2c39bu;   /* skin */
     case 's': return 0xd39a73u;
-    case 'R': return 0xe0484fu;   /* scarf; heater block on the nozzle */
+    case 'R': return 0xe0484fu;   /* cape, boots; heater block on the nozzle */
     case 'r': return 0xa8323au;
-    case 'B': return 0x4d9fffu;   /* jacket */
+    case 'B': return 0x4d9fffu;   /* suit */
     case 'b': return 0x2f6fc4u;
-    case 'Y': return 0xffd23cu;   /* buckle */
-    case 'P': return 0x3b4a6bu;   /* trousers */
-    case 'O': return 0x7a4a2au;   /* boots */
+    case 'Y': return 0xffd23cu;   /* emblem (a nozzle), belt */
+    case 'y': return 0xc99a1eu;
     case 'M': return 0xb4c0d2u;   /* nozzle metal */
     case 'm': return 0x7d8aa0u;
     case 'C': return 0xd08a3cu;   /* brass tip */
@@ -981,9 +987,9 @@ static unsigned mix(unsigned a, unsigned b, int t) {   /* t 0..256: a -> b */
             (unsigned)(ab + (bb - ab) * t / 256);
 }
 
-#define BP      14                       /* screen px per hero pixel */
+#define BP      10                       /* screen px per hero pixel */
 #define BED_Y   548
-#define CELL_MS 11                       /* nozzle time per pixel */
+#define CELL_MS 5                        /* nozzle time per pixel */
 #define HOP_MS  20                       /* travel between layers */
 #define COOL_MS 260                      /* hot glow fades over this */
 #define HOT     0xffe08au

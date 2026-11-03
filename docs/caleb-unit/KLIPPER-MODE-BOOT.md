@@ -275,7 +275,11 @@ current E units; if the 100 mm extrude check changes rd, scale it.
 
 With someone at the printer:
 1. `PID_CALIBRATE HEATER=extruder TARGET=210`, then `HEATER=heater_bed TARGET=60`.
-2. Extrude 100 mm and measure: E is now really at 1/16 (UART), rd 33.5 untested.
+2. ~~Extrude check~~ done: E rd **33.5 correct** (50 mm @0.5 mm/s = 50). FLAG: at
+   2 mm/s (~4.8 mm3/s) @210 C it fed only 80-90 of 100 (no clicking = filament
+   slip under back-pressure). Cold pulls at 88/95/105 C snapped or strung, no debris.
+   Unresolved (partial clog vs low-flow hot end vs temp); parked by Caleb. Print
+   at 215-220 C and keep flow under ~3 mm3/s until fixed.
 3. First print. Watch Z at speed (`max_z_velocity: 5`).
 
 Offline: part-fan pin (not in the axis table; still unknown); fix

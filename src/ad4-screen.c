@@ -1260,6 +1260,7 @@ static int http_req(const char *host, int port, const char *method,
     }
     close(fd);
     out[got] = 0;
+    if (!got) return -2;              /* connected, no answer yet: still running */
     int code = -1;
     sscanf(out, "HTTP/%*s %d", &code);
     char *body = strstr(out, "\r\n\r\n");
@@ -1322,7 +1323,8 @@ typedef struct {
     char kstate[16], kmsg[160];       /* klippy: ready/startup/shutdown/error */
     char pstate[16], file[96];        /* print_stats */
     char ver[48];                     /* Klipper software_version */
-    double et, ett, bt, btt, prog, dur, pfan, cfan;
+    char homed[8];                    /* toolhead homed_axes */
+    double et, ett, bt, btt, prog, dur, pfan, cfan, pos[3];
 } kstat;
 
 static void k_poll(const char *host, int port, kstat *k) {
@@ -1342,7 +1344,8 @@ static void k_poll(const char *host, int port, kstat *k) {
     if (http_req(host, port, "GET",
                  "/printer/objects/query?print_stats=state,filename,print_duration"
                  "&extruder=temperature,target&heater_bed=temperature,target"
-                 "&display_status=progress&fan=speed&fan_generic%20chamber_fan=speed",
+                 "&display_status=progress&fan=speed&fan_generic%20chamber_fan=speed"
+                 "&toolhead=position,homed_axes",
                  buf, sizeof buf) != 200)
         return;
     if ((b = jobj(buf, "print_stats", &e))) {
@@ -1359,6 +1362,11 @@ static void k_poll(const char *host, int port, kstat *k) {
     if ((b = jobj(buf, "display_status", &e))) k->prog = jnum(b, e, "progress");
     if ((b = jobj(buf, "fan", &e))) k->pfan = jnum(b, e, "speed");
     if ((b = jobj(buf, "fan_generic chamber_fan", &e))) k->cfan = jnum(b, e, "speed");
+    if ((b = jobj(buf, "toolhead", &e))) {
+        const char *v = jval(b, e, "position");
+        if (v) sscanf(v, "[%lf ,%lf ,%lf", &k->pos[0], &k->pos[1], &k->pos[2]);
+        jstr(b, e, "homed_axes", k->homed, sizeof k->homed);
+    }
 }
 
 /* A power cycle or SoC reboot drops the TCP link and Klipper parks in
@@ -1465,8 +1473,12 @@ static void k_meta(const char *host, int port, const char *name, kmeta *m) {
 
 /* ---- screens. Buttons whose token starts with '/' POST that path to
  * Moonraker; the rest move between screens. */
-enum { K_HOME, K_FILES, K_FILE, K_HEAT, K_TOOLS, K_ABOUT };
-typedef struct { int scr, page, sel, nfiles; kmeta meta; } kmenu;
+enum { K_HOME, K_FILES, K_FILE, K_HEAT, K_TOOLS, K_ABOUT, K_FIL, K_MOVE };
+typedef struct { int scr, page, sel, nfiles, ft, step; kmeta meta; } kmenu;
+
+/* FILAMENT's TEMP tile and MOVE's STEP tile cycle through these */
+static const int k_ftemp[] = { 220, 240, 250, 210 };
+static const double k_step[] = { 10, 1, 0.1 };
 
 #define KB(x, w, lab, tok, top, bot, dng) \
     ((btn){ x, 600, w, 120, lab, tok, top, bot, 3, dng, 0 })
@@ -1496,8 +1508,9 @@ static int k_buttons(const kstat *k, const kmenu *m, btn *b) {
     case K_HOME:
         b[n++] = (btn){ 24, 290, 432, 130, "PRINT", "files", C_OK, 0x1f8a60u, 4, 0, 0 };
         b[n++] = KT(24, 436, 208, "PREHEAT", "heat", C_WARN, 0xa86f22u);
-        b[n++] = KT(248, 436, 208, "TOOLS", "tools", C_ACC, C_ACCD);
-        b[n++] = KB(24, 432, "COOLDOWN", K_GS "TURN_OFF_HEATERS", K_G1, K_G2, 0);
+        b[n++] = KT(248, 436, 208, "FILAMENT", "fil", C_ACC, C_ACCD);
+        b[n++] = KB(24, 208, "TOOLS", "tools", C_ACC, C_ACCD, 0);
+        b[n++] = KB(248, 208, "COOLDOWN", K_GS "TURN_OFF_HEATERS", K_G1, K_G2, 0);
         break;
     case K_FILES:
         for (int i = 0; i < K_ROWS && m->page * K_ROWS + i < nkf; i++) {
@@ -1530,14 +1543,50 @@ static int k_buttons(const kstat *k, const kmenu *m, btn *b) {
                         ? K_GS "SET_FAN_SPEED%20FAN%3Dchamber_fan%20SPEED%3D0"
                         : K_GS "SET_FAN_SPEED%20FAN%3Dchamber_fan%20SPEED%3D1",
                     k->cfan > 0 ? C_ACC : K_G1, k->cfan > 0 ? C_ACCD : K_G2);
-        b[n++] = KT(24, 436, 208, "MOTORS\nOFF", K_GS "M84", K_G1, K_G2);
-        b[n++] = KT(248, 436, 208, "ABOUT", "about", K_G1, K_G2);
+        b[n++] = KT(24, 436, 208, "MOVE", "move", C_ACC, C_ACCD);
+        b[n++] = KT(248, 436, 208, "MOTORS\nOFF", K_GS "M84", K_G1, K_G2);
+        b[n++] = KB(24, 208, "BACK", "back", K_G1, K_G2, 0);
+        b[n++] = KB(248, 208, "ABOUT", "about", K_G1, K_G2, 0);
+        break;
+    case K_ABOUT:
         b[n++] = KB(24, 208, "BACK", "back", K_G1, K_G2, 0);
         b[n++] = KB(248, 208, "FIRMWARE\nRESTART", "/printer/firmware_restart", C_ACC, C_ACCD, 1);
         break;
-    case K_ABOUT:
+    case K_FIL: {
+        /* LOAD_FILAMENT / UNLOAD_FILAMENT are macros in printer.cfg */
+        static char ld[96], ul[96], pu[96], tl[16];
+        int ft = k_ftemp[m->ft];
+        snprintf(ld, sizeof ld, K_GS "LOAD_FILAMENT%%20TEMP%%3D%d", ft);
+        snprintf(ul, sizeof ul, K_GS "UNLOAD_FILAMENT%%20TEMP%%3D%d", ft);
+        snprintf(pu, sizeof pu, K_GS "LOAD_FILAMENT%%20TEMP%%3D%d%%20LENGTH%%3D20", ft);
+        snprintf(tl, sizeof tl, "TEMP\n%d C", ft);
+        b[n++] = KT(24, 290, 208, "LOAD", ld, C_OK, 0x1f8a60u);
+        b[n++] = KT(248, 290, 208, "UNLOAD", ul, C_WARN, 0xa86f22u);
+        b[n++] = KT(24, 436, 208, "PURGE\n20 mm", pu, C_ACC, C_ACCD);
+        b[n++] = KT(248, 436, 208, tl, "ftemp", K_G1, K_G2);
+        b[n++] = KB(24, 208, "BACK", "back", K_G1, K_G2, 0);
+        b[n++] = KB(248, 208, "COOLDOWN", K_GS "TURN_OFF_HEATERS", K_G1, K_G2, 0);
+        break;
+    }
+    case K_MOVE: {
+        /* relative jogs inside a saved gcode state; XY 50 mm/s, Z 5 mm/s */
+        static const char *const lab[6] = { "X-", "X+", "Y-", "Y+", "Z-", "Z+" };
+        static const int gx[6] = { 0, 2, 1, 1, 3, 3 }, gy[6] = { 1, 1, 2, 0, 2, 0 };
+        static char jog[6][160], st[24];
+        double d = k_step[m->step];
+        for (int i = 0; i < 6; i++) {
+            snprintf(jog[i], sizeof jog[i], K_GS "SAVE_GCODE_STATE%%20NAME%%3Djog%%0AG91%%0A"
+                     "G1%%20%c%s%g%%20F%d%%0ARESTORE_GCODE_STATE%%20NAME%%3Djog",
+                     lab[i][0], lab[i][1] == '-' ? "-" : "", d, i < 4 ? 3000 : 300);
+            b[n++] = (btn){ 24 + gx[i] * 110, 180 + gy[i] * 112, 102, 104, lab[i], jog[i],
+                            C_CARD2, C_CARD, 3, 0, 0 };
+        }
+        snprintf(st, sizeof st, "STEP\n%g mm", d);
+        b[n++] = (btn){ 134, 292, 102, 104, "HOME", K_GS "G28", C_ACC, C_ACCD, 3, 0, 0 };
+        b[n++] = (btn){ 354, 292, 102, 104, st, "step", K_G1, K_G2, 2, 0, 0 };
         b[n++] = KB(24, 432, "BACK", "back", K_G1, K_G2, 0);
         break;
+    }
     }
     return n;
 }
@@ -1599,7 +1648,7 @@ static void k_paint(const surf *s, const kstat *k, const kmenu *m, const btn *b,
                     int nb, int armed, const char *eth, const char *wifi,
                     const char *note, const char *hostport) {
     static const char *const title[] = {
-        "ADVENTURER 4", "PRINT", "PRINT", "PREHEAT", "TOOLS", "ABOUT" };
+        "ADVENTURER 4", "PRINT", "PRINT", "PREHEAT", "TOOLS", "ABOUT", "FILAMENT", "MOVE" };
     const char *lab, *foot = "";
     char pg[32];
     unsigned col = k_chip(k, &lab);
@@ -1609,6 +1658,7 @@ static void k_paint(const surf *s, const kstat *k, const kmenu *m, const btn *b,
     case K_HOME:
     case K_HEAT:
     case K_TOOLS:
+    case K_FIL:
         k_temp(s, 24, 118, "NOZZLE", k->et, k->ett);
         k_temp(s, 248, 118, "BED", k->bt, k->btt);
         if (m->scr != K_HOME || k_idle(k)) break;
@@ -1643,6 +1693,14 @@ static void k_paint(const surf *s, const kstat *k, const kmenu *m, const btn *b,
     case K_FILE:
         k_file_card(s, m);
         break;
+    case K_MOVE: {
+        char ps[64];
+        snprintf(ps, sizeof ps, "X %.1f  Y %.1f  Z %.1f", k->pos[0], k->pos[1], k->pos[2]);
+        text(s, 24, 112, ps, 2, C_TXT);
+        if (strlen(k->homed) == 3) text(s, 24, 140, "homed", 2, C_OK);
+        else text(s, 24, 140, "not homed: tap HOME first", 2, C_WARN);
+        break;
+    }
     case K_ABOUT: {
         const char *kv[] = {
             "PRINTER ETH0", eth, "PRINTER WIFI", wifi, "MOONRAKER", hostport,
@@ -1694,10 +1752,15 @@ static void k_nav(const char *host, int port, kmenu *m, const btn *b) {
     else if (!strcmp(t, "heat")) m->scr = K_HEAT;
     else if (!strcmp(t, "tools")) m->scr = K_TOOLS;
     else if (!strcmp(t, "about")) m->scr = K_ABOUT;
+    else if (!strcmp(t, "fil")) m->scr = K_FIL;
+    else if (!strcmp(t, "move")) m->scr = K_MOVE;
+    else if (!strcmp(t, "ftemp")) m->ft = (m->ft + 1) % 4;
+    else if (!strcmp(t, "step")) m->step = (m->step + 1) % 3;
     else if (!strcmp(t, "prev")) m->page--;
     else if (!strcmp(t, "next")) m->page++;
     else if (!strcmp(t, "back"))
-        m->scr = m->scr == K_FILE ? K_FILES : m->scr == K_ABOUT ? K_TOOLS : K_HOME;
+        m->scr = m->scr == K_FILE ? K_FILES
+               : m->scr == K_ABOUT || m->scr == K_MOVE ? K_TOOLS : K_HOME;
 }
 
 static int cmd_klipper(const char *dump, const char *hostport, const char *screen) {
@@ -1818,7 +1881,8 @@ static int cmd_klipper(const char *dump, const char *hostport, const char *scree
             snprintf(lab, sizeof lab, "%s", b[hit].label);
             for (char *q = lab; *q; q++) if (*q == '\n') *q = ' ';
             fprintf(stderr, "klipper: %s -> %d\n", tok, rc);
-            snprintf(note, sizeof note, "%s %s", lab, rc == 200 ? "ok" : "failed");
+            snprintf(note, sizeof note, "%s %s", lab,
+                     rc == 200 ? "ok" : rc == -2 ? "running" : "failed");
             note_t = now_ms();
             if (rc == 200 && !strcmp(b[hit].token, "print")) m.scr = K_HOME;
         }
@@ -1844,7 +1908,7 @@ static void usage(void) {
         "       ad4-screen confirm TITLE BODY [GO_LABEL] [SECS]\n"
         "       ad4-screen touch [SECS]\n"
         "       ad4-screen calib [SECS]\n"
-        "       ad4-screen klipper [HOST[:PORT]] [--dump FILE.ppm [files|file|heat|tools|about]]\n"
+        "       ad4-screen klipper [HOST[:PORT]] [--dump FILE.ppm [files|file|heat|tools|about|fil|move]]\n"
         "env: AD4_MCU AD4_IP AD4_PORT AD4_INSTALLED AD4_STICK AD4_ROT AD4_CAL\n");
 }
 

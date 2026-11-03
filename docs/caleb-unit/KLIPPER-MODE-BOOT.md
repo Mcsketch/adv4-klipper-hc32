@@ -310,12 +310,36 @@ Possibly the light; untested.
 The extruder slip item was closed by Caleb (2026-11-03); slicer max volumetric
 speed stays at 3 mm3/s.
 
+## Update 2026-11-03 (3): cooling and the Rapid PLA+ preset
+
+The filament is Elegoo Rapid PLA+. Cube 2 (SUNLU preset: 220 C, flow 0.96,
+fan 100 % now that M106 drives PA6) had wall gaps from the bottom up. Fan cut
+to 30 % at Z 13 improved the walls at once. The hotend PWM barely moved
+(0.31 at fan 100 % vs 0.28 at 30 %), so the heater kept up; the gaps are
+cooling/melt, not heater power.
+
+New Elegoo filament preset **"AD4 Rapid PLA+"**: 225 C, flow 1.0, fan 40 %,
+max volumetric 3 mm3/s, retraction 5.5 mm, bed 55 C.
+
+### Ladder test (`ladder_RapidPLA.gcode`)
+Four 20x20x15 mm blocks printed one after another (bumps on top = piece):
+
+| Piece | Change | Caleb's verdict |
+|---|---|---|
+| A (1) | preset as is: 225 C, fan 40 %, PA 0.05, z-hop 0.4 | best, good enough |
+| B (2) | A at 235 C | close behind A |
+| C (3) | B, z-hop off, Z moves at 3 mm/s | very weak: thin walls, choppy lines |
+| D (4) | C, pressure advance 0.5 | very weak: thin walls, choppy lines |
+
+Result: keep the preset (piece A). Wall tuning closed by Caleb.
+Not isolated: C and D printed last, after ~40 min at 235 C, so print order
+and heat creep are confounded with the z-hop/PA changes. Thin walls are
+under-extrusion, which z-hop alone should not cause. If thin walls come back
+on long prints, suspect heat creep or feed (spool drag, ground filament)
+before settings.
+
 ## Next (in order)
 
-1. Slicer fan settings now take effect (M106 is real): check the SUNLU PLA
-   preset's cooling values.
-2. Wall jitters on the first cube: reprint with the fan; if they stay, check
-   X/Y current or try StealthChop.
-3. Have a person test the panel's touch buttons.
-4. Fix `bridge/ad4-bridge.c` baud (`B115200`).
-5. Light (PA4?) and camera: separate tracker entry.
+1. Have a person test the panel's touch buttons.
+2. Fix `bridge/ad4-bridge.c` baud (`B115200`).
+3. Light (PA4?) and camera: separate tracker entry.

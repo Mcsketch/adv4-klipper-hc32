@@ -32,19 +32,18 @@
 /* hz 0 = rest. */
 typedef struct { unsigned hz, ms; } ad4_note;
 
-/* "Layer by layer": original, written for this project. Three rising
- * arpeggios, one per layer, each starting a step higher; then a turn back
- * down and home to C. Kept in C5-E6 so every note clears the PWM floor.
+/* "Stage clear": original, written for this project, in the chiptune
+ * idiom - staccato notes with a gap after each, a fast C major arpeggio, a
+ * bVI-bVII lift into the top C, and a trill to finish. 1.7 s. All notes are
+ * in C5-C6, above the PWM floor.
  * Hear it without a printer: python3 -I tools/buzz-preview.py src/ad4_buzzer.h */
 static const ad4_note AD4_RIFF[] = {
-    { 523, 100 }, { 659, 100 }, { 784, 100 }, { 1047, 200 },  /* C E G C' */
-    { 0, 60 },
-    { 587, 100 }, { 698, 100 }, { 880, 100 }, { 1175, 200 },  /* D F A D' */
-    { 0, 60 },
-    { 659, 100 }, { 784, 100 }, { 988, 100 }, { 1319, 260 },  /* E G B E' */
-    { 0, 90 },
-    { 1175, 120 }, { 988, 120 }, { 784, 120 },                 /* D' B G   */
-    { 1047, 600 },                                             /* C'       */
+    { 523, 85 }, { 0, 20 }, { 659, 85 }, { 0, 20 },       /* C E   */
+    { 784, 85 }, { 0, 20 }, { 1047, 170 }, { 0, 80 },     /* G C'  */
+    { 831, 125 }, { 0, 20 }, { 932, 125 }, { 0, 20 },     /* Ab Bb */
+    { 1047, 70 }, { 784, 70 }, { 1047, 70 },              /* trill */
+    { 784, 70 }, { 1047, 70 }, { 784, 70 },
+    { 1047, 450 },                                        /* C'    */
 };
 
 static const ad4_note AD4_TAP[]   = { { 1500, 40 } };

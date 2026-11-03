@@ -291,16 +291,31 @@ First print: 20 mm cube, 0.2 mm layers, 220/55 C, peak 3.0 mm3/s, ~23 min.
 Result (Caleb): good. No wall gaps, solid top, a few small jitters on the walls
 in a couple of places; a faint dark line at ~80% height (marker ink from the length marks; Caleb judged it fine after a 240 C 100 mm flush). The part fan ran (uncontrolled: pin unknown, M106/M107 no-ops).
 
+## Update 2026-11-03 (2): part fan = PA6
+
+Found offline in the stock NA image (`ad4-re/na.dis`): the MCU's own G-code
+dispatcher (fn 0x8017b90) handles M106 (0x6a) by storing S, clamped to 255, at
+RAM 0x20000454, and M107 (0x6b) by zeroing it. The 1 ms tick (fn 0x8012da4)
+software-PWMs **PA6** from that byte (period 256). PA6 is initialised as a
+push-pull output, low, next to PC2 (heatsink fan) in fn 0x8011514.
+`printer.cfg` now has `[fan] pin: PA6`; the empty M106/M107 macros are gone.
+Spin test with Caleb watching: M106 S255 / S128 / M107 -> the part blower
+followed all three. Unconfigured, PA6 floats and the blower ran uncontrolled
+during the first cube.
+
+Same tick: **PA4** is a second software PWM, 0-100 %, set by another handler in
+fn 0x8017684 and driven high at boot next to the PB9 chamber-fan PWM init.
+Possibly the light; untested.
+
+The extruder slip item was closed by Caleb (2026-11-03); slicer max volumetric
+speed stays at 3 mm3/s.
+
 ## Next (in order)
 
-With someone at the printer:
-1. Find the part-fan pin (offline first: stock firmware/`axes.py` peripherals;
-   never SET_PIN a heater/stepper pin).
-2. Extruder slip at ~4.8 mm3/s @210 C: at 2 mm/s it fed only 80-90 of 100 (no
-   clicking = filament slip under back-pressure). Cold pulls at 88/95/105 C
-   snapped or strung, no debris. Partial clog vs low-flow hot end vs temp is
-   unresolved. Keep flow at 3 mm3/s or less until it is fixed.
-3. Wall jitters on the first cube: check X/Y current, or try StealthChop.
-
-Offline: fix `bridge/ad4-bridge.c` baud (`B115200`); have a person test the
-panel's touch buttons; camera + light (separate tracker entry).
+1. Slicer fan settings now take effect (M106 is real): check the SUNLU PLA
+   preset's cooling values.
+2. Wall jitters on the first cube: reprint with the fan; if they stay, check
+   X/Y current or try StealthChop.
+3. Have a person test the panel's touch buttons.
+4. Fix `bridge/ad4-bridge.c` baud (`B115200`).
+5. Light (PA4?) and camera: separate tracker entry.

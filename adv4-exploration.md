@@ -187,7 +187,7 @@ corrected by firmware RE + live tests — the trace alone was NOT authoritative)
 | Hotend thermistor | **PA0** (PROVEN) | ADC1 CH0; fw converts R = 4700·adc/(4095−adc) — byte-for-byte Klipper's Thermistor formula → pullup 4700 correct. **was: "bed thermistor" — wrong** |
 | Bed thermistor | **PA5** (PROVEN) | ADC1 CH5; bed LUT keyed on RAW ADC (no ohm conversion). **was: "part fan PA5" — wrong** |
 | Hotend fan | PC2 (PROVEN) | `heater_fan`, auto-starts >50C (observed live); it is the heatsink fan (NA unit, 2026-10-28) |
-| Part fan | **unknown — probe** | **was: PA5 — that is the bed NTC.** Not PB9 either: PB9 is the chamber fan (2026-10-28, below) |
+| Part fan | **PA6 (PROVEN, NA)** | Stock NA fw M106 handler sets a 0-255 duty that the 1 ms tick software-PWMs onto PA6; `[fan] pin: PA6` spin-tested S255/S128/M107 (2026-11-03). Not PA5 (bed NTC), not PB9 (chamber fan) |
 | Controller fan | PC5 | GUESS (traced) |
 | Chamber fan | PB9 (PROVEN) | fw RE: AF4 @0x8011036 → TMRA4. `M106 S255` on PB9 spun the chamber fan (NA unit, same PCB, 2026-10-28) |
 | LED | **unknown — probe** | stock template: PB12 (unconfirmed) |

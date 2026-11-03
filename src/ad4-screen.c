@@ -1582,7 +1582,7 @@ static int k_buttons(const kstat *k, const kmenu *m, btn *b) {
                             C_CARD2, C_CARD, 3, 0, 0 };
         }
         snprintf(st, sizeof st, "STEP\n%g mm", d);
-        b[n++] = (btn){ 134, 292, 102, 104, "HOME", K_GS "G28", C_ACC, C_ACCD, 3, 0, 0 };
+        b[n++] = (btn){ 134, 292, 102, 104, "HOME", K_GS "HOME_XYZ", C_ACC, C_ACCD, 3, 0, 0 };
         b[n++] = (btn){ 354, 292, 102, 104, st, "step", K_G1, K_G2, 2, 0, 0 };
         b[n++] = KB(24, 432, "BACK", "back", K_G1, K_G2, 0);
         break;

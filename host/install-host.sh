@@ -3,13 +3,14 @@
 # (KIAUH or similar):
 #   host/install-host.sh PRINTER_IP [KLIPPER_DIR] [CONFIG_DIR]
 # 1. applies klipper-socket-serial.patch to KLIPPER_DIR (default ~/klipper)
-#    unless it is already there. A Klipper update drops it: run this again.
+#    unless it is already there, and copies home_xyz.py (HOME_XYZ) into
+#    klippy/extras. A Klipper update drops both: run this again.
 # 2. installs printer.cfg into CONFIG_DIR (default ~/printer_data/config)
 #    with the printer's address; an existing printer.cfg is kept as
 #    printer.cfg.bak-DATE
 # 3. restarts the klipper service
 set -e
-[ -n "$1" ] || { sed -n '2,11p' "$0"; exit 1; }
+[ -n "$1" ] || { sed -n '2,12p' "$0"; exit 1; }
 IP=$1
 KDIR=${2:-$HOME/klipper}
 CDIR=${3:-$HOME/printer_data/config}
@@ -22,6 +23,8 @@ else
     git -C "$KDIR" apply "$HERE/klipper-socket-serial.patch"
     echo "patch: applied to $KDIR (uncommitted; a Klipper update removes it)"
 fi
+cp "$HERE/home_xyz.py" "$KDIR/klippy/extras/home_xyz.py"
+echo "extras: home_xyz.py in $KDIR/klippy/extras"
 
 mkdir -p "$CDIR"
 if [ -f "$CDIR/printer.cfg" ]; then

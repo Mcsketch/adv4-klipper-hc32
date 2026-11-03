@@ -22,11 +22,9 @@
  * Frequency floor: the PWM clock divider cannot represent a period longer than
  * roughly 2.7 ms, so anything under ~370 Hz comes back as a click or as a
  * wrapped, wrong pitch. Every ioctl still returns success, so nothing reports
- * it - the note is just silently wrong. Keep the tables above 400 Hz;
- * tools/gen-riff.py transposes automatically to enforce that.
+ * it - the note is just silently wrong. Keep the tables above 400 Hz.
  *
- * Build for the SoC:  zig build-exe -target arm-linux-musleabi -mcpu=cortex_a7 \
- *                       -lc -static -OReleaseSmall ad4-buzz.c -femit-bin=ad4-buzz
+ * Build for the SoC: make -C src (docs/BUILD.md).
  */
 #ifndef AD4_BUZZER_H
 #define AD4_BUZZER_H
@@ -34,42 +32,19 @@
 /* hz 0 = rest. */
 typedef struct { unsigned hz, ms; } ad4_note;
 
-/* indochine-l_aventurier.midi: first 32 notes of the 'Boris Jardel' track,
- * eighth=185ms, legato, +1 oct. */
-/* regenerate: python3 -I tools/gen-riff.py indochine-l_aventurier.midi */
+/* "Layer by layer": original, written for this project. Three rising
+ * arpeggios, one per layer, each starting a step higher; then a turn back
+ * down and home to C. Kept in C5-E6 so every note clears the PWM floor.
+ * Hear it without a printer: python3 -I tools/buzz-preview.py src/ad4_buzzer.h */
 static const ad4_note AD4_RIFF[] = {
-    { 415, 370 },
-    { 554, 185 },
-    { 622, 185 },
-    { 740, 370 },
-    { 622, 370 },
-    { 554, 185 },
-    { 494, 370 },
-    { 415, 925 },
-    { 494, 370 },
-    { 554, 185 },
-    { 622, 185 },
-    { 740, 370 },
-    { 622, 370 },
-    { 554, 185 },
-    { 622, 185 },
-    { 554, 185 },
-    { 622, 925 },
-    { 415, 370 },
-    { 554, 185 },
-    { 622, 185 },
-    { 740, 370 },
-    { 622, 370 },
-    { 554, 185 },
-    { 494, 370 },
-    { 415, 925 },
-    { 494, 370 },
-    { 554, 185 },
-    { 622, 185 },
-    { 740, 370 },
-    { 622, 370 },
-    { 554, 185 },
-    { 622, 184 },
+    { 523, 100 }, { 659, 100 }, { 784, 100 }, { 1047, 200 },  /* C E G C' */
+    { 0, 60 },
+    { 587, 100 }, { 698, 100 }, { 880, 100 }, { 1175, 200 },  /* D F A D' */
+    { 0, 60 },
+    { 659, 100 }, { 784, 100 }, { 988, 100 }, { 1319, 260 },  /* E G B E' */
+    { 0, 90 },
+    { 1175, 120 }, { 988, 120 }, { 784, 120 },                 /* D' B G   */
+    { 1047, 600 },                                             /* C'       */
 };
 
 static const ad4_note AD4_TAP[]   = { { 1500, 40 } };

@@ -14,12 +14,16 @@ make -C src            # bin/ad4-bridge, bin/ad4-screen, bin/ad4-buzz (static, s
 |---|---|
 | `ad4-bridge` | `ad4-bridge PORT TTY BAUD`: TCP server, one client, bytes to and from the UART |
 | `ad4-screen` | panel: `splash`, `confirm`, `status`, `done`, `fail`, `klipper HOST:PORT` |
-| `ad4-buzz` | buzzer cues: `tap`, `start`, `ok`, `fail` |
+| `ad4-buzz` | buzzer cues: `tap`, `mark`, `start`, `ok` (the jingle), `fail` |
 
 `bin/dropbear` is Dropbear 2022.83 `dropbearmulti`, static ARM, prebuilt.
 
 Panel screenshots without a printer: `make -C src preview` builds a host
 version of `ad4-screen` that writes the screens to `build/preview/*.png`.
+
+Buzzer cues without a printer: `python3 -I tools/buzz-preview.py src/ad4_buzzer.h`
+writes `build/preview/buzz-*.wav`. The cues are the tables in
+`src/ad4_buzzer.h`; keep every note above 400 Hz (the PWM cannot go lower).
 
 ## Klipper firmware (firmware/)
 

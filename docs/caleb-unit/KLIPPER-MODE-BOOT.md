@@ -263,6 +263,14 @@ normal); the earlier stutter was at 5 mm/s and likely lost steps (Z10 read
 Paper test at X110 Y100: Z `position_endstop: 254.7`, `position_max: 254.7`,
 `position_min: -2`. Re-homed and re-checked at Z0: correct drag.
 
+PID (2026-11-02): extruder 210 C Kp 16.720 Ki 6.192 Kd 11.286; bed 60 C Kp 68.060
+Ki 7.960 Kd 145.478 (SAVE_CONFIG). Extruder direction confirmed (`dir_pin: !PC6`).
+
+Filament load (long tube from the feeder to the head): **~690 mm commanded**
+(E rd 33.5 at 1/16) from gears-catch to new filament at the nozzle. Unload from
+hot: `G1 E-10 F600`, `G1 E-90 F300` frees a cut stub. Commanded length is in
+current E units; if the 100 mm extrude check changes rd, scale it.
+
 ## Next (in order)
 
 With someone at the printer:

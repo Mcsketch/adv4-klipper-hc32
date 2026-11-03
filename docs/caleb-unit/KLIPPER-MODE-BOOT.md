@@ -289,7 +289,7 @@ filament preset has max volumetric speed 3 (see the slip flag below).
 
 First print: 20 mm cube, 0.2 mm layers, 220/55 C, peak 3.0 mm3/s, ~23 min.
 Result (Caleb): good. No wall gaps, solid top, a few small jitters on the walls
-in a couple of places; a faint dark line at ~80% height (old residue or clog). The part fan ran (uncontrolled: pin unknown, M106/M107 no-ops).
+in a couple of places; a faint dark line at ~80% height (marker ink from the length marks; a 240 C 100 mm flush afterwards was clean). The part fan ran (uncontrolled: pin unknown, M106/M107 no-ops).
 
 ## Next (in order)
 

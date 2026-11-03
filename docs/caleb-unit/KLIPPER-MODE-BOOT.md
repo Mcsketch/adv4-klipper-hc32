@@ -271,16 +271,36 @@ Filament load (long tube from the feeder to the head): **~690 mm commanded**
 hot: `G1 E-10 F600`, `G1 E-90 F300` frees a cut stub. Commanded length is in
 current E units; if the 100 mm extrude check changes rd, scale it.
 
+## Update 2026-11-03: first print
+
+PID done (values in the live `printer.cfg` SAVE_CONFIG block). Filament load path
+from the gears catching to the nozzle is ~690 mm of the long tube.
+
+Macros (in `work/n32/printer-n32.cfg`): `PRINT_START BED= EXTRUDER=` (preheat to
+150, home, bed wait, nozzle wait, 10 mm purge line at Z0.3 from X20 to X120 at
+Y10), `PRINT_END` (retract 2, lift 10, Y200 = bed forward, heaters off, M84),
+and empty `M106`/`M107` because the part-fan pin is unknown.
+
+Slicer: Elegoo preset "AD4 0.4 Nozzle (Caleb)" is Klipper flavor, origin 0,0
+(220x200), uploads to Mainsail 192.168.1.10:8095 (octoprint host type). Start
+gcode `PRINT_START BED=[bed_temperature_initial_layer_single]
+EXTRUDER=[nozzle_temperature_initial_layer]`, end `PRINT_END`. The SUNLU PLA
+filament preset has max volumetric speed 3 (see the slip flag below).
+
+First print: 20 mm cube, 0.2 mm layers, 220/55 C, peak 3.0 mm3/s, ~23 min.
+Result (Caleb): good. No wall gaps, solid top, a few small jitters on the walls
+in a couple of places. No part cooling was running.
+
 ## Next (in order)
 
 With someone at the printer:
-1. `PID_CALIBRATE HEATER=extruder TARGET=210`, then `HEATER=heater_bed TARGET=60`.
-2. ~~Extrude check~~ done: E rd **33.5 correct** (50 mm @0.5 mm/s = 50). FLAG: at
-   2 mm/s (~4.8 mm3/s) @210 C it fed only 80-90 of 100 (no clicking = filament
-   slip under back-pressure). Cold pulls at 88/95/105 C snapped or strung, no debris.
-   Unresolved (partial clog vs low-flow hot end vs temp); parked by Caleb. Print
-   at 215-220 C and keep flow under ~3 mm3/s until fixed.
-3. First print. Watch Z at speed (`max_z_velocity: 5`).
+1. Find the part-fan pin (offline first: stock firmware/`axes.py` peripherals;
+   never SET_PIN a heater/stepper pin).
+2. Extruder slip at ~4.8 mm3/s @210 C: at 2 mm/s it fed only 80-90 of 100 (no
+   clicking = filament slip under back-pressure). Cold pulls at 88/95/105 C
+   snapped or strung, no debris. Partial clog vs low-flow hot end vs temp is
+   unresolved. Keep flow at 3 mm3/s or less until it is fixed.
+3. Wall jitters on the first cube: check X/Y current, or try StealthChop.
 
-Offline: part-fan pin (not in the axis table; still unknown); fix
-`bridge/ad4-bridge.c` baud (`B115200`); have a person test the panel's touch buttons.
+Offline: fix `bridge/ad4-bridge.c` baud (`B115200`); have a person test the
+panel's touch buttons; camera + light (separate tracker entry).

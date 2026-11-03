@@ -1,5 +1,9 @@
 # Flashforge Adventurer 4 → Klipper
 
+> **Caleb's printer is the NA revision (N32G455), not the HD/HC32F460 this
+> README describes.** Its current setup and standing instructions:
+> [docs/caleb-unit/RUNBOOK.md](docs/caleb-unit/RUNBOOK.md).
+
 The Adventurer 4's main board (Hollystone **HC32F460**, "HD" revision) now runs
 **Klipper** — no soldering, no extra hardware. The printer's own Allwinner V3S
 SoC is reused as the serial bridge and the flasher, over the stock wiring.

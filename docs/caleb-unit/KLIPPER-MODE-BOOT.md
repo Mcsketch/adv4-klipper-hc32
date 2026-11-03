@@ -1,7 +1,7 @@
 # Klipper-mode persistent boot on the NA unit (2026-10-27; stickless eMMC boot since 2026-10-28)
 
-> **Current state:** see the last section, "Update 2026-10-28 (2)". The
-> sections before it are the history, kept for the failures they record.
+> **Current state:** see [RUNBOOK.md](RUNBOOK.md) (standing instructions).
+> This file is the dated history, kept for the failures it records.
 
 Status at pause (22:45 MDT): the MCU runs Klipper 020d25e. The host stack on
 prodesk is installed and running. The SoC's cold boot into `ad4-daemon.sh`

@@ -1,0 +1,58 @@
+802101f serialhdl: accept socket:// serial ports (TCP UART bridge)
+020d25e probe: Disable axis twist compensation for nozzle probes
+From 802101f2d4d5e3e36e8597adc49fee7fe9965ceb Mon Sep 17 00:00:00 2001
+From: Mcsketch <calebkuhlman94@gmail.com>
+Date: Tue, 27 Oct 2026 21:57:39 -0600
+Subject: [PATCH] serialhdl: accept socket:// serial ports (TCP UART bridge)
+
+The AD4 SoC exposes the MCU UART through ad4-bridge on TCP :5000. Let
+[mcu] serial: socket://host:port open through pyserial serial_for_url;
+skip RTS and the stk500v2 leave sequence, which need a real tty.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+---
+ klippy/serialhdl.py | 22 ++++++++++++++++------
+ 1 file changed, 16 insertions(+), 6 deletions(-)
+
+diff --git a/klippy/serialhdl.py b/klippy/serialhdl.py
+index adc5916..4be6e32 100644
+--- a/klippy/serialhdl.py
++++ b/klippy/serialhdl.py
+@@ -190,18 +190,28 @@ class SerialReader:
+         while 1:
+             if self.reactor.monotonic() > start_time + 90.:
+                 self._error("Unable to connect")
++            is_socket = serialport.startswith("socket://")
+             try:
+-                serial_dev = serial.Serial(baudrate=baud, timeout=0,
+-                                           exclusive=True)
+-                serial_dev.port = serialport
+-                serial_dev.rts = rts
+-                serial_dev.open()
++                if is_socket:
++                    # TCP bridge to a remote UART (e.g. AD4 SoC ad4-bridge):
++                    # pyserial's socket:// handler; fd is a plain socket, so
++                    # no RTS/termios handling applies.
++                    serial_dev = serial.serial_for_url(serialport,
++                                                       baudrate=baud,
++                                                       timeout=0)
++                else:
++                    serial_dev = serial.Serial(baudrate=baud, timeout=0,
++                                               exclusive=True)
++                    serial_dev.port = serialport
++                    serial_dev.rts = rts
++                    serial_dev.open()
+             except (OSError, IOError, serial.SerialException) as e:
+                 logging.warning("%sUnable to open serial port: %s",
+                              self.warn_prefix, e)
+                 self.reactor.pause(self.reactor.monotonic() + 5.)
+                 continue
+-            stk500v2_leave(serial_dev, self.reactor)
++            if not is_socket:
++                stk500v2_leave(serial_dev, self.reactor)
+             ret = self._start_session(serial_dev)
+             if ret:
+                 break
+-- 
+2.43.0
+

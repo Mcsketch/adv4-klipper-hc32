@@ -1,89 +1,22 @@
-# OS junk
-.DS_Store
+# build output: make -C src preview, tools/build-release.sh
+build/
+dist/
 
-# Build artifacts (static ARM host tools) — rebuildable from *.c via Makefile
-stm32isp-ad4/stm32isp-ad4
-stm32isp-ad4/stm32isp-ad4-*
-stm32isp-ad4/mcu_state
-stm32isp-ad4/uart_rate
-stm32isp-ad4/cap
-stm32isp-ad4/capfull
-stm32isp-ad4/bootloop
-stm32isp-ad4/safeprobe
-stm32isp-ad4/build.err
-
-# Large extraction/backup artifacts (live on disk, not in git)
-work/backup/
-work/bkup/
-work/rootfs.ext4
-work/rootfs_files/
-work/fw/
-work/klipper/
-work/piotoolchain/
-work/kv-next/
-work/flashdisk-work/
-
-# Firmware archives (kept on disk; re-downloadable)
-*.zip
-*.tar.xz
-*.tgz
-work/stock/
-work/staging/
-work/fwstock/
-
-# kept on disk only (133 MB, over GitHub 100 MB limit)
-FFAD4-BKUP.zip
-
-# vendor firmware download (21 MB, kept on disk)
-FlashForge-Hacks-main/
-
-# cross-compiled ARM binaries — rebuild from *.c
-bridge/*_arm
-stm32isp-ad4/*_arm
-
-# FlashForge's own firmware and tools: never commit these. The user supplies
-# them in the installer's factory/ folder, and the printer keeps a copy of the
-# MCU hex in /opt/PROGRAM/control as a fallback. The folder itself ships (with
-# a README), its contents do not.
-vendor-local/
-work/ctrl/
-install-on-printer/factory/*
-!install-on-printer/factory/README.txt
-flashdisk/factory/*
-!flashdisk/factory/README.txt
-install-on-printer/factory-HD.hex
-install-on-printer/IAPCommand
-
-# Root password on the stick: plain text, never in git.
-install-on-printer/ROOT
-flashdisk/ROOT
+# Secrets written to the install stick. Never commit.
+ROOT_PASSWORD.txt
 ROOT
+docs/caleb-unit/UNIT-PRIVATE.md
 
-# Password research against the vendor account: local only, never published.
-brute8/
+# FlashForge's firmware and tools. Never commit or redistribute: the sticks use
+# the copy already on the printer (/opt/PROGRAM/control).
+IAPCommand
+*-IAP-*.hex
+*-IAP-*.bin
+*.tgz
+*.zip
+dumps/
 
-# FlashForge's firmware zip: tracked before the *.zip rule above existed, so
-# name it explicitly. Get it from FlashForge and drop it in factory/.
-FlashForge-Adventurer-4-Firmware-V2.2.4-2.3.zip
+# Klipper build tree (firmware/build.sh)
+firmware/klipper/
 
-# Flash dumps are FlashForge's code. Anyone can make their own from the panel
-# (DUMP on the installer screen), so none of ours are committed.
-firmware/dumps/
-mcu-dump-full.bin
-work/hd.bin
-
-# vendor datasheet, tab sheets, scratch configs, root-level hex scratch
-*.pdf
-*.m4a
-*.gp4
-*.midi
-.config.bak*
-/*.hex
-
-# SWD dumps (FlashForge code) and their run logs: kept in ~/ad4-backup, never committed
-work/swd/*.bin
-work/swd/*.log
-# N32 Klipper images: rebuilt from work/n32/klipper-n32g455.defconfig
-work/n32/*.bin
-work/n32/*.hex
-work/n32/nasync
+.DS_Store

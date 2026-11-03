@@ -1,7 +1,7 @@
 # Caleb's AD4 on Klipper: runbook (standing instructions)
 
 State as of 2026-11-03. This is the doc to read first. It describes the install
-as it runs now; `KLIPPER-MODE-BOOT.md` is the dated history behind it. When
+as it runs now; git history holds the dated record behind it. When
 something here changes, edit this file in place. Do not append corrections.
 
 ## 1. What is running
@@ -11,7 +11,7 @@ something here changes, edit this file in place. Do not append corrections.
 | MCU | NA board, **N32G455** (not the HD/HC32F460 the repo README describes) | mainline Klipper `020d25e`, flashed 2026-10-27 through the vendor IAP |
 | SoC | Allwinner V3S in the printer, eth0 `192.168.100.20` (lab switch), WiFi `192.168.1.219` | boots `/opt/ad4-klipper/klipper-boot.sh`: `ad4-bridge` TCP :5000 to `/dev/ttyS1` @115200, `ad4-screen klipper` panel |
 | Host | prodesk (`192.168.1.10`, lab side `192.168.100.10`) | `~/klipper` branch `ad4-socket` (`802101f`, accepts `socket://`), Moonraker on loopback :7125, Mainsail `http://192.168.1.10:8095` via Caddy |
-| Config | `prodesk:~/printer_data/config/printer.cfg` | repo copy `work/n32/printer-n32.cfg`; keep them identical (copy after every change, commit) |
+| Config | `prodesk:~/printer_data/config/printer.cfg` | repo template `host/printer.cfg`; differs only in IP, PID values and the SAVE_CONFIG block. Port real changes back to it and commit |
 | Slicer | Elegoo Slicer on the ASRock | machine "AD4 0.4 Nozzle (Caleb)", process "AD4 PLA Standard", filament "AD4 Rapid PLA+" |
 
 The MCU link is **wired on purpose**. Over WiFi, Klipper's clock sync drifted
@@ -37,7 +37,8 @@ until "Timer too close". Do not move it to WiFi.
 3. Heater or MCU faults are not auto-restarted. Read `klippy.log` first.
 
 Boot switch: `/opt/auto_run.sh` line 101 runs `klipper-boot.sh` when
-`/opt/ad4-klipper/klipper-mode` exists. Undo: `rm` that flag,
+`/opt/ad4-klipper/klipper-mode` exists. (After a reinstall from the stick the
+line also starts dropbear in the stock branch; see docs/HOW-IT-WORKS.md.) Undo: `rm` that flag,
 `sync; reboot -f` (the vendor UI returns but cannot drive an MCU running
 Klipper). Boot log: `/tmp/ad4-boot.log` (tmpfs, lost on reboot).
 
@@ -84,7 +85,7 @@ Not yet known: PA4 (a 0-100 % software PWM in the stock fw, maybe the light).
   programmer VCC. Never flash the HC32F460 Klipper build onto this N32 unit.
 - **Never sync the IAP** (`nasync`, `stm32isp-ad4 -s`, `IAPCommand`) unless a
   complete image write follows in the same run: **the sync erases the app.**
-  Flashing only via `work/n32/iap-flash.sh` on the SoC, with the vendor GUI
+  Flashing only via the install/rollback sticks or `tools/iap-flash.sh` on the SoC, with the vendor GUI
   down, and only on Caleb's explicit go. Afterwards `stty -F /dev/ttyS1 -parenb`.
 - MCU operations only with the printer idle. Never `fuser -k /dev/ttyS1`.
   Never kill `wpa_supplicant`/`wpa_cli` on the SoC.
@@ -128,10 +129,10 @@ clean next experiment if corners ever matter.
   `print_stats`, `toolhead`, `extruder`) instead of guessing.
 - Slicing from WSL works: Elegoo's CLI with flattened presets that keep
   `inherits`: `elegoo-slicer.exe --slice 0 --load-settings "machine.json;process.json" --load-filaments filament.json --outputdir out x.stl`.
-- `ad4-bridge` (source `install-on-printer/ad4-bridge.c`, binary next to it =
+- `ad4-bridge` (source `src/ad4-bridge.c`, binary `bin/ad4-bridge` =
   `/opt/ad4-klipper/ad4-bridge`) sets the UART rate itself (fixed 2026-11-03;
   previous binary kept as `ad4-bridge.pre-baudfix`). Build on prodesk:
-  `arm-linux-gnueabi-gcc -std=gnu11 -O2 -Wall -static -o ad4-bridge ad4-bridge.c`.
+  `make -C src` (docs/BUILD.md).
   Copy to the SoC with `ssh ... 'cat > /tmp/x' < file` (no sftp-server, so
   plain scp fails). Swap only with the printer idle: write `.tmp`, `mv` over,
   kill the old pid, start it like `klipper-boot.sh` line 20. The first
@@ -147,8 +148,9 @@ clean next experiment if corners ever matter.
   `flashforge_init.sh.rescue2` and `flashforge_init.sh.klipper-boot-v3`.
   Rename one to `flashforge_init.sh`, insert, power-cycle. Rescue v2 brings up
   dropbear + network and parks; it never touches ttyS1, NRST or the IAP.
-- **Back to stock firmware:** flash the stock NA hex with `iap-flash.sh`
-  (Caleb's go), then remove `klipper-mode` and reboot. Proven 2026-10-27.
+- **Back to stock firmware:** the rollback stick (docs/ROLLBACK.md; Caleb's
+  go). Manual path, proven 2026-10-27: stock NA hex via `tools/iap-flash.sh`,
+  then remove `klipper-mode` and reboot.
 - **ST-Link:** bootloader recovery only. SWD cannot attach while Klipper runs
   (`wfi`), and connect-under-reset does not work on the N32.
 

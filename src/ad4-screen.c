@@ -21,7 +21,7 @@
  *   fail   TITLE [SUB]         error screen
  *   touch  [SECS]              diagnostic: live crosshair + tap-accuracy targets
  *   calib  [SECS]              four-mark touch calibration, writes AD4_CAL/CAL_PATH
- *   klipper [HOST[:PORT]]      runs forever: Moonraker status + touch controls
+ *   klipper [HOST[:PORT]]      runs forever: Moonraker status, menus, touch controls
  *
  * menu exit codes: 0 = a choice was made, 1 = no touchscreen (caller falls
  * back to the flag files), 2 = the user chose skip/abort.
@@ -439,7 +439,7 @@ static long now_ms(void) {
 
 /* ------------------------------------------------------------ screens */
 typedef struct { int x, y, w, h; const char *label; const char *token;
-                 unsigned top, bot; int sc; int danger; } btn;
+                 unsigned top, bot; int sc; int danger; int arg; } btn;
 
 static void draw_btn(const surf *s, const btn *b) {
     rrect(s, b->x, b->y, b->w, b->h, 18, b->top, b->bot);
@@ -1243,7 +1243,7 @@ static int http_req(const char *host, int port, const char *method,
         close(fd);
         return -1;
     }
-    char req[512];
+    char req[1024];
     int n = snprintf(req, sizeof req,
                      "%s %s HTTP/1.0\r\nHost: %s:%d\r\nContent-Length: 0\r\n\r\n",
                      method, path, host, port);
@@ -1321,7 +1321,8 @@ typedef struct {
     int online;                       /* Moonraker answered at all */
     char kstate[16], kmsg[160];       /* klippy: ready/startup/shutdown/error */
     char pstate[16], file[96];        /* print_stats */
-    double et, ett, bt, btt, prog, dur;
+    char ver[48];                     /* Klipper software_version */
+    double et, ett, bt, btt, prog, dur, pfan, cfan;
 } kstat;
 
 static void k_poll(const char *host, int port, kstat *k) {
@@ -1337,10 +1338,12 @@ static void k_poll(const char *host, int port, kstat *k) {
     }
     jstr(b, e, "state", k->kstate, sizeof k->kstate);
     jstr(b, e, "state_message", k->kmsg, sizeof k->kmsg);
+    jstr(b, e, "software_version", k->ver, sizeof k->ver);
     if (http_req(host, port, "GET",
                  "/printer/objects/query?print_stats=state,filename,print_duration"
                  "&extruder=temperature,target&heater_bed=temperature,target"
-                 "&display_status=progress", buf, sizeof buf) != 200)
+                 "&display_status=progress&fan=speed&fan_generic%20chamber_fan=speed",
+                 buf, sizeof buf) != 200)
         return;
     if ((b = jobj(buf, "print_stats", &e))) {
         jstr(b, e, "state", k->pstate, sizeof k->pstate);
@@ -1354,6 +1357,8 @@ static void k_poll(const char *host, int port, kstat *k) {
         k->bt = jnum(b, e, "temperature"); k->btt = jnum(b, e, "target");
     }
     if ((b = jobj(buf, "display_status", &e))) k->prog = jnum(b, e, "progress");
+    if ((b = jobj(buf, "fan", &e))) k->pfan = jnum(b, e, "speed");
+    if ((b = jobj(buf, "fan_generic chamber_fan", &e))) k->cfan = jnum(b, e, "speed");
 }
 
 /* A power cycle or SoC reboot drops the TCP link and Klipper parks in
@@ -1369,6 +1374,11 @@ static int k_busy(const kstat *k) {
     return !strcmp(k->pstate, "printing") || !strcmp(k->pstate, "paused");
 }
 
+/* the menus exist only while Klipper is ready and no job is running */
+static int k_idle(const kstat *k) {
+    return k->online && !strcmp(k->kstate, "ready") && !k_busy(k);
+}
+
 static unsigned k_chip(const kstat *k, const char **label) {
     if (!k->online) { *label = "HOST OFFLINE"; return C_ERR; }
     if (!strcmp(k->kstate, "startup")) { *label = "STARTING"; return C_WARN; }
@@ -1379,35 +1389,157 @@ static unsigned k_chip(const kstat *k, const char **label) {
     return C_OK;
 }
 
-#define KB(x, w, lab, tok, top, bot, dng) \
-    ((btn){ x, 600, w, 120, lab, tok, top, bot, 3, dng })
+/* ---- local files: Moonraker's gcodes root, newest first */
+#define K_MAXF 64
+#define K_ROWS 6
+typedef struct { char name[128]; double mod, size; } kfile;
+static kfile kf[K_MAXF];
+static int nkf;
 
-static int k_buttons(const kstat *k, btn *b) {
+static int kf_cmp(const void *a, const void *b) {
+    double d = ((const kfile *)b)->mod - ((const kfile *)a)->mod;
+    return (d > 0) - (d < 0);
+}
+
+/* Returns the number of files, or -1 when Moonraker did not answer. */
+static int k_files(const char *host, int port) {
+    static char buf[65536];
+    nkf = 0;
+    if (http_req(host, port, "GET", "/server/files/list?root=gcodes", buf, sizeof buf) != 200)
+        return -1;
+    for (const char *p = buf; nkf < K_MAXF && (p = strstr(p, "{\"path\":")); ) {
+        const char *e = strchr(p, '}');
+        if (!e) break;                 /* cut off at the buffer's end */
+        kfile *f = &kf[nkf];
+        jstr(p, e, "path", f->name, sizeof f->name);
+        f->mod = jnum(p, e, "modified");
+        f->size = jnum(p, e, "size");
+        if (f->name[0]) nkf++;
+        p = e;
+    }
+    qsort(kf, nkf, sizeof *kf, kf_cmp);
+    return nkf;
+}
+
+static void urlenc(const char *s, char *o, int n) {
+    int j = 0;
+    for (; *s && j < n - 4; s++) {
+        unsigned char c = (unsigned char)*s;
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') || strchr("-_./~", c))
+            o[j++] = (char)c;
+        else
+            j += sprintf(o + j, "%%%02X", c);
+    }
+    o[j] = 0;
+}
+
+typedef struct {
+    int ok;
+    double est, fil, grams, lh, ext, bed, layers, height;
+    char type[24], slicer[32];
+} kmeta;
+
+static void k_meta(const char *host, int port, const char *name, kmeta *m) {
+    static char buf[16384];
+    char path[640], en[400];
+    const char *b, *e;
+    memset(m, 0, sizeof *m);
+    urlenc(name, en, sizeof en);
+    snprintf(path, sizeof path, "/server/files/metadata?filename=%s", en);
+    if (http_req(host, port, "GET", path, buf, sizeof buf) != 200 ||
+        !(b = jobj(buf, "result", &e)))
+        return;
+    m->ok = 1;
+    m->est = jnum(b, e, "estimated_time");
+    m->fil = jnum(b, e, "filament_total");
+    m->grams = jnum(b, e, "filament_weight_total");
+    m->lh = jnum(b, e, "layer_height");
+    m->ext = jnum(b, e, "first_layer_extr_temp");
+    m->bed = jnum(b, e, "first_layer_bed_temp");
+    m->layers = jnum(b, e, "layer_count");
+    m->height = jnum(b, e, "object_height");
+    jstr(b, e, "filament_type", m->type, sizeof m->type);
+    jstr(b, e, "slicer", m->slicer, sizeof m->slicer);
+}
+
+/* ---- screens. Buttons whose token starts with '/' POST that path to
+ * Moonraker; the rest move between screens. */
+enum { K_HOME, K_FILES, K_FILE, K_HEAT, K_TOOLS, K_ABOUT };
+typedef struct { int scr, page, sel, nfiles; kmeta meta; } kmenu;
+
+#define KB(x, w, lab, tok, top, bot, dng) \
+    ((btn){ x, 600, w, 120, lab, tok, top, bot, 3, dng, 0 })
+#define KT(x, y, w, lab, tok, top, bot) \
+    ((btn){ x, y, w, 130, lab, tok, top, bot, 3, 0, 0 })
+#define K_G1 0x5a6a80u
+#define K_G2 0x39465au
+#define K_GS "/printer/gcode/script?script="
+
+static int k_buttons(const kstat *k, const kmenu *m, btn *b) {
+    static char pf[32], cf[32];
+    int n = 0;
     if (!k->online || !strcmp(k->kstate, "startup")) return 0;
     if (strcmp(k->kstate, "ready")) {
-        b[0] = KB(24, 432, "FIRMWARE RESTART", "restart", C_ACC, C_ACCD, 0);
+        b[0] = KB(24, 432, "FIRMWARE RESTART", "/printer/firmware_restart", C_ACC, C_ACCD, 0);
         return 1;
     }
     if (k_busy(k)) {
         if (!strcmp(k->pstate, "printing"))
-            b[0] = KB(24, 208, "PAUSE", "pause", C_WARN, 0xa86f22u, 0);
+            b[0] = KB(24, 208, "PAUSE", "/printer/print/pause", C_WARN, 0xa86f22u, 0);
         else
-            b[0] = KB(24, 208, "RESUME", "resume", C_OK, 0x1f8a60u, 0);
-        b[1] = KB(248, 208, "CANCEL", "cancel", C_ERRD, 0x6d2530u, 1);
+            b[0] = KB(24, 208, "RESUME", "/printer/print/resume", C_OK, 0x1f8a60u, 0);
+        b[1] = KB(248, 208, "CANCEL", "/printer/print/cancel", C_ERRD, 0x6d2530u, 1);
         return 2;
     }
-    b[0] = KB(24, 208, "PREHEAT", "preheat", C_ACC, C_ACCD, 0);
-    b[1] = KB(248, 208, "COOLDOWN", "cool", 0x5a6a80u, 0x39465au, 0);
-    return 2;
-}
-
-static const char *k_path(const char *tok) {
-    if (!strcmp(tok, "pause")) return "/printer/print/pause";
-    if (!strcmp(tok, "resume")) return "/printer/print/resume";
-    if (!strcmp(tok, "cancel")) return "/printer/print/cancel";
-    if (!strcmp(tok, "restart")) return "/printer/firmware_restart";
-    if (!strcmp(tok, "preheat")) return "/printer/gcode/script?script=M104%20S210%0AM140%20S60";
-    return "/printer/gcode/script?script=TURN_OFF_HEATERS";
+    switch (m->scr) {
+    case K_HOME:
+        b[n++] = (btn){ 24, 290, 432, 130, "PRINT", "files", C_OK, 0x1f8a60u, 4, 0, 0 };
+        b[n++] = KT(24, 436, 208, "PREHEAT", "heat", C_WARN, 0xa86f22u);
+        b[n++] = KT(248, 436, 208, "TOOLS", "tools", C_ACC, C_ACCD);
+        b[n++] = KB(24, 432, "COOLDOWN", K_GS "TURN_OFF_HEATERS", K_G1, K_G2, 0);
+        break;
+    case K_FILES:
+        for (int i = 0; i < K_ROWS && m->page * K_ROWS + i < nkf; i++) {
+            int f = m->page * K_ROWS + i;
+            b[n++] = (btn){ 24, 108 + i * 80, 432, 72, kf[f].name, "file", 0, 0, 0, 0, f };
+        }
+        b[n++] = KB(24, 136, "BACK", "back", K_G1, K_G2, 0);
+        if (m->page > 0) b[n++] = KB(172, 136, "PREV", "prev", C_ACC, C_ACCD, 0);
+        if ((m->page + 1) * K_ROWS < nkf) b[n++] = KB(320, 136, "NEXT", "next", C_ACC, C_ACCD, 0);
+        break;
+    case K_FILE:
+        b[n++] = KB(24, 208, "BACK", "back", K_G1, K_G2, 0);
+        b[n++] = KB(248, 208, "PRINT", "print", C_OK, 0x1f8a60u, 1);
+        break;
+    case K_HEAT:
+        b[n++] = KT(24, 290, 208, "PLA\n210/60", K_GS "M104%20S210%0AM140%20S60", C_WARN, 0xa86f22u);
+        b[n++] = KT(248, 290, 208, "PETG\n240/70", K_GS "M104%20S240%0AM140%20S70", C_WARN, 0xa86f22u);
+        b[n++] = KT(24, 436, 208, "ABS\n245/100", K_GS "M104%20S245%0AM140%20S100", C_WARN, 0xa86f22u);
+        b[n++] = KT(248, 436, 208, "TPU\n225/50", K_GS "M104%20S225%0AM140%20S50", C_WARN, 0xa86f22u);
+        b[n++] = KB(24, 208, "BACK", "back", K_G1, K_G2, 0);
+        b[n++] = KB(248, 208, "COOLDOWN", K_GS "TURN_OFF_HEATERS", K_G1, K_G2, 0);
+        break;
+    case K_TOOLS:
+        if (k->pfan > 0) snprintf(pf, sizeof pf, "PART FAN\n%.0f%%", k->pfan * 100);
+        else snprintf(pf, sizeof pf, "PART FAN\noff");
+        snprintf(cf, sizeof cf, "CHAMBER\nFAN %s", k->cfan > 0 ? "on" : "off");
+        b[n++] = KT(24, 290, 208, pf, k->pfan > 0 ? K_GS "M107" : K_GS "M106%20S255",
+                    k->pfan > 0 ? C_ACC : K_G1, k->pfan > 0 ? C_ACCD : K_G2);
+        b[n++] = KT(248, 290, 208, cf, k->cfan > 0
+                        ? K_GS "SET_FAN_SPEED%20FAN%3Dchamber_fan%20SPEED%3D0"
+                        : K_GS "SET_FAN_SPEED%20FAN%3Dchamber_fan%20SPEED%3D1",
+                    k->cfan > 0 ? C_ACC : K_G1, k->cfan > 0 ? C_ACCD : K_G2);
+        b[n++] = KT(24, 436, 208, "MOTORS\nOFF", K_GS "M84", K_G1, K_G2);
+        b[n++] = KT(248, 436, 208, "ABOUT", "about", K_G1, K_G2);
+        b[n++] = KB(24, 208, "BACK", "back", K_G1, K_G2, 0);
+        b[n++] = KB(248, 208, "FIRMWARE\nRESTART", "/printer/firmware_restart", C_ACC, C_ACCD, 1);
+        break;
+    case K_ABOUT:
+        b[n++] = KB(24, 432, "BACK", "back", K_G1, K_G2, 0);
+        break;
+    }
+    return n;
 }
 
 static void k_temp(const surf *s, int x, int y, const char *label,
@@ -1423,42 +1555,117 @@ static void k_temp(const surf *s, int x, int y, const char *label,
     text(s, x + 16, y + 114, t, 2, tgt > 0 ? C_WARN : C_DIM);
 }
 
-static void k_paint(const surf *s, const kstat *k, const btn *b, int nb,
-                    int armed, const char *eth, const char *wifi,
-                    const char *note) {
-    const char *lab;
+static void k_size(double sz, char *o, int n) {
+    if (sz >= 1e6) snprintf(o, n, "%.1f MB", sz / 1e6);
+    else snprintf(o, n, "%.0f KB", sz / 1e3);
+}
+
+static void k_file_row(const surf *s, const btn *b) {
+    char nm[32], sz[24];
+    const kfile *f = &kf[b->arg];
+    int l = (int)strlen(f->name);
+    if (l > 6 && !strcmp(f->name + l - 6, ".gcode")) l -= 6;
+    if (l > 25) snprintf(nm, sizeof nm, "%.23s..", f->name);
+    else snprintf(nm, sizeof nm, "%.*s", l, f->name);
+    k_size(f->size, sz, sizeof sz);
+    rrect(s, b->x, b->y, b->w, b->h, 14, C_CARD, C_CARD2);
+    text(s, b->x + 16, b->y + 14, nm, 2, C_TXT);
+    text(s, b->x + 16, b->y + 44, sz, 2, C_DIM);
+}
+
+static void k_file_card(const surf *s, const kmenu *m) {
+    const kfile *f = &kf[m->sel];
+    const kmeta *t = &m->meta;
+    char l[8][48], sz[24];
+    int n = 0, y;
+    rrect(s, 24, 108, 432, 470, 18, C_CARD, C_CARD2);
+    y = text_wrap(s, 44, 128, f->name, 2, C_TXT, 392) + 16;
+    /* slicers fill in different subsets; show what this one gave */
+    int mn = (int)(t->est / 60 + 0.5);
+    if (mn >= 60) snprintf(l[n++], 48, "time      %d h %02d min", mn / 60, mn % 60);
+    else if (mn > 0) snprintf(l[n++], 48, "time      %d min", mn);
+    if (t->fil > 0) snprintf(l[n++], 48, "filament  %.2f m  %.0f g", t->fil / 1000, t->grams);
+    if (t->type[0]) snprintf(l[n++], 48, "material  %s", t->type);
+    if (t->ext > 0) snprintf(l[n++], 48, "nozzle    %.0f C", t->ext);
+    if (t->bed > 0) snprintf(l[n++], 48, "bed       %.0f C", t->bed);
+    if (t->layers > 0) snprintf(l[n++], 48, "layers    %.0f x %.2f mm", t->layers, t->lh);
+    if (t->height > 0) snprintf(l[n++], 48, "height    %.1f mm", t->height);
+    k_size(f->size, sz, sizeof sz);
+    snprintf(l[n++], 48, "size      %s", sz);
+    for (int i = 0; i < n; i++, y += 32) text(s, 44, y, l[i], 2, C_DIM);
+}
+
+static void k_paint(const surf *s, const kstat *k, const kmenu *m, const btn *b,
+                    int nb, int armed, const char *eth, const char *wifi,
+                    const char *note, const char *hostport) {
+    static const char *const title[] = {
+        "ADVENTURER 4", "PRINT", "PRINT", "PREHEAT", "TOOLS", "ABOUT" };
+    const char *lab, *foot = "";
+    char pg[32];
     unsigned col = k_chip(k, &lab);
     background(s);
-    header(s, "ADVENTURER 4", lab, col);
-    k_temp(s, 24, 118, "NOZZLE", k->et, k->ett);
-    k_temp(s, 248, 118, "BED", k->bt, k->btt);
-
-    rrect(s, 24, 290, 432, 280, 18, C_CARD, C_CARD2);
-    if (!k->online) {
-        text_wrap(s, 44, 310, "Klipper host not answering. Waiting for it.",
-                  2, C_TXT, 392);
-    } else if (strcmp(k->kstate, "ready")) {
-        text_wrap(s, 44, 310, k->kmsg[0] ? k->kmsg : k->kstate, 2, C_TXT, 392);
-    } else if (k->file[0] && strcmp(k->pstate, "standby")) {
-        int y = text_wrap(s, 44, 310, k->file, 2, C_TXT, 392);
-        char d[48];
-        int sec = (int)k->dur;
-        snprintf(d, sizeof d, "%s  %d:%02d:%02d", k->pstate,
-                 sec / 3600, sec / 60 % 60, sec % 60);
-        text(s, 44, y + 8, d, 2, C_DIM);
-        progress(s, 500, (int)(k->prog * 100 + 0.5), col);
-    } else {
-        text_wrap(s, 44, 310, "Idle. Send a job from Elegoo Slicer or Mainsail.",
-                  2, C_DIM, 392);
+    header(s, title[m->scr], lab, col);
+    switch (m->scr) {
+    case K_HOME:
+    case K_HEAT:
+    case K_TOOLS:
+        k_temp(s, 24, 118, "NOZZLE", k->et, k->ett);
+        k_temp(s, 248, 118, "BED", k->bt, k->btt);
+        if (m->scr != K_HOME || k_idle(k)) break;
+        rrect(s, 24, 290, 432, 280, 18, C_CARD, C_CARD2);
+        if (!k->online) {
+            text_wrap(s, 44, 310, "Klipper host not answering. Waiting for it.",
+                      2, C_TXT, 392);
+        } else if (strcmp(k->kstate, "ready")) {
+            text_wrap(s, 44, 310, k->kmsg[0] ? k->kmsg : k->kstate, 2, C_TXT, 392);
+        } else {
+            int y = text_wrap(s, 44, 310, k->file, 2, C_TXT, 392);
+            char d[48];
+            int sec = (int)k->dur;
+            snprintf(d, sizeof d, "%s  %d:%02d:%02d", k->pstate,
+                     sec / 3600, sec / 60 % 60, sec % 60);
+            text(s, 44, y + 8, d, 2, C_DIM);
+            progress(s, 500, (int)(k->prog * 100 + 0.5), col);
+        }
+        break;
+    case K_FILES:
+        if (m->nfiles <= 0) {
+            rrect(s, 24, 108, 432, 160, 18, C_CARD, C_CARD2);
+            text_wrap(s, 44, 128, m->nfiles < 0 ? "Could not read the file list."
+                      : "No files yet. Send one from Elegoo Slicer or Mainsail.",
+                      2, C_DIM, 392);
+        }
+        if (nkf > K_ROWS) {
+            snprintf(pg, sizeof pg, "page %d / %d", m->page + 1, (nkf + K_ROWS - 1) / K_ROWS);
+            foot = pg;
+        }
+        break;
+    case K_FILE:
+        k_file_card(s, m);
+        break;
+    case K_ABOUT: {
+        const char *kv[] = {
+            "PRINTER ETH0", eth, "PRINTER WIFI", wifi, "MOONRAKER", hostport,
+            "KLIPPER", k->ver[0] ? k->ver : "?",
+            "SOURCE", "github.com/Mcsketch/ad4-klipper" };
+        int y = 118;
+        for (int i = 0; i < 10; i += 2) {
+            text(s, 24, y, kv[i], 2, C_DIM);
+            y = text_wrap(s, 40, y + 26, kv[i + 1], 2, C_TXT, 416) + 18;
+        }
+        break;
+    }
     }
 
     for (int i = 0; i < nb; i++) {
+        if (!strcmp(b[i].token, "file")) { k_file_row(s, &b[i]); continue; }
         btn t = b[i];
         if (i == armed) { t.top = C_ERR; t.bot = C_ERRD; }
         draw_btn(s, &t);
     }
     if (armed >= 0) textc(s, s->w / 2, 724, "tap again to confirm", 2, C_ERR);
     else if (note[0]) textc(s, s->w / 2, 724, note, 2, C_WARN);
+    else if (foot[0]) textc(s, s->w / 2, 724, foot, 2, C_DIM);
     /* the printer's own addresses, so a new install can be found from the panel */
     char f[64];
     snprintf(f, sizeof f, "eth0 %s", eth);
@@ -1479,12 +1686,28 @@ static void if_ip(const char *ifn, char *out, int n) {
     if (fd >= 0) close(fd);
 }
 
-static int cmd_klipper(const char *dump, const char *hostport) {
+/* A tap on a button that changes screens rather than sending anything. */
+static void k_nav(const char *host, int port, kmenu *m, const btn *b) {
+    const char *t = b->token;
+    if (!strcmp(t, "files")) { m->scr = K_FILES; m->page = 0; m->nfiles = k_files(host, port); }
+    else if (!strcmp(t, "file")) { m->sel = b->arg; k_meta(host, port, kf[m->sel].name, &m->meta); m->scr = K_FILE; }
+    else if (!strcmp(t, "heat")) m->scr = K_HEAT;
+    else if (!strcmp(t, "tools")) m->scr = K_TOOLS;
+    else if (!strcmp(t, "about")) m->scr = K_ABOUT;
+    else if (!strcmp(t, "prev")) m->page--;
+    else if (!strcmp(t, "next")) m->page++;
+    else if (!strcmp(t, "back"))
+        m->scr = m->scr == K_FILE ? K_FILES : m->scr == K_ABOUT ? K_TOOLS : K_HOME;
+}
+
+static int cmd_klipper(const char *dump, const char *hostport, const char *screen) {
     char host[64];
     int port = 8095;
     snprintf(host, sizeof host, "%s", hostport ? hostport : "192.168.100.10");
     char *c = strchr(host, ':');
     if (c) { *c = 0; port = atoi(c + 1); }
+    char hp[80];
+    snprintf(hp, sizeof hp, "%s:%d", host, port);
     signal(SIGPIPE, SIG_IGN);
 
     surf fbs, s;
@@ -1508,9 +1731,18 @@ static int cmd_klipper(const char *dump, const char *hostport) {
     tscal tc;
     int tfd = dump ? -1 : ts_open(&tc);
     kstat k;
-    btn b[2];
+    kmenu m;
+    memset(&m, 0, sizeof m);
+    /* --dump only: open a sub-screen for the preview */
+    if (dump && screen) {
+        btn nav = { 0 };
+        nav.token = !strcmp(screen, "file") ? "files" : screen;
+        k_nav(host, port, &m, &nav);
+        if (!strcmp(screen, "file") && nkf > 0) { nav.token = "file"; k_nav(host, port, &m, &nav); }
+    }
+    btn b[12];
     int nb = 0, armed = -1, pressed = 0;
-    long next = 0, armed_t = 0, note_t = 0, rst_t = -60000;
+    long next = 0, armed_t = 0, note_t = 0, rst_t = -60000, touch_t = now_ms();
     char eth[32] = "", wifi[32] = "", note[48] = "";
     for (;;) {
         long t = now_ms();
@@ -1527,9 +1759,14 @@ static int cmd_klipper(const char *dump, const char *hostport) {
                 snprintf(note, sizeof note, "auto firmware restart");
                 note_t = rst_t = t;
             }
-            nb = k_buttons(&k, b);
+            /* a job started elsewhere, a fault, or two idle minutes: back home */
+            if (m.scr != K_HOME && (!k_idle(&k) || (!dump && t - touch_t > 120000))) {
+                m.scr = K_HOME;
+                armed = -1;
+            }
+            nb = k_buttons(&k, &m, b);
             if (armed >= nb) armed = -1;
-            k_paint(&s, &k, b, nb, armed, eth, wifi, note);
+            k_paint(&s, &k, &m, b, nb, armed, eth, wifi, note, hp);
 #ifdef AD4_DUMP
             if (dump) { dump_ppm(&s, dump); return 0; }
 #endif
@@ -1547,6 +1784,7 @@ static int cmd_klipper(const char *dump, const char *hostport) {
             if (r == 1) { pressed = 0; continue; }
             if (pressed) continue;
             pressed = 1;
+            touch_t = now_ms();
             int hit = -1;
             for (int i = 0; i < nb; i++)
                 if (x >= b[i].x && x < b[i].x + b[i].w &&
@@ -1563,13 +1801,26 @@ static int cmd_klipper(const char *dump, const char *hostport) {
                 continue;
             }
             buzz_cue(AD4_TAP);
-            char rb[2048];
-            int rc = http_req(host, port, "POST", k_path(b[hit].token), rb, sizeof rb);
-            fprintf(stderr, "klipper: %s -> %d\n", b[hit].token, rc);
-            snprintf(note, sizeof note, "%s %s", b[hit].token, rc == 200 ? "ok" : "failed");
-            note_t = now_ms();
             armed = -1;
             next = 0;
+            const char *tok = b[hit].token;
+            char path[640], en[400];
+            if (!strcmp(tok, "print")) {
+                urlenc(kf[m.sel].name, en, sizeof en);
+                snprintf(path, sizeof path, "/printer/print/start?filename=%s", en);
+                tok = path;
+            } else if (tok[0] != '/') {
+                k_nav(host, port, &m, &b[hit]);
+                continue;
+            }
+            char rb[2048], lab[24];
+            int rc = http_req(host, port, "POST", tok, rb, sizeof rb);
+            snprintf(lab, sizeof lab, "%s", b[hit].label);
+            for (char *q = lab; *q; q++) if (*q == '\n') *q = ' ';
+            fprintf(stderr, "klipper: %s -> %d\n", tok, rc);
+            snprintf(note, sizeof note, "%s %s", lab, rc == 200 ? "ok" : "failed");
+            note_t = now_ms();
+            if (rc == 200 && !strcmp(b[hit].token, "print")) m.scr = K_HOME;
         }
     }
 }
@@ -1593,7 +1844,7 @@ static void usage(void) {
         "       ad4-screen confirm TITLE BODY [GO_LABEL] [SECS]\n"
         "       ad4-screen touch [SECS]\n"
         "       ad4-screen calib [SECS]\n"
-        "       ad4-screen klipper [HOST[:PORT]] [--dump FILE.ppm]\n"
+        "       ad4-screen klipper [HOST[:PORT]] [--dump FILE.ppm [files|file|heat|tools|about]]\n"
         "env: AD4_MCU AD4_IP AD4_PORT AD4_INSTALLED AD4_STICK AD4_ROT AD4_CAL\n");
 }
 
@@ -1623,7 +1874,7 @@ int main(int argc, char **argv) {
     if (!strcmp(mode, "touch")) return cmd_touch(dump, npos > 0 ? atoi(pos[0]) : 0);
     if (!strcmp(mode, "calib")) return cmd_calib(npos > 0 ? atoi(pos[0]) : 0);
 #ifdef __linux__
-    if (!strcmp(mode, "klipper")) return cmd_klipper(dump, npos > 0 ? pos[0] : NULL);
+    if (!strcmp(mode, "klipper")) return cmd_klipper(dump, npos > 0 ? pos[0] : NULL, npos > 1 ? pos[1] : NULL);
 #endif
     if (!strcmp(mode, "status") || !strcmp(mode, "done") || !strcmp(mode, "fail")) {
         /* a trailing all-digits word is the percentage, never the title */

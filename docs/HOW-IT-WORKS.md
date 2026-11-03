@@ -80,7 +80,12 @@ power off and walk away.
 4. Once the animation has finished, `ad4-screen klipper HOST:PORT` in a
    respawn loop: polls Moonraker, draws
    the status, sends the button presses, and POSTs `firmware_restart` when
-   Klipper reports the MCU lost (at most every 20 s).
+   Klipper reports the MCU lost (at most every 20 s). While Klipper is idle
+   it has menus: Print (Moonraker's gcode files, newest first, with the
+   slicer's metadata; starting a print takes two taps), Preheat (PLA, PETG,
+   ABS, TPU, cooldown) and Tools (part and chamber fan, motors off, firmware
+   restart, About). A job starting from anywhere, or two minutes without a
+   touch, returns it to the home screen.
 5. WiFi from `/etc/wpa_supplicant.conf` (the network saved in the stock UI).
 
 Log: `/tmp/ad4-boot.log` (RAM, gone at reboot).

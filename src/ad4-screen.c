@@ -13,6 +13,7 @@
  * Subcommands (each paints and exits, so the shell script drives it):
  *   menu [--auto TOKEN SECS]   interactive chooser; prints the chosen token
  *   splash                     branded splash, no touch
+ *   boot                       boot animation (~4 s), ends on a title frame
  *   confirm TITLE BODY [GO] [SECS]  one GO / CANCEL question; exit 0 = go,
  *                              2 = cancel or timeout (default 120 s)
  *   status TITLE [SUB] [PCT]   progress screen
@@ -899,6 +900,232 @@ static int cmd_splash(const char *dump) {
     return 0;
 }
 
+/* ------------------------------------------------------------ boot */
+/* Boot animation: a pixel-art adventurer is printed on the bed row by row,
+ * the nozzle snaking across each layer and every new pixel glowing hot before
+ * it cools to its colour; then the nozzle parks, the figure hops, and the
+ * title comes up. About 4 s; it exits on its last frame, which stays up.
+ *
+ * Frames are composed off-screen and copied to the framebuffer whole, so
+ * nothing tears. With --dump, a path containing '%' gets every frame
+ * (printf'd with the frame number, 30 fps of virtual time); otherwise only
+ * the last frame is written. */
+static const char *const HERO[] = {
+    "......KKKKK.....",
+    "....KKHHHHHKK...",
+    "...KHHHWWHHHHK..",
+    "...KHHHHHHHHHK..",
+    "..KhhhhhhhhhhhK.",
+    ".KhhhhhhhhhhhhhK",
+    "..KKKSSSSSSSKKK.",
+    "....KSSSSSSSK...",
+    "....KSKSSSKSK...",
+    "....KSKSSSKSK...",
+    "....KsSSSSSsK...",
+    ".....KsSKKSK....",
+    "....KRRRRRRRK...",
+    "...KBRRRBBBBBK..",
+    "..KBKBRRBBBBKBK.",
+    "..KBKBBBBBBBKBK.",
+    "..KSKbbYYbbbKSK.",
+    "...K.KPPPPPPK.K.",
+    ".....KPPKKPPK...",
+    ".....KPPK.KPPK..",
+    "....KOOOK.KOOOK.",
+    "....KKKKK.KKKKK.",
+};
+#define HERO_W 16
+#define HERO_H ((int)(sizeof HERO / sizeof HERO[0]))
+
+static const char *const NOZZLE[] = {
+    ".KKKKKKKKK.",
+    "KMMMMMMMMMK",
+    "KMmmmmmmmMK",
+    "KRRRRRRRRRK",
+    "KRrrrrrrrRK",
+    ".KKKKKKKKK.",
+    "...KCCCK...",
+    "....KCK....",
+    ".....K.....",
+};
+#define NOZ_W 11
+#define NOZ_H ((int)(sizeof NOZZLE / sizeof NOZZLE[0]))
+
+static unsigned pal(char c) {
+    switch (c) {
+    case 'K': return 0x141022u;   /* outline */
+    case 'H': return 0xe0b96au;   /* helmet */
+    case 'h': return 0xb08640u;   /* brim */
+    case 'W': return 0xfff4d6u;   /* shine */
+    case 'S': return 0xf2c39bu;   /* skin */
+    case 's': return 0xd39a73u;
+    case 'R': return 0xe0484fu;   /* scarf; heater block on the nozzle */
+    case 'r': return 0xa8323au;
+    case 'B': return 0x4d9fffu;   /* jacket */
+    case 'b': return 0x2f6fc4u;
+    case 'Y': return 0xffd23cu;   /* buckle */
+    case 'P': return 0x3b4a6bu;   /* trousers */
+    case 'O': return 0x7a4a2au;   /* boots */
+    case 'M': return 0xb4c0d2u;   /* nozzle metal */
+    case 'm': return 0x7d8aa0u;
+    case 'C': return 0xd08a3cu;   /* brass tip */
+    }
+    return 0;
+}
+
+static unsigned mix(unsigned a, unsigned b, int t) {   /* t 0..256: a -> b */
+    int ar = (a >> 16) & 0xff, ag = (a >> 8) & 0xff, ab = a & 0xff;
+    int br = (b >> 16) & 0xff, bg = (b >> 8) & 0xff, bb = b & 0xff;
+    return ((unsigned)(ar + (br - ar) * t / 256) << 16) |
+           ((unsigned)(ag + (bg - ag) * t / 256) << 8) |
+            (unsigned)(ab + (bb - ab) * t / 256);
+}
+
+#define BP      14                       /* screen px per hero pixel */
+#define BED_Y   548
+#define CELL_MS 11                       /* nozzle time per pixel */
+#define HOP_MS  20                       /* travel between layers */
+#define COOL_MS 260                      /* hot glow fades over this */
+#define HOT     0xffe08au
+#define HOT2    0xff7a1au
+
+typedef struct { int r, lo, hi, dir, t0; } blayer;
+
+static int cmd_boot(const char *dump) {
+    surf s;
+    int fd = fb_open(&s);
+    if (fd < 0) return 1;
+    size_t len = (size_t)s.stride * (s.rot ? s.fh : s.h);
+    surf bk = s;
+    unsigned char *bg = malloc(len);
+    bk.mem = malloc(len);
+    if (!bg || !bk.mem) { fb_close(&s, fd); return 1; }
+    bk.owned = 0;
+    { surf t = s; t.mem = bg; background(&t); }
+
+    int x0 = (s.w - HERO_W * BP) / 2, y0 = BED_Y - HERO_H * BP;
+    /* layers bottom-up; each prints only its filled span, alternating sides */
+    blayer L[HERO_H];
+    int nl = 0, t = 500;                 /* the nozzle drops in first */
+    for (int r = HERO_H - 1; r >= 0; r--) {
+        int lo = -1, hi = -1;
+        for (int c = 0; c < HERO_W; c++)
+            if (HERO[r][c] != '.') { if (lo < 0) lo = c; hi = c; }
+        if (lo < 0) continue;
+        L[nl] = (blayer){ r, lo, hi, nl & 1, t };
+        t += (hi - lo + 1) * CELL_MS + HOP_MS;
+        nl++;
+    }
+    const int t_built = t, t_park = t + 350, t_hop = t + 450, t_title = t + 750,
+              t_end = t + 1500;
+    const char *title = "ADVENTURER 4", *sub = "KLIPPER";
+
+#ifndef AD4_DUMP
+    long start = now_ms();
+#endif
+    for (int frame = 0;; frame++) {
+#ifdef AD4_DUMP
+        int now = frame * 33;
+#else
+        int now = (int)(now_ms() - start);
+#endif
+        if (now > t_end) now = t_end;
+        memcpy(bk.mem, bg, len);
+
+        /* bed */
+        rrect(&bk, x0 - 40, BED_Y, HERO_W * BP + 80, 18, 4, 0x34425cu, 0x1c2638u);
+        fill(&bk, x0 - 36, BED_Y, HERO_W * BP + 72, 2, now < t_built ? 0xff9f5au : C_ACC);
+
+        /* hop: a small parabola once the nozzle is gone */
+        int lift = 0;
+        if (now >= t_hop && now < t_hop + 300) {
+            int u = now - t_hop;                 /* 0..300 */
+            lift = 4 * 34 * u * (300 - u) / (300 * 300);
+        }
+
+        /* printed pixels */
+        int nx = -1, ny = -1;                    /* nozzle tip, screen px */
+        for (int i = 0; i < nl; i++) {
+            const blayer *l = &L[i];
+            int r = l->r;
+            if (now < l->t0) break;
+            int span = l->hi - l->lo + 1;
+            for (int j = 0; j < span; j++) {
+                int c = l->dir ? l->hi - j : l->lo + j;
+                int laid = l->t0 + j * CELL_MS;
+                if (now < laid || HERO[r][c] == '.') continue;
+                unsigned col = pal(HERO[r][c]);
+                int age = now - laid;
+                if (age < COOL_MS) {
+                    unsigned hot = mix(HOT, HOT2, age * 256 / COOL_MS);
+                    col = mix(hot, col, age * 256 / COOL_MS);
+                }
+                fill(&bk, x0 + c * BP, y0 + r * BP - lift, BP, BP, col);
+            }
+            if (now < l->t0 + span * CELL_MS) {  /* nozzle is on this layer */
+                int j = (now - l->t0) / CELL_MS;
+                int frac = (now - l->t0) % CELL_MS * BP / CELL_MS;
+                int c = l->dir ? l->hi - j : l->lo + j;
+                nx = x0 + c * BP + BP / 2 + (l->dir ? -frac : frac);
+                ny = y0 + r * BP;
+            } else if (i + 1 < nl && now < L[i + 1].t0) {   /* hopping up */
+                nx = x0 + (l->dir ? l->lo : l->hi) * BP + BP / 2;
+                ny = y0 + r * BP;
+            }
+        }
+        if (now < L[0].t0) {                     /* drop in from the top */
+            nx = x0 + L[0].lo * BP + BP / 2;
+            ny = 120 + (y0 + (HERO_H - 1) * BP - 120) * now / L[0].t0;
+        } else if (now >= t_built && now < t_park) {   /* park: up and away */
+            nx = x0 + (L[nl - 1].dir ? L[nl - 1].lo : L[nl - 1].hi) * BP + BP / 2;
+            ny = y0 - (y0 + 60) * (now - t_built) / (t_park - t_built);
+        }
+
+        /* gantry rail and nozzle */
+        if (ny > -60 && nx >= 0) {
+            int ty = ny - NOZ_H * 6;
+            fill(&bk, 0, ty + 8, s.w, 6, 0x2e4468u);
+            fill(&bk, 0, ty + 8, s.w, 2, 0x45618fu);
+            for (int j = 0; j < NOZ_H; j++)
+                for (int i = 0; i < NOZ_W; i++)
+                    if (NOZZLE[j][i] != '.')
+                        fill(&bk, nx - NOZ_W * 3 + i * 6, ty + j * 6, 6, 6, pal(NOZZLE[j][i]));
+            if (now >= L[0].t0 && now < t_built)
+                fill(&bk, nx - 3, ny - 2, 6, 4, HOT);
+        }
+
+        /* title, letter by letter */
+        if (now >= t_title) {
+            int n = (now - t_title) / 45, len1 = (int)strlen(title);
+            char buf[32];
+            snprintf(buf, sizeof buf, "%.*s", n < len1 ? n : len1, title);
+            text(&bk, (s.w - tw(title, 4)) / 2, 606, buf, 4, C_TXT);
+            if (n > len1 + 2) textc(&bk, s.w / 2, 668, sub, 3, C_ACC);
+            if (n > len1 + 6) textc(&bk, s.w / 2, 740, g_env("AD4_IP", ""), 2, C_DIM);
+        }
+
+        memcpy(s.mem, bk.mem, len);
+#ifdef AD4_DUMP
+        if (dump && strchr(dump, '%')) {
+            char p[256];
+            snprintf(p, sizeof p, dump, frame);
+            dump_ppm(&s, p);
+        }
+#endif
+        if (now >= t_end) break;
+#ifndef AD4_DUMP
+        usleep(15000);
+#endif
+    }
+#ifdef AD4_DUMP
+    if (dump && !strchr(dump, '%')) dump_ppm(&s, dump);
+#endif
+    free(bk.mem);
+    free(bg);
+    fb_close(&s, fd);
+    return 0;
+}
+
 /* ------------------------------------------------------------ confirm */
 /* The install and rollback sticks ask once before they flash. A timeout or
  * CANCEL is a no: a stick left in by mistake must never write the MCU. */
@@ -1370,6 +1597,7 @@ int main(int argc, char **argv) {
     if (!mode) { usage(); return 2; }
     if (!strcmp(mode, "menu")) return cmd_menu(dump, autotok, autosec);
     if (!strcmp(mode, "splash")) return cmd_splash(dump);
+    if (!strcmp(mode, "boot")) return cmd_boot(dump);
     if (!strcmp(mode, "confirm")) {
         char title[200] = "", body[600] = "";
         if (npos > 0) unesc(title, pos[0], sizeof title);

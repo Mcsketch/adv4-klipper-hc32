@@ -22,6 +22,7 @@ preview:
 	@mkdir -p $(PREVIEW)
 	cc -std=gnu11 -O2 -Wall -DAD4_DUMP -o $(PREVIEW)/ad4-screen-host ad4-screen.c
 	cd $(PREVIEW) && export AD4_MCU=NA && ./ad4-screen-host splash --dump splash.ppm; \
+	  ./ad4-screen-host boot --dump boot.ppm; \
 	  ./ad4-screen-host confirm "Install Klipper?" "Flashes Klipper onto the mainboard and switches the panel to Klipper. Takes a few minutes. Do not power off while it runs.\nMainboard: NA (N32G455)" INSTALL --dump install-confirm.ppm; \
 	  ./ad4-screen-host confirm "Restore stock firmware?" "Flashes FlashForge's stock firmware (2.3.0) onto the mainboard and removes Klipper from the printer. Takes a few minutes. Do not power off while it runs." RESTORE --dump rollback-confirm.ppm; \
 	  ./ad4-screen-host status "Flashing Klipper" "frame 17 of 42. Do not power off." 40 --dump status.ppm; \

@@ -13,7 +13,7 @@ make -C src            # bin/ad4-bridge, bin/ad4-screen, bin/ad4-buzz (static, s
 | | |
 |---|---|
 | `ad4-bridge` | `ad4-bridge PORT TTY BAUD`: TCP server, one client, bytes to and from the UART |
-| `ad4-screen` | panel: `splash`, `confirm`, `status`, `done`, `fail`, `klipper HOST:PORT` |
+| `ad4-screen` | panel: `splash`, `boot` (start-up animation), `confirm`, `status`, `done`, `fail`, `klipper HOST:PORT` |
 | `ad4-buzz` | buzzer cues: `tap`, `mark`, `start`, `ok` (the jingle), `fail` |
 
 `bin/dropbear` is Dropbear 2022.83 `dropbearmulti`, static ARM, prebuilt.

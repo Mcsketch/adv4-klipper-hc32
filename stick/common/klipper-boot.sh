@@ -2,7 +2,7 @@
 # Klipper-mode boot. /opt/auto_run.sh starts this in place of the vendor UI
 # when /opt/ad4-klipper/klipper-mode exists:
 #   ttyS1 115200 8N1 raw  ->  ad4-bridge on TCP :BRIDGE_PORT  ->  Klipper host
-#   panel: ad4-screen klipper (Moonraker status + touch), respawned
+#   panel: ad4-screen boot (animation), then ad4-screen klipper (Moonraker status + touch), respawned
 #   eth0 / wlan0 / dropbear per ad4-klipper.conf
 # Never touches the IAP strap or flashes anything.
 # Back to the stock UI for one boot: rm /opt/ad4-klipper/klipper-mode; reboot -f
@@ -15,7 +15,7 @@ echo "=== klipper boot `date` uptime `cut -d' ' -f1 /proc/uptime`"
 
 ip4() { ifconfig "$1" 2>/dev/null | sed -n 's/.*inet addr:\([0-9.]*\).*/\1/p'; }
 
-$D/ad4-screen splash
+$D/ad4-screen boot & BOOTANIM=$!
 /bin/dropbear -R -p 22; echo "dropbear rc=$?"
 
 stty -F /dev/ttyS1 115200 raw -echo -parenb cs8 -cstopb clocal -crtscts; echo "stty rc=$?"
@@ -33,6 +33,7 @@ dhcp)
     [ -n "$ETH_GW" ] && route add default gw "$ETH_GW" ;;
 esac
 
+wait $BOOTANIM
 if [ -n "$MOONRAKER" ]; then
     setsid sh -c "while :; do $D/ad4-screen klipper $MOONRAKER; sleep 2; done" >/tmp/ad4-screen.log 2>&1 </dev/null &
 else

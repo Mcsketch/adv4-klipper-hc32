@@ -128,6 +128,15 @@ clean next experiment if corners ever matter.
   `print_stats`, `toolhead`, `extruder`) instead of guessing.
 - Slicing from WSL works: Elegoo's CLI with flattened presets that keep
   `inherits`: `elegoo-slicer.exe --slice 0 --load-settings "machine.json;process.json" --load-filaments filament.json --outputdir out x.stl`.
+- `ad4-bridge` (source `install-on-printer/ad4-bridge.c`, binary next to it =
+  `/opt/ad4-klipper/ad4-bridge`) sets the UART rate itself (fixed 2026-11-03;
+  previous binary kept as `ad4-bridge.pre-baudfix`). Build on prodesk:
+  `arm-linux-gnueabi-gcc -std=gnu11 -O2 -Wall -static -o ad4-bridge ad4-bridge.c`.
+  Copy to the SoC with `ssh ... 'cat > /tmp/x' < file` (no sftp-server, so
+  plain scp fails). Swap only with the printer idle: write `.tmp`, `mv` over,
+  kill the old pid, start it like `klipper-boot.sh` line 20. The first
+  FIRMWARE_RESTART after a bridge swap can fail with "Failed automated reset"
+  (its reset went out while the link was down); run it once more.
 - Shell traps: `pkill -f <pattern>` inside `ssh prodesk '...'` matches and kills
   its own shell; use `pkill -f "[p]attern"`. `ssh prodesk` eats `$` in
   double-quoted commands; stage scripts as files and scp them.
@@ -145,8 +154,5 @@ clean next experiment if corners ever matter.
 
 ## 10. Open items
 
-- `ad4-bridge` baud bug: `install-on-printer/ad4-bridge.c` (the installed
-  binary) passes `115200` raw to `cfsetispeed`. The boot script's `stty`
-  covers for it. Fix: map to `B115200`.
 - Panel touch buttons: needs a person to tap them.
 - PA4 light and the camera: separate tracker entry.

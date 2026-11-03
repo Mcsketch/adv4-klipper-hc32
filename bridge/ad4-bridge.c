@@ -70,7 +70,7 @@ static void logmsg(const char *m){
     if (g_verbose) { fprintf(stderr, "%s\n", m); fflush(stderr); }
 }
 
-/* Open the MCU UART: raw, 8N1, CLOCAL|CREAD, no echo, baud via raw value. */
+/* Open the MCU UART: raw, 8N1, CLOCAL|CREAD, no echo. */
 static int uart_open(int baud){
     int fd = open(g_uart, O_RDWR | O_NOCTTY | O_NONBLOCK);
     if (fd < 0) { fprintf(stderr, "open %s: %s\n", g_uart, strerror(errno)); return -1; }
@@ -81,9 +81,21 @@ static int uart_open(int baud){
     t.c_cflag &= ~CSTOPB;              /* 1 stop bit  */
     t.c_cflag &= ~PARENB;              /* no parity   */
     t.c_cflag &= ~CSIZE; t.c_cflag |= CS8;
-    /* Linux: standard-rate speed_t == baud number (no B250000 needed). */
-    cfsetispeed(&t, (speed_t)baud);
-    cfsetospeed(&t, (speed_t)baud);
+    /* speed_t is a Bxxx code, not the baud number (B115200 == 0010002). */
+    speed_t sp;
+    switch (baud) {
+    case 9600:   sp = B9600;   break;
+    case 19200:  sp = B19200;  break;
+    case 38400:  sp = B38400;  break;
+    case 57600:  sp = B57600;  break;
+    case 115200: sp = B115200; break;
+    case 230400: sp = B230400; break;
+    default:
+        fprintf(stderr, "unsupported baud %d\n", baud);
+        close(fd); return -1;
+    }
+    cfsetispeed(&t, sp);
+    cfsetospeed(&t, sp);
     if (tcsetattr(fd, TCSANOW, &t) < 0) { close(fd); return -1; }
     tcflush(fd, TCIOFLUSH);
     return fd;

@@ -156,5 +156,4 @@ clean next experiment if corners ever matter.
 
 - PAUSE / RESUME / CANCEL panel buttons: untested (only shown mid-print).
   PREHEAT and COOLDOWN verified 2026-11-03 (one POST per press).
-
 - PA4 light and the camera: separate tracker entry.

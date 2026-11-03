@@ -185,16 +185,68 @@ verified.
 **Working config:** `work/n32/printer-n32.cfg` (copy of the live
 `~/printer_data/config/printer.cfg`).
 
+## Superseded next list (2026-10-28)
+
+See the 2026-11-02 update below.
+
+## Update 2026-11-02: endstops, step scaling, homing (NA unit)
+
+### Endstop pins from the stock NA firmware (no case opening)
+The stock app (`work/Adventurer4-NA-*`, base 0x08010000) inits its axis GPIO in
+fn 0x8018fb4 from a 5 x 40-byte table in RAM at 0x20000540 (step, dir, enable,
+endstop port/pin pairs). RAM is filled by the Keil scatter-load table at
+0x801acb0 (`__decompress` LZ, src 0x801acd0 -> 0x20000000, 0x648 bytes).
+`work/n32/re/axes.py` decompresses it and prints:
+
+| Axis | Step | Dir | Enable | Endstop |
+|---|---|---|---|---|
+| 0 X | PA8 | PC9 | PA11 | PC3 |
+| 1 Y | PB14 | PB13 | PB15 | PC1 |
+| 2 Z | PA15 | PA12 | PC11 | PB5 |
+| 3 E | PC7 | PC6 | PC8 | - |
+
+Same pins as the reference config, so pins were never the problem.
+
+### What failed
+- Hand-pushing the bed onto the Y switch: only 0.6-1 s blips, never a steady
+  trip. Driving it with the motor (`FORCE_MOVE` 2 mm steps + `QUERY_ENDSTOPS`
+  after each) trips it every time. Use the motor, not a hand.
+- Z at `VELOCITY=5` under the old scaling (really 10 mm/s) only grunted: the
+  lead screw stalls lifting the head that fast. `max_z_velocity` is now 5.
+- The reference `position_endstop: 151.3` / `homing_positive_dir: false` is
+  wrong for this unit: nothing trips between 3 mm and ~253 mm above the bed.
+
+### What worked: measured step scaling
+The NA board's drivers are not at 1/32 (X/Y) and 1/16 (Z). Commanded a known
+`FORCE_MOVE`, measured with a ruler:
+
+| Axis | Commanded | Moved | Now |
+|---|---|---|---|
+| Y | 20 mm | ~145 mm | `microsteps: 4`, `rotation_distance: 30` (verified 136 mm back to the switch) |
+| X | 30 mm | ~120 mm | `microsteps: 8`, `rotation_distance: 33.9` (verified 120 mm back to the switch) |
+| Z | 4 mm x3 | ~8 mm each | `microsteps: 8`, `rotation_distance: 6.25`, `dir_pin: PA12` (+Z was down) |
+
+Z 140 mm commanded then measured ~141 mm, confirming Z.
+
+### Where the switches are
+- X: right end (`position_endstop: 220`, max).
+- Y: bed at the back (`position_endstop: 4`, min).
+- Z: **top**, ~255 mm above the bed. `homing_positive_dir: true`,
+  `position_endstop: 250` (deliberately low until the paper test),
+  `homing_speed: 5`, `second_homing_speed: 2`.
+
+`homing_override` now homes only the axes named (`G28 Z` homes Z alone; bare
+`G28` still does Z, X, Y). `G28 Z`, `G28 X`, `G28 Y` all home cleanly.
+Live config: `work/n32/printer-n32.cfg`.
+
 ## Next (in order)
 
 With someone at the printer:
-1. `QUERY_ENDSTOPS` while pressing each switch by hand (X, Y, Z).
-2. `G28 X`, `G28 Y`, `G28 Z` one at a time, hand on the power switch; flip
-   `dir_pin` if an axis moves away from its switch.
-3. `Z_ENDSTOP_CALIBRATE` (151.3 is the reference unit's value), `SAVE_CONFIG`.
-4. `PID_CALIBRATE HEATER=extruder TARGET=210`, then `HEATER=heater_bed TARGET=60`.
-5. Extrude 100 mm and measure to check `rotation_distance` 33.5.
-6. First print.
+1. Paper test at X110 Y100, set Z `position_endstop` (~255), `SAVE_CONFIG`.
+2. `PID_CALIBRATE HEATER=extruder TARGET=210`, then `HEATER=heater_bed TARGET=60`.
+3. Extrude 100 mm and measure: the extruder scaling (1/16, 33.5) is untested on
+   this board and may be off like the axes.
+4. First print.
 
-Offline: part-fan pin from firmware RE; fix `bridge/ad4-bridge.c` baud
-(`B115200`); have a person test the panel's touch buttons.
+Offline: part-fan pin (not in the axis table; still unknown); fix
+`bridge/ad4-bridge.c` baud (`B115200`); have a person test the panel's touch buttons.

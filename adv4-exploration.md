@@ -9,7 +9,7 @@ Facts extracted from the official firmware package (V2.2.4 / control 2.3.0, buil
 > **PA5** (ADC1 CH5) · hotend fan **PC2** (spins >50C) · chamber fan **PB9**
 > (TMRA4). ADC DR is **right-aligned 12-bit** (`& 0xFFF`; the old `>>4` was
 > wrong). **PC10 = USART1_TX @9600, NOT a TMC UART.** PC0 is NOT an ADC input
-> in the factory design. Stepper/endstop pins remain TRACED GUESSES.
+> in the factory design. Stepper/endstop pins: CONFIRMED on the NA unit from the stock fw axis table (2026-11-02, docs/caleb-unit/KLIPPER-MODE-BOOT.md).
 > Live proof: M140 S60 → bed 14.9→36.6C in 60s at power 1.0; M104 S60 →
 > hotend 60.17C, PID settled 3.4%; both sensors read ~14.5C at ~13C room.
 > RE artifacts: `/tmp/heater-re/` (hd.bin, hd.asm, luts.txt); asm addr

@@ -8,7 +8,7 @@ Facts extracted from the official firmware package (V2.2.4 / control 2.3.0, buil
 > (TMRA1 Ch5, fw clamps 200/130C) · hotend NTC **PA0** (ADC1 CH0) · bed NTC
 > **PA5** (ADC1 CH5) · hotend fan **PC2** (spins >50C) · chamber fan **PB9**
 > (TMRA4). ADC DR is **right-aligned 12-bit** (`& 0xFFF`; the old `>>4` was
-> wrong). **PC10 = USART1_TX @9600, NOT a TMC UART.** PC0 is NOT an ADC input
+> wrong). **NA board: PC10 IS the TMC UART** (UART4 TX @9600 in stock fw; Klipper bitbang reads/writes fine, 2026-11-02). PC0 is NOT an ADC input
 > in the factory design. Stepper/endstop pins: CONFIRMED on the NA unit from the stock fw axis table (2026-11-02, docs/caleb-unit/KLIPPER-MODE-BOOT.md).
 > Live proof: M140 S60 → bed 14.9→36.6C in 60s at power 1.0; M104 S60 →
 > hotend 60.17C, PID settled 3.4%; both sensors read ~14.5C at ~13C room.
@@ -191,9 +191,9 @@ corrected by firmware RE + live tests — the trace alone was NOT authoritative)
 | Controller fan | PC5 | GUESS (traced) |
 | Chamber fan | PB9 (PROVEN) | fw RE: AF4 @0x8011036 → TMRA4. `M106 S255` on PB9 spun the chamber fan (NA unit, same PCB, 2026-10-28) |
 | LED | **unknown — probe** | stock template: PB12 (unconfirmed) |
-| TMC2209 UART (shared) | ~~PC10~~ **unknown** | **DISPROVEN 2026-10-22:** fw RE shows PC10 = AF32 USART1_TX @9600 (@0x8016c9c), not a TMC UART. Real TMC config pins unknown; tmc2209 blocks disabled in printer.cfg |
-| Mux select A / B | PB10 / PB1 | GUESS — tied to the disproven PC10 mux theory |
-| Mux channel map | X = ch0, E = ch1, Y = ch2, Z = ch3 | GUESS — same |
+| TMC2209 UART (shared) | **PC10 (PROVEN, NA)** | Stock NA fw configures 4 TMC2209s over UART4 TX PC10 @9600 at boot (fn 0x801263c). Klipper `uart_pin: PC10` reads IFCNT/IOIN version 0x21 on all 4 channels (2026-11-02). The 2026-10-22 "not a TMC UART" call was wrong for the NA board |
+| Mux select | PB1 / PB10; PB0 + PB11 held low (PROVEN, NA) | `select_pins: !PB0, PB1, PB10, !PB11` style |
+| Mux channel map | (PB1,PB10): X = (1,1), Y = (0,0), E = (1,0), (0,1) = never enabled | PROVEN 2026-11-02 by enabling each motor and reading IOIN.enn. **Z is not on the bus** (own driver, 1/8 default) |
 | MCU ↔ SoC UART | SoC `/dev/ttyS1` @ 115200 | uses MCU USART0; becomes **inactive for Klipper** after the serial move to PA3/PA2 |
 
 ---

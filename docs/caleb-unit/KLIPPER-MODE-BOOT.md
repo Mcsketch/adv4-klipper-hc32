@@ -239,14 +239,36 @@ Z 140 mm commanded then measured ~141 mm, confirming Z.
 `G28` still does Z, X, Y). `G28 Z`, `G28 X`, `G28 Y` all home cleanly.
 Live config: `work/n32/printer-n32.cfg`.
 
+## Update 2026-11-02 (2): TMC2209 over UART, Z calibrated
+
+Stock NA fw configures the drivers at boot (fn 0x801263c): UART4 TX on **PC10**
+@9600, mux select **PB1/PB10**, PB0 and PB11 low during config. Registers per
+channel: GCONF, IHOLD_IRUN, TPOWERDOWN, CHOPCONF (mres 1/16), PWMCONF; StealthChop.
+Klipper `[tmc2209]` with `uart_pin: PC10` works (single-wire reads OK). Channel
+map proven by enabling one motor at a time and reading IOIN.enn:
+
+| (PB1,PB10) | Motor | Stock run / hold |
+|---|---|---|
+| (1,1) | X | 0.55 / 0.22 A |
+| (0,0) | Y | 0.66 / 0.22 A |
+| (1,0) | E | 1.38 / 0.72 A |
+| (0,1) | none of X/Y/Z/E enables it | 0.55 / 0.22 A |
+
+**Z is not on the UART bus**: no channel follows PC11. Its driver stays at the
+1/8 default. Klipper now runs X/Y/E at 1/16 SpreadCycle (X rd 33.9, Y rd 60),
+X/Y verified 50 mm commanded = 50 mm. Z at 3 mm/s is smooth both ways (whir is
+normal); the earlier stutter was at 5 mm/s and likely lost steps (Z10 read
+28 mm above the bed before, 15 mm after a clean re-home). Cause not proven.
+
+Paper test at X110 Y100: Z `position_endstop: 254.7`, `position_max: 254.7`,
+`position_min: -2`. Re-homed and re-checked at Z0: correct drag.
+
 ## Next (in order)
 
 With someone at the printer:
-1. Paper test at X110 Y100, set Z `position_endstop` (~255), `SAVE_CONFIG`.
-2. `PID_CALIBRATE HEATER=extruder TARGET=210`, then `HEATER=heater_bed TARGET=60`.
-3. Extrude 100 mm and measure: the extruder scaling (1/16, 33.5) is untested on
-   this board and may be off like the axes.
-4. First print.
+1. `PID_CALIBRATE HEATER=extruder TARGET=210`, then `HEATER=heater_bed TARGET=60`.
+2. Extrude 100 mm and measure: E is now really at 1/16 (UART), rd 33.5 untested.
+3. First print. Watch Z at speed (`max_z_velocity: 5`).
 
 Offline: part-fan pin (not in the axis table; still unknown); fix
 `bridge/ad4-bridge.c` baud (`B115200`); have a person test the panel's touch buttons.

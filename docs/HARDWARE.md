@@ -42,8 +42,16 @@ Klipper's `CONFIG_SERIAL_BAUD` falls back to 250000 unless
 | Chamber fan | PB9 | `fan_generic` |
 | Unknown | PA4 | 0-100 % software PWM in the stock firmware, maybe the light |
 
-Z's driver is not on the TMC UART bus (fixed 1/8 step). The mux channel
-PB1=0/PB10=1 never enables a motor.
+Z's driver is not on the TMC UART bus (fixed 1/8 step). Reading every mux
+state at UART addresses 0-3 finds only X, Y, E and a fourth TMC2209 on
+PB10 alone (all other select pins low). The stock firmware configures that
+fourth chip like X, but it gets no step pulses from X, Y or Z, so Klipper
+leaves it alone. Every chip's IOIN reads ENN high whatever the enable pins
+do, so ENN can't map channels to motors; step counts (MSCNT) can.
+
+Known issue: Z whines while moving under Klipper (not on stock). The pins
+the stock firmware drives for Z (PB4 low; PC4 high, tried) match or made no
+difference, so it is not fixed.
 
 ## Calibrated values (one printer)
 

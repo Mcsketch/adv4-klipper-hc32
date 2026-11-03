@@ -71,8 +71,8 @@ power off and walk away.
 
 `/opt/ad4-klipper/klipper-boot.sh`, from the launch line:
 
-1. `ad4-screen boot` (a 4 s pixel-art animation, in the background), then
-   dropbear (SSH).
+1. `ad4-screen boot` (a 4 s pixel-art animation with the jingle, in the
+   background), then dropbear (SSH).
 2. ttyS1 to 115200 8N1 raw (IAPCommand leaves it in even parity), then
    `ad4-bridge 5000 /dev/ttyS1 115200`: one TCP client at a time, bytes
    passed through both ways, the UART reopened if the client drops.

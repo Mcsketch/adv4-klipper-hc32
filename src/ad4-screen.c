@@ -28,7 +28,8 @@
  *
  * Accepted touches beep on the piezo (ad4_buzzer.h). The completion riff is
  * NOT played here: flashforge_init.sh runs `ad4-buzz ok` for that, so it
- * sounds even on a printer with no panel.
+ * sounds even on a printer with no panel. `boot` is the exception: it plays
+ * the riff itself, in step with the animation.
  *
  * The pixel layout is read from FBIOGET_VSCREENINFO rather than assumed, so
  * the same binary works on RGB565/BGR565/RGB888. The touch axis range comes
@@ -904,7 +905,8 @@ static int cmd_splash(const char *dump) {
 /* Boot animation: a pixel-art superhero is printed on the bed row by row,
  * the nozzle snaking across each layer and every new pixel glowing hot before
  * it cools to its colour; then the nozzle parks, the figure hops, and the
- * title comes up. About 4 s; it exits on its last frame, which stays up.
+ * title comes up, to the "Stage clear" riff. About 4 s; it exits on its
+ * last frame, which stays up.
  *
  * Frames are composed off-screen and copied to the framebuffer whole, so
  * nothing tears. With --dump, a path containing '%' gets every frame
@@ -1029,6 +1031,7 @@ static int cmd_boot(const char *dump) {
 #ifndef AD4_DUMP
     long start = now_ms();
 #endif
+    int riff = 0;
     for (int frame = 0;; frame++) {
 #ifdef AD4_DUMP
         int now = frame * 33;
@@ -1036,6 +1039,12 @@ static int cmd_boot(const char *dump) {
         int now = (int)(now_ms() - start);
 #endif
         if (now > t_end) now = t_end;
+        if (!riff && now >= t_built) {   /* print done: the riff, in a child so frames keep coming */
+            riff = 1;
+#ifndef AD4_DUMP
+            if (fork() == 0) _exit(buzz_cue(AD4_RIFF) ? 1 : 0);
+#endif
+        }
         memcpy(bk.mem, bg, len);
 
         /* bed */

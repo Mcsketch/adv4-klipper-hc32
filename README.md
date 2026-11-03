@@ -59,6 +59,7 @@ Back to stock: [docs/ROLLBACK.md](docs/ROLLBACK.md), the same thing with the
 | [HARDWARE](docs/HARDWARE.md) | pin map, calibrated values |
 | [BUILD](docs/BUILD.md) | rebuild the binaries, the firmware and the release zips |
 | [reference/](docs/reference/) | IAP protocol notes, N32 thermistor analysis |
+| [improvements/](improvements/ROADMAP.md) | features beyond bring-up: roadmap and status |
 
 ## Layout
 
@@ -68,6 +69,7 @@ stick/rollback/    rollback stick script         src/            ad4-bridge, ad4
 bin/               prebuilt ARM binaries         firmware/       Klipper defconfig, hex, build.sh
 host/              printer.cfg, Klipper patch    tools/          release builder, dev tools
 docs/              documentation                 experimental/   HC32 (HD board) port, unverified
+improvements/      roadmap of extra features
 ```
 
 ## Credits and licence

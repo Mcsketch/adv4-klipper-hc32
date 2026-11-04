@@ -1,0 +1,67 @@
+{
+    "version": "2.4.2.0",
+    "name": "AD4 Rapid PLA+",
+    "from": "User",
+    "inherits": "Generic PLA @Flashforge AD4",
+    "filament_settings_id": [
+        "AD4 Rapid PLA+"
+    ],
+    "compatible_printers": [
+        "AD4 0.4 Nozzle (Caleb)",
+        "Flashforge Adventurer 4 Series 0.4 Nozzle"
+    ],
+    "filament_flow_ratio": [
+        "1"
+    ],
+    "filament_max_volumetric_speed": [
+        "3"
+    ],
+    "enable_pressure_advance": [
+        "0"
+    ],
+    "pressure_advance": [
+        "0"
+    ],
+    "nozzle_temperature": [
+        "225"
+    ],
+    "nozzle_temperature_initial_layer": [
+        "225"
+    ],
+    "hot_plate_temp": [
+        "55"
+    ],
+    "hot_plate_temp_initial_layer": [
+        "55"
+    ],
+    "fan_min_speed": [
+        "40"
+    ],
+    "fan_max_speed": [
+        "40"
+    ],
+    "filament_retraction_length": [
+        "5.5"
+    ],
+    "cool_plate_temp": [
+        "55"
+    ],
+    "cool_plate_temp_initial_layer": [
+        "55"
+    ],
+    "eng_plate_temp": [
+        "55"
+    ],
+    "eng_plate_temp_initial_layer": [
+        "55"
+    ],
+    "textured_plate_temp": [
+        "55"
+    ],
+    "textured_plate_temp_initial_layer": [
+        "55"
+    ],
+    "filament_vendor": [
+        "Elegoo"
+    ]
+}

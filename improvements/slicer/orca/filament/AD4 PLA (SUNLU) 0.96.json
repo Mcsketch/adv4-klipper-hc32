@@ -1,0 +1,64 @@
+{
+    "version": "2.4.2.0",
+    "name": "AD4 PLA (SUNLU) 0.96",
+    "from": "User",
+    "inherits": "Generic PLA @Flashforge AD4",
+    "filament_settings_id": [
+        "AD4 PLA (SUNLU) 0.96"
+    ],
+    "compatible_printers": [
+        "AD4 0.4 Nozzle (Caleb)",
+        "Flashforge Adventurer 4 Series 0.4 Nozzle"
+    ],
+    "filament_flow_ratio": [
+        "0.96"
+    ],
+    "filament_max_volumetric_speed": [
+        "3"
+    ],
+    "enable_pressure_advance": [
+        "0"
+    ],
+    "pressure_advance": [
+        "0"
+    ],
+    "nozzle_temperature": [
+        "220"
+    ],
+    "nozzle_temperature_initial_layer": [
+        "220"
+    ],
+    "hot_plate_temp": [
+        "55"
+    ],
+    "hot_plate_temp_initial_layer": [
+        "55"
+    ],
+    "fan_min_speed": [
+        "100"
+    ],
+    "fan_max_speed": [
+        "100"
+    ],
+    "filament_retraction_length": [
+        "5.5"
+    ],
+    "cool_plate_temp": [
+        "55"
+    ],
+    "cool_plate_temp_initial_layer": [
+        "55"
+    ],
+    "eng_plate_temp": [
+        "55"
+    ],
+    "eng_plate_temp_initial_layer": [
+        "55"
+    ],
+    "textured_plate_temp": [
+        "55"
+    ],
+    "textured_plate_temp_initial_layer": [
+        "55"
+    ]
+}

@@ -13,7 +13,7 @@ BINS = $(OUT)/ad4-bridge $(OUT)/ad4-screen $(OUT)/ad4-buzz
 
 all: $(BINS)
 
-$(OUT)/%: %.c ad4_buzzer.h ad4_font8x8.h
+$(OUT)/%: %.c ad4_buzzer.h ad4_font8x8.h stb_image.h
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) -static -o $@ $<
 	$(CROSS)strip $@

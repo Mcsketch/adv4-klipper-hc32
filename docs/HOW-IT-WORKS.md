@@ -86,7 +86,10 @@ power off and walk away.
    ABS, TPU, cooldown), Filament (load, unload, purge 20 mm through the
    `LOAD_FILAMENT` / `UNLOAD_FILAMENT` macros in printer.cfg) and Tools
    (part and chamber fan, Move: home and jog, motors off, About with
-   firmware restart). Its HOME runs `HOME_XYZ` (`host/home_xyz.py`): all
+   firmware restart). During a job the home screen shows the slicer's
+   thumbnail, time left, the finish time, layer N / M, progress, elapsed
+   time, part fan and filament used (see `improvements/ROADMAP.md`, J3-J5).
+   Its HOME runs `HOME_XYZ` (`host/home_xyz.py`): all
    three axes in one move, each at Z's 5 mm/s; `G28` still homes one axis
    at a time. A job starting from anywhere, or two minutes without a
    touch, returns it to the home screen.

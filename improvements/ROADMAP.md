@@ -94,8 +94,8 @@ Decision (S1, 2026-11-03): OrcaSlicer for the AD4 and the CC2.
 
 | ID | Item | Approach | Status |
 |---|---|---|---|
-| Q1 | Pressure advance | Per filament, from S3. The ladder test already tried 0.05 and 0.5. | ready |
-| Q2 | Input shaper | Ringing tower, read the frequencies by eye, `[input_shaper]`. Lets accelerations go up without ringing. | ready |
+| Q1 | Pressure advance | [Q1-pressure-advance.md](Q1-pressure-advance.md). Tuning tower job `ad4_cal_pa_tower.gcode` on Moonraker (PA 0 to 0.25 over 50 mm, 1 h 12 min); `PRINT_START` now resets PA, accel, speed and flow to printer.cfg. Left: Caleb prints it and reads the best corner height. The ladder already ruled out 0.5. | wip |
+| Q2 | Input shaper | Ringing tower, read the frequencies by eye, `[input_shaper]`. Lets accelerations go up without ringing. Low value for now: the 3 mm³/s flow cap holds walls near 36 mm/s, where ringing is small. Do after Q1 if the tower or a real print shows ringing. | ready |
 | Q3 | Max flow | The slicer's max volumetric speed test per filament; the hot end slips near 4.8 mm³/s with PLA. Above that, speed only buys you skipped extrusion. | ready |
 | Q4 | Lift the 60 mm/s cap | Only if Q1-Q3 show headroom, and only on Caleb's decision. | blocked on Caleb |
 | Q5 | Bed levelling | `[bed_mesh]` is in the config but there is no probe. Find out what the stock firmware used for levelling (sensor, pins) before buying anything. | idea |

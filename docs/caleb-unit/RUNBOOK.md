@@ -51,8 +51,9 @@ Klipper). Boot log: `/tmp/ad4-boot.log` (tmpfs, lost on reboot).
    home, bed wait, nozzle wait, purge line at Y10 Z0.3 from X20 to X120.
    End is `PRINT_END`: retract 2, lift 10, bed forward (Y200), heaters off.
 3. Start a print: `curl -s -X POST "localhost:7125/printer/print/start?filename=<file>"`.
-4. Live overrides (`M221`, `M220`, `SET_PRESSURE_ADVANCE`, `M106`) persist
-   after the print. Reset them before the next one (`M221 S100`, `M220 S100`).
+4. Live overrides (`M221`, `M220`, `SET_PRESSURE_ADVANCE`, velocity limits)
+   persist after the print; `PRINT_START` resets them to printer.cfg. A Z
+   offset from the panel's TUNE screen is kept until a Klipper restart.
 
 **Filament:** Elegoo Rapid PLA+. Preset "AD4 Rapid PLA+": 225 C, flow 1.0,
 fan 40 %, bed 55 C, max volumetric 3 mm3/s, retraction 5.5 mm, z-hop 0.4.

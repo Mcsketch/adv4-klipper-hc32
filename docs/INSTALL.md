@@ -47,6 +47,30 @@ trusted_clients:
     192.168.100.0/24     # or the printer's address / your LAN
 ```
 
+The camera: the printer serves it at `http://PRINTER_IP:8080/stream` and
+`/snapshot` (`CAM_PORT` below). If your browser can reach the printer, add
+to `moonraker.conf`:
+
+```ini
+[webcam ad4]
+service: mjpegstreamer
+stream_url: http://PRINTER_IP:8080/stream
+snapshot_url: http://PRINTER_IP:8080/snapshot
+aspect_ratio: 16:9
+```
+
+If the printer sits on a network only the host reaches (a direct cable),
+let the web server in front of Mainsail proxy it and use `/webcam/stream`
+and `/webcam/snapshot`. Caddy:
+
+```
+handle_path /webcam/* {
+    reverse_proxy PRINTER_IP:8080 {
+        flush_interval -1
+    }
+}
+```
+
 ## 2. The stick
 
 Unzip `ad4-klipper-install-VERSION.zip` onto the empty FAT32 stick, so the
@@ -61,6 +85,7 @@ Then edit `ad4-klipper/ad4-klipper.conf` on the stick:
 | `WIFI` | `on` | join the WiFi saved in the stock firmware (for SSH, not for Klipper) |
 | `MOONRAKER` | empty | `HOST:PORT` of Moonraker. Set it, or the panel only shows the printer's addresses |
 | `BRIDGE_PORT` | `5000` | must match `socket://PRINTER_IP:5000` in printer.cfg |
+| `CAM_PORT` | `8080` | camera server port; empty turns it off |
 | `ROOT_PASSWORD` | empty | empty: a random one is written to `ROOT_PASSWORD.txt` on the stick. `keep`: leave it. Anything else: that password |
 
 ## 3. Install

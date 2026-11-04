@@ -12,7 +12,7 @@ OUT=dist
 rm -rf build/stick "$OUT"
 mkdir -p "$OUT"
 
-for f in bin/ad4-bridge bin/ad4-screen bin/ad4-buzz bin/dropbear firmware/klipper-n32g455.hex; do
+for f in bin/ad4-bridge bin/ad4-screen bin/ad4-buzz bin/ad4-cam bin/dropbear firmware/klipper-n32g455.hex; do
     [ -s "$f" ] || { echo "missing $f" >&2; exit 1; }
 done
 
@@ -21,11 +21,11 @@ s=build/stick/install
 mkdir -p "$s/ad4-klipper"
 cp stick/install/flashforge_init.sh "$s/"
 cp stick/common/lib.sh stick/common/klipper-boot.sh stick/common/ad4-klipper.conf "$s/ad4-klipper/"
-cp bin/ad4-bridge bin/ad4-screen bin/ad4-buzz bin/dropbear "$s/ad4-klipper/"
+cp bin/ad4-bridge bin/ad4-screen bin/ad4-buzz bin/ad4-cam bin/dropbear "$s/ad4-klipper/"
 cp firmware/klipper-n32g455.hex "$s/ad4-klipper/klipper.hex"
 echo "$VERSION" >"$s/ad4-klipper/VERSION"
 # The conf is meant to be edited, so it is not checksummed.
-(cd "$s/ad4-klipper" && md5sum ad4-bridge ad4-screen ad4-buzz dropbear klipper-boot.sh klipper.hex lib.sh VERSION >MD5SUMS)
+(cd "$s/ad4-klipper" && md5sum ad4-bridge ad4-screen ad4-buzz ad4-cam dropbear klipper-boot.sh klipper.hex lib.sh VERSION >MD5SUMS)
 
 # rollback
 r=build/stick/rollback

@@ -7,7 +7,7 @@ Ubuntu 24.04.
 
 ```sh
 sudo apt install gcc-arm-linux-gnueabi
-make -C src            # bin/ad4-bridge, bin/ad4-screen, bin/ad4-buzz (static, stripped)
+make -C src            # bin/ad4-bridge, bin/ad4-screen, bin/ad4-buzz, bin/ad4-cam (static, stripped)
 ```
 
 | | |
@@ -15,6 +15,7 @@ make -C src            # bin/ad4-bridge, bin/ad4-screen, bin/ad4-buzz (static, s
 | `ad4-bridge` | `ad4-bridge PORT TTY BAUD`: TCP server, one client, bytes to and from the UART |
 | `ad4-screen` | panel: `splash`, `boot` (start-up animation), `confirm`, `status`, `done`, `fail`, `klipper HOST:PORT` (status and menus) |
 | `ad4-buzz` | buzzer cues: `tap`, `mark`, `start`, `ok` (the jingle), `fail` |
+| `ad4-cam` | `ad4-cam [PORT] [WxH] [FPS]` (default 8080 1280x720 15): camera server, MJPEG at `/stream` and `/snapshot` |
 
 `bin/dropbear` is Dropbear 2022.83 `dropbearmulti`, static ARM, prebuilt.
 

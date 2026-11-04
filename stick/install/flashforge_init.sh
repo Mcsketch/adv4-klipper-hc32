@@ -51,12 +51,12 @@ screen status "Installing" "copying files" 5
 rm -f "$D/klipper-mode"
 rm -rf "$D.new"
 mkdir -p "$D.new" || fail "Copy failed" "Could not create $D.new"
-for f in ad4-bridge ad4-screen ad4-buzz klipper-boot.sh klipper.hex VERSION; do
+for f in ad4-bridge ad4-screen ad4-buzz ad4-cam klipper-boot.sh klipper.hex VERSION; do
     cp "$P/$f" "$D.new/$f" || fail "Copy failed" "$f"
 done
 # the password stays on the stick, not in a world-readable file on the printer
 grep -v '^ROOT_PASSWORD=' "$P/ad4-klipper.conf" >"$D.new/ad4-klipper.conf" || fail "Copy failed" "ad4-klipper.conf"
-chmod 755 "$D.new/ad4-bridge" "$D.new/ad4-screen" "$D.new/ad4-buzz" "$D.new/klipper-boot.sh"
+chmod 755 "$D.new/ad4-bridge" "$D.new/ad4-screen" "$D.new/ad4-buzz" "$D.new/ad4-cam" "$D.new/klipper-boot.sh"
 rm -rf "$D" && mv "$D.new" "$D" || fail "Copy failed" "Could not move $D.new into place"
 set_launch klipper || fail "Boot hook failed" "Could not update /opt/auto_run.sh. The original is unchanged; see the log."
 log "auto_run.sh: launch line set (backup $A.pre-ad4-klipper)"

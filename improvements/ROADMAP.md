@@ -11,7 +11,7 @@ processing on), Mainsail, `exclude_object`, `pause_resume`, `respond`,
 menus, `HOME_XYZ`, `PRINT_START` / `PRINT_END`, `LOAD_FILAMENT` /
 `UNLOAD_FILAMENT`.
 
-Missing that matters: no camera, no light control, no `M600`, `[bed_mesh]` present but no probe,
+Missing that matters: camera not in Mainsail yet (C3), no light control, no `M600`, `[bed_mesh]` present but no probe,
 no recorded slicer choice, no pressure advance or input shaper calibration.
 
 Known limits that cap everything below:
@@ -44,8 +44,8 @@ numbers that matter, from the first layer to the last.
 
 | ID | Item | Approach | Status |
 |---|---|---|---|
-| C1 | Find out what the camera gives | `/dev/video0` is a UVC "USB 2.0 PC Camera" (058f:3841). List its formats and sizes (`VIDIOC_ENUM_FMT`); if it has MJPEG the printer only passes frames through, no encoding. | ready |
-| C2 | Stream server on the SoC | Small static C binary `ad4-cam`: V4L2 MJPEG capture, HTTP `/stream` (multipart MJPEG) and `/snapshot`, one or two clients. Starts from `klipper-boot.sh`. Look at the stock UI's stream first (`/opt/PROGRAM/software/2.2.4`) in case its URL scheme is worth matching. | ready after C1 |
+| C1 | Find out what the camera gives | Done 2026-11-03: UVC "USB 2.0 PC Camera" (058f:3841) on `/dev/video0`. MJPEG 160x120 to 1280x1024 (incl. 1280x720) at 30/25/20/15/10/5 fps, frames carry their own Huffman tables (browsers show them as-is); YUYV up to 1600x1200 at 9 fps. Auto exposure gives about 10 fps in the dark. The SoC's kernel 3.4 uses a 32-bit `timeval` in `v4l2_buffer` (68 bytes): build V4L2 code with `-D_TIME_BITS=32 -D_FILE_OFFSET_BITS=32`, or `VIDIOC_DQBUF` fails with ENOTTY. | done |
+| C2 | Stream server on the SoC | Done 2026-11-03: `src/ad4-cam.c`, port 8080, 1280x720 MJPEG at up to 15 fps. `/stream` and `/snapshot`, plus the stock UI's `/?action=stream` and `/?action=snapshot`. Up to 4 clients, a slow one skips frames. Opens the camera on the first request and closes it 10 s after the last, so it costs nothing while nobody watches. Measured: snapshot 1.3 s cold, stream about 9.4 fps in the dark, about 1 % CPU, 2.4 MB RSS. Started from `klipper-boot.sh` (`CAM_PORT`). | done |
 | C3 | Camera in Mainsail | Moonraker `[webcam]` with the stream and snapshot URLs. Works over Tailscale like Mainsail. | ready after C2 |
 | C4 | Timelapse | moonraker-timelapse on the host, snapshot from C2 at each layer change (park optional). | idea |
 | C5 | Light | Stock firmware software-PWMs PA4 0-100 % (`M144`-`M146`). Under Klipper: `[output_pin light]` on PA4 with PWM; verify with Caleb watching (PA4 is not a heater, fan or stepper pin). Panel button, on during jobs, off after, Mainsail control. | ready |
@@ -125,5 +125,5 @@ Decision (S1, 2026-11-03): OrcaSlicer for the AD4 and the CC2.
 
 1. S1 done (OrcaSlicer). S2: the Orca profile bundle (everything in J and M builds on its output).
 2. J1-J5: job info on the panel; the most visible win. J3-J5 installed, waiting for a real print.
-3. C1-C3, C5: camera and light.
+3. C3, C5: camera in Mainsail (C1-C2 done) and light.
 4. M1 with Q6: filament swap and runout share one flow.

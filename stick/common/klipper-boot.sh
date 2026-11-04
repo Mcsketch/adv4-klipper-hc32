@@ -2,13 +2,14 @@
 # Klipper-mode boot. /opt/auto_run.sh starts this in place of the vendor UI
 # when /opt/ad4-klipper/klipper-mode exists:
 #   ttyS1 115200 8N1 raw  ->  ad4-bridge on TCP :BRIDGE_PORT  ->  Klipper host
+#   camera: ad4-cam on TCP :CAM_PORT (MJPEG; opens the camera only while someone watches)
 #   panel: ad4-screen boot (animation), then ad4-screen klipper (Moonraker status + touch), respawned
 #   eth0 / wlan0 / dropbear per ad4-klipper.conf
 # Never touches the IAP strap or flashes anything.
 # Back to the stock UI for one boot: rm /opt/ad4-klipper/klipper-mode; reboot -f
 # (the stock UI cannot drive an MCU running Klipper; use the rollback stick).
 D=/opt/ad4-klipper
-ETH_ADDR=dhcp ETH_GW= WIFI=on MOONRAKER= BRIDGE_PORT=5000
+ETH_ADDR=dhcp ETH_GW= WIFI=on MOONRAKER= BRIDGE_PORT=5000 CAM_PORT=8080
 . $D/ad4-klipper.conf
 exec >>/tmp/ad4-boot.log 2>&1
 echo "=== klipper boot `date` uptime `cut -d' ' -f1 /proc/uptime`"
@@ -21,6 +22,10 @@ $D/ad4-screen boot & BOOTANIM=$!
 stty -F /dev/ttyS1 115200 raw -echo -parenb cs8 -cstopb clocal -crtscts; echo "stty rc=$?"
 setsid $D/ad4-bridge "$BRIDGE_PORT" /dev/ttyS1 115200 >/tmp/ad4-bridge.log 2>&1 </dev/null &
 echo "bridge on :$BRIDGE_PORT"
+if [ -n "$CAM_PORT" ]; then
+    setsid sh -c "while :; do $D/ad4-cam $CAM_PORT; sleep 5; done" >/tmp/ad4-cam.log 2>&1 </dev/null &
+    echo "camera on :$CAM_PORT"
+fi
 
 case $ETH_ADDR in
 off) ;;

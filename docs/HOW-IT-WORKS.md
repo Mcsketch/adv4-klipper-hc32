@@ -76,6 +76,9 @@ power off and walk away.
 2. ttyS1 to 115200 8N1 raw (IAPCommand leaves it in even parity), then
    `ad4-bridge 5000 /dev/ttyS1 115200`: one TCP client at a time, bytes
    passed through both ways, the UART reopened if the client drops.
+   Then `ad4-cam CAM_PORT` in a respawn loop: the camera as MJPEG at
+   `http://PRINTER:8080/stream` and `/snapshot`. It opens the camera only
+   while someone is watching.
 3. eth0 by DHCP or static address.
 4. Once the animation has finished, `ad4-screen klipper HOST:PORT` in a
    respawn loop: polls Moonraker, draws

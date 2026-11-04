@@ -2,7 +2,7 @@
 
 Logs on the stick: `ad4-klipper.log` (every step) and `iap.log` (the
 flasher). On the printer in Klipper mode: `/tmp/ad4-boot.log`,
-`/tmp/ad4-bridge.log`, `/tmp/ad4-screen.log`. On the host:
+`/tmp/ad4-bridge.log`, `/tmp/ad4-screen.log`, `/tmp/ad4-cam.log`. On the host:
 `~/printer_data/logs/klippy.log`.
 
 ## The stick does nothing

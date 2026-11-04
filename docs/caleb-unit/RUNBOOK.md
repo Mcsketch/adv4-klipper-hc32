@@ -9,7 +9,7 @@ something here changes, edit this file in place. Do not append corrections.
 | Part | Where | What |
 |---|---|---|
 | MCU | NA board, **N32G455** (not the HD/HC32F460 the repo README describes) | mainline Klipper `020d25e`, flashed 2026-10-27 through the vendor IAP |
-| SoC | Allwinner V3S in the printer, eth0 `192.168.100.20` (lab switch), WiFi `192.168.1.219` | boots `/opt/ad4-klipper/klipper-boot.sh`: `ad4-bridge` TCP :5000 to `/dev/ttyS1` @115200, `ad4-screen klipper` panel |
+| SoC | Allwinner V3S in the printer, eth0 `192.168.100.20` (lab switch), WiFi `192.168.1.219` | boots `/opt/ad4-klipper/klipper-boot.sh`: `ad4-bridge` TCP :5000 to `/dev/ttyS1` @115200, `ad4-cam` camera :8080, `ad4-screen klipper` panel |
 | Host | prodesk (`192.168.1.10`, lab side `192.168.100.10`) | `~/klipper` branch `ad4-socket` (`802101f`, accepts `socket://`), Moonraker on loopback :7125, Mainsail `http://192.168.1.10:8095` via Caddy |
 | Config | `prodesk:~/printer_data/config/printer.cfg` | repo template `host/printer.cfg`; differs only in IP, PID values and the SAVE_CONFIG block. Port real changes back to it and commit |
 | Slicer | Elegoo Slicer on the ASRock | machine "AD4 0.4 Nozzle (Caleb)", process "AD4 PLA Standard", filament "AD4 Rapid PLA+" |

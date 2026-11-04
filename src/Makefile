@@ -1,6 +1,6 @@
 # SoC binaries for the Adventurer 4 (Allwinner V3S, Linux 3.4, no libc worth
 # linking against): static ARMv5T soft-float, which the Cortex-A7 runs as is.
-#   make            -> ../bin/ad4-bridge ad4-screen ad4-buzz
+#   make            -> ../bin/ad4-bridge ad4-screen ad4-buzz ad4-cam
 #   make preview    -> host build of ad4-screen that writes PPM screenshots
 # Debian/Ubuntu: apt install gcc-arm-linux-gnueabi
 CROSS  ?= arm-linux-gnueabi-
@@ -9,7 +9,11 @@ CFLAGS ?= -std=gnu11 -O2 -Wall
 OUT    ?= ../bin
 PREVIEW ?= ../build/preview
 
-BINS = $(OUT)/ad4-bridge $(OUT)/ad4-screen $(OUT)/ad4-buzz
+BINS = $(OUT)/ad4-bridge $(OUT)/ad4-screen $(OUT)/ad4-buzz $(OUT)/ad4-cam
+
+# kernel 3.4 V4L2 structs carry a 32-bit timeval; newer armel toolchains
+# default to a 64-bit time_t, which changes VIDIOC_DQBUF's number
+$(OUT)/ad4-cam: CFLAGS += -U_TIME_BITS -D_TIME_BITS=32 -U_FILE_OFFSET_BITS -D_FILE_OFFSET_BITS=32
 
 all: $(BINS)
 

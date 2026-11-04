@@ -1362,6 +1362,7 @@ typedef struct {
     int online;                       /* Moonraker answered at all */
     char kstate[16], kmsg[160];       /* klippy: ready/startup/shutdown/error */
     char pstate[16], file[96];        /* print_stats */
+    char pmsg[160];                   /* print_stats message: why a job failed */
     char ver[48];                     /* Klipper software_version */
     char homed[8];                    /* toolhead homed_axes */
     double et, ett, bt, btt, prog, dur, tot, fused, pfan, cfan, light, pos[3];
@@ -1384,7 +1385,7 @@ static void k_poll(const char *host, int port, kstat *k) {
     jstr(b, e, "state_message", k->kmsg, sizeof k->kmsg);
     jstr(b, e, "software_version", k->ver, sizeof k->ver);
     if (http_req(host, port, "GET",
-                 "/printer/objects/query?print_stats=state,filename,print_duration,total_duration,filament_used,info"
+                 "/printer/objects/query?print_stats=state,filename,print_duration,total_duration,filament_used,info,message"
                  "&extruder=temperature,target&heater_bed=temperature,target"
                  "&display_status=progress&fan=speed&fan_generic%20chamber_fan=speed&output_pin%20light=value"
                  "&toolhead=position,homed_axes&gcode_move=speed_factor,extrude_factor,homing_origin",
@@ -1393,6 +1394,7 @@ static void k_poll(const char *host, int port, kstat *k) {
     if ((b = jobj(buf, "print_stats", &e))) {
         jstr(b, e, "state", k->pstate, sizeof k->pstate);
         jstr(b, e, "filename", k->file, sizeof k->file);
+        jstr(b, e, "message", k->pmsg, sizeof k->pmsg);
         k->dur = jnum(b, e, "print_duration");
         k->tot = jnum(b, e, "total_duration");
         k->fused = jnum(b, e, "filament_used");
@@ -1441,6 +1443,13 @@ static int k_busy(const kstat *k) {
 /* the menus exist only while Klipper is ready and no job is running */
 static int k_idle(const kstat *k) {
     return k->online && !strcmp(k->kstate, "ready") && !k_busy(k);
+}
+
+/* J8: a finished, cancelled or failed job stays on the home screen until
+ * OK or the next job */
+static int k_ended(const kstat *k) {
+    return k_idle(k) && k->file[0] && (!strcmp(k->pstate, "complete") ||
+           !strcmp(k->pstate, "cancelled") || !strcmp(k->pstate, "error"));
 }
 
 static unsigned k_chip(const kstat *k, const char **label) {
@@ -1557,12 +1566,24 @@ static void k_thumb(const char *host, int port, const char *name, const kmeta *m
     im->px = stbi_load_from_memory((unsigned char *)buf, g_blen, &im->w, &im->h, &n, 4);
 }
 
-/* sz x sz, nearest-neighbour scaled, alpha over bg */
+/* sz x sz, alpha over bg: nearest-neighbour going up, box average going
+ * down (the Print list draws a 160 px thumbnail at 56) */
 static void k_img(const surf *s, int x, int y, int sz, const kimg *im, unsigned bg) {
     for (int j = 0; j < sz; j++)
         for (int i = 0; i < sz; i++) {
-            const unsigned char *q = im->px + 4 * ((size_t)(j * im->h / sz) * im->w + i * im->w / sz);
-            px(s, x + i, y + j, mix(bg, (unsigned)q[0] << 16 | q[1] << 8 | q[2], q[3] + (q[3] >> 7)));
+            int x0 = i * im->w / sz, x1 = (i + 1) * im->w / sz;
+            int y0 = j * im->h / sz, y1 = (j + 1) * im->h / sz;
+            if (x1 <= x0) x1 = x0 + 1;
+            if (y1 <= y0) y1 = y0 + 1;
+            unsigned r = 0, g = 0, bl = 0, a = 0, n = 0;
+            for (int v = y0; v < y1; v++)
+                for (int u = x0; u < x1; u++, n++) {
+                    const unsigned char *q = im->px + 4 * ((size_t)v * im->w + u);
+                    r += q[0] * q[3]; g += q[1] * q[3]; bl += q[2] * q[3]; a += q[3];
+                }
+            if (!a) { px(s, x + i, y + j, bg); continue; }
+            unsigned al = a / n;
+            px(s, x + i, y + j, mix(bg, (r / a) << 16 | (g / a) << 8 | bl / a, al + (al >> 7)));
         }
 }
 
@@ -1669,6 +1690,9 @@ typedef struct {
     int scr, page, sel, nfiles, ft, step, nobj;
     kmeta meta; kimg img;             /* the file picked in PRINT */
     char jfile[96]; kmeta jmeta; kimg jimg; long jt;   /* the running job */
+    kmeta rmeta[K_ROWS]; kimg rimg[K_ROWS];            /* the Print list's visible rows */
+    int ack;                          /* the finished job's card was dismissed */
+    double rate[3];                   /* $/kg, g/cm3, $/printer hour; 0 = not set */
 } kmenu;
 
 /* FILAMENT's TEMP tile and MOVE's STEP tile cycle through these */
@@ -1762,6 +1786,11 @@ static int k_buttons(const kstat *k, const kmenu *m, btn *b) {
     }
     switch (m->scr) {
     case K_HOME:
+        if (k_ended(k) && !m->ack) {
+            b[n++] = KB(24, 208, "OK", "ack", K_G1, K_G2, 0);
+            b[n++] = KB(248, 208, "REPRINT", "again", C_OK, 0x1f8a60u, 1);
+            break;
+        }
         b[n++] = (btn){ 24, 290, 432, 130, "PRINT", "files", C_OK, 0x1f8a60u, 4, 0, 0 };
         b[n++] = KT(24, 436, 208, "PREHEAT", "heat", C_WARN, 0xa86f22u);
         b[n++] = KT(248, 436, 208, "FILAMENT", "fil", C_ACC, C_ACCD);
@@ -1879,17 +1908,26 @@ static void k_size(double sz, char *o, int n) {
     else snprintf(o, n, "%.0f KB", sz / 1e3);
 }
 
-static void k_file_row(const surf *s, const btn *b) {
-    char nm[32], sz[24];
+static void k_file_row(const surf *s, const btn *b, const kmenu *m) {
+    char nm[32], ln[48], hm[16];
     const kfile *f = &kf[b->arg];
+    const kmeta *t = &m->rmeta[b->arg % K_ROWS];
     int l = (int)strlen(f->name);
     if (l > 6 && !strcmp(f->name + l - 6, ".gcode")) l -= 6;
-    if (l > 25) snprintf(nm, sizeof nm, "%.23s..", f->name);
+    if (l > 21) snprintf(nm, sizeof nm, "%.19s..", f->name);
     else snprintf(nm, sizeof nm, "%.*s", l, f->name);
-    k_size(f->size, sz, sizeof sz);
     rrect(s, b->x, b->y, b->w, b->h, 14, C_CARD, C_CARD2);
-    text(s, b->x + 16, b->y + 14, nm, 2, C_TXT);
-    text(s, b->x + 16, b->y + 44, sz, 2, C_DIM);
+    rrect(s, b->x + 8, b->y + 8, 56, 56, 8, C_BG1, C_BG1);
+    if (m->rimg[b->arg % K_ROWS].px) k_img(s, b->x + 8, b->y + 8, 56, &m->rimg[b->arg % K_ROWS], C_BG1);
+    text(s, b->x + 76, b->y + 14, nm, 2, C_TXT);
+    /* time and grams from the slicer; the size when the file has neither */
+    if (t->est > 0) {
+        k_hm(t->est, hm, sizeof hm);
+        if (t->grams > 0) snprintf(ln, sizeof ln, "%s  %.0f g", hm, t->grams);
+        else snprintf(ln, sizeof ln, "%s", hm);
+    } else
+        k_size(f->size, ln, sizeof ln);
+    text(s, b->x + 76, b->y + 44, ln, 2, C_DIM);
 }
 
 static void k_file_card(const surf *s, const kmenu *m) {
@@ -1975,6 +2013,50 @@ static void k_job(const surf *s, const kstat *k, const kmenu *m, unsigned col) {
     text(s, 24, 574, v, 2, C_DIM);
 }
 
+/* J8: result, real time against the estimate, filament and cost */
+static void k_end(const surf *s, const kstat *k, const kmenu *m) {
+    const kmeta *t = &m->jmeta;
+    char nm[32], l[6][48], a[16], c[16];
+    int n = 0, ok = !strcmp(k->pstate, "complete"), cx = !strcmp(k->pstate, "cancelled");
+    const char *f = strrchr(k->file, '/');
+    f = f ? f + 1 : k->file;
+    int ln = (int)strlen(f);
+    if (ln > 6 && !strcmp(f + ln - 6, ".gcode")) ln -= 6;
+    rrect(s, 24, 282, 432, 306, 18, C_CARD, C_CARD2);
+    rrect(s, 44, 298, 112, 112, 12, C_BG1, C_BG1);
+    if (m->jimg.px) k_img(s, 44, 298, 112, &m->jimg, C_BG1);
+    text(s, 172, 302, ok ? "DONE" : cx ? "CANCELLED" : "FAILED", 3, ok ? C_OK : cx ? C_WARN : C_ERR);
+    if (ln > 17) snprintf(nm, sizeof nm, "%.15s..", f);
+    else snprintf(nm, sizeof nm, "%.*s", ln, f);
+    text(s, 172, 342, nm, 2, C_TXT);
+    if (!ok && !cx) {
+        text_wrap(s, 44, 426, k->pmsg[0] ? k->pmsg : "Klipper stopped the job.", 2, C_TXT, 392);
+        return;
+    }
+    if (cx) snprintf(l[n++], 48, "stopped at %.0f %%", k->prog * 100);
+    k_hm(k->dur, a, sizeof a);
+    snprintf(l[n++], 48, "printed  %s", a);
+    if (ok && t->est > 0) {
+        k_hm(t->est, a, sizeof a);
+        int d = (int)((k->dur - t->est) * 100 / t->est + (k->dur > t->est ? 0.5 : -0.5));
+        snprintf(l[n++], 48, "estimate %s %+d %%", a, d);
+    }
+    k_hm(k->tot, a, sizeof a);
+    snprintf(l[n++], 48, "with heat-up %s", a);
+    /* grams: the slicer's figure scaled to what was used, else from density */
+    double dens = m->rate[1] > 0 ? m->rate[1] : 1.24;
+    double g = t->grams > 0 && t->fil > 0 ? t->grams * k->fused / t->fil
+             : k->fused * 2.405e-3 * dens;
+    snprintf(l[n++], 48, "filament %.2f m %.0f g", k->fused / 1000, g);
+    if (m->rate[0] > 0) {
+        double mat = g / 1000 * m->rate[0];
+        snprintf(a, sizeof a, "%.2f", mat + k->tot / 3600 * m->rate[2]);
+        snprintf(c, sizeof c, "%.2f", mat);
+        snprintf(l[n++], 48, m->rate[2] > 0 ? "cost $%s (fil $%s)" : "cost $%s", a, c);
+    }
+    for (int i = 0; i < n; i++) text(s, 44, 426 + i * 28, l[i], 2, i == 0 && cx ? C_WARN : C_DIM);
+}
+
 static void k_paint(const surf *s, const kstat *k, const kmenu *m, const btn *b,
                     int nb, int armed, const char *eth, const char *wifi,
                     const char *note, const char *hostport) {
@@ -1992,6 +2074,7 @@ static void k_paint(const surf *s, const kstat *k, const kmenu *m, const btn *b,
     case K_FIL:
         k_temp(s, 24, 118, "NOZZLE", k->et, k->ett);
         k_temp(s, 248, 118, "BED", k->bt, k->btt);
+        if (m->scr == K_HOME && k_ended(k) && !m->ack) { k_end(s, k, m); break; }
         if (m->scr != K_HOME || k_idle(k)) break;
         rrect(s, 24, 282, 432, k_busy(k) && k->online && !strcmp(k->kstate, "ready") ? 220 : 306,
               18, C_CARD, C_CARD2);
@@ -2079,7 +2162,7 @@ static void k_paint(const surf *s, const kstat *k, const kmenu *m, const btn *b,
     }
 
     for (int i = 0; i < nb; i++) {
-        if (!strcmp(b[i].token, "file")) { k_file_row(s, &b[i]); continue; }
+        if (!strcmp(b[i].token, "file")) { k_file_row(s, &b[i], m); continue; }
         btn t = b[i];
         if (i == armed) { t.top = C_ERR; t.bot = C_ERRD; }
         draw_btn(s, &t);
@@ -2108,9 +2191,34 @@ static void if_ip(const char *ifn, char *out, int n) {
 }
 
 /* A tap on a button that changes screens rather than sending anything. */
+/* the Print list's visible rows: metadata and thumbnail, once per page */
+static void k_rows(const char *host, int port, kmenu *m) {
+    for (int i = 0; i < K_ROWS; i++) {
+        int f = m->page * K_ROWS + i;
+        if (f < nkf) k_meta(host, port, kf[f].name, &m->rmeta[i]);
+        else memset(&m->rmeta[i], 0, sizeof m->rmeta[i]);
+        k_thumb(host, port, f < nkf ? kf[f].name : "", &m->rmeta[i], &m->rimg[i]);
+    }
+}
+
+/* Cost rates for the end-of-job card, from Moonraker's database (namespace
+ * ad4, key cost: price_kg, density, machine_h); unset leaves cost off. */
+static void k_rates(const char *host, int port, kmenu *m) {
+    static char buf[1024];
+    const char *b, *e;
+    memset(m->rate, 0, sizeof m->rate);
+    if (http_req(host, port, "GET", "/server/database/item?namespace=ad4&key=cost", buf, sizeof buf) != 200 ||
+        !(b = jobj(buf, "value", &e)))
+        return;
+    m->rate[0] = jnum(b, e, "price_kg");
+    m->rate[1] = jnum(b, e, "density");
+    m->rate[2] = jnum(b, e, "machine_h");
+}
+
 static void k_nav(const char *host, int port, kmenu *m, const btn *b) {
     const char *t = b->token;
-    if (!strcmp(t, "files")) { m->scr = K_FILES; m->page = 0; m->nfiles = k_files(host, port); }
+    if (!strcmp(t, "files")) { m->scr = K_FILES; m->page = 0; m->nfiles = k_files(host, port); k_rows(host, port, m); }
+    else if (!strcmp(t, "ack")) m->ack = 1;
     else if (!strcmp(t, "file")) {
         m->sel = b->arg;
         k_meta(host, port, kf[m->sel].name, &m->meta);
@@ -2126,8 +2234,8 @@ static void k_nav(const char *host, int port, kmenu *m, const btn *b) {
     else if (!strcmp(t, "objs")) { m->scr = K_OBJS; m->nobj = k_objs(host, port); }
     else if (!strcmp(t, "ftemp")) m->ft = (m->ft + 1) % 4;
     else if (!strcmp(t, "step")) m->step = (m->step + 1) % 3;
-    else if (!strcmp(t, "prev")) m->page--;
-    else if (!strcmp(t, "next")) m->page++;
+    else if (!strcmp(t, "prev")) { m->page--; k_rows(host, port, m); }
+    else if (!strcmp(t, "next")) { m->page++; k_rows(host, port, m); }
     else if (!strcmp(t, "back"))
         m->scr = m->scr == K_FILE ? K_FILES
                : m->scr == K_ABOUT || m->scr == K_MOVE ? K_TOOLS
@@ -2143,6 +2251,7 @@ static int cmd_klipper(const char *dump, const char *hostport, const char *scree
     char hp[80];
     snprintf(hp, sizeof hp, "%s:%d", host, port);
     signal(SIGPIPE, SIG_IGN);
+    signal(SIGCHLD, SIG_IGN);         /* the end-of-job cue plays in a child */
 
     surf fbs, s;
     int fbfd = -1;
@@ -2175,7 +2284,7 @@ static int cmd_klipper(const char *dump, const char *hostport, const char *scree
         if (!strcmp(screen, "file") && nkf > 0) { nav.token = "file"; k_nav(host, port, &m, &nav); }
     }
     btn b[12];
-    int nb = 0, armed = -1, pressed = 0;
+    int nb = 0, armed = -1, pressed = 0, was = 0;
     long next = 0, armed_t = 0, note_t = 0, rst_t = -60000, touch_t = now_ms();
     char eth[32] = "", wifi[32] = "", note[48] = "";
     for (;;) {
@@ -2195,12 +2304,24 @@ static int cmd_klipper(const char *dump, const char *hostport, const char *scree
             }
             /* the job's metadata and thumbnail: once per file, or every 10 s
              * until Moonraker has finished reading the file */
-            if (k_busy(&k) && (strcmp(m.jfile, k.file) || (!m.jmeta.ok && t - m.jt > 10000))) {
+            if ((k_busy(&k) || k_ended(&k)) &&
+                (strcmp(m.jfile, k.file) || (!m.jmeta.ok && t - m.jt > 10000))) {
                 snprintf(m.jfile, sizeof m.jfile, "%s", k.file);
                 k_meta(host, port, k.file, &m.jmeta);
                 k_thumb(host, port, k.file, &m.jmeta, &m.jimg);
+                k_rates(host, port, &m);
                 m.jt = t;
             }
+            /* a job just ended: show its card, and the riff when it finished */
+            if (k_busy(&k)) m.ack = 0;
+            else if (was && k_ended(&k)) {
+                k_rates(host, port, &m);
+#ifndef AD4_DUMP
+                if (!strcmp(k.pstate, "complete") && fork() == 0) _exit(buzz_cue(AD4_RIFF) ? 1 : 0);
+                if (!strcmp(k.pstate, "error") && fork() == 0) _exit(buzz_cue(AD4_FAIL) ? 1 : 0);
+#endif
+            }
+            was = k_busy(&k);
             /* a job started elsewhere, a fault, or two idle minutes: back home;
              * TUNE and OBJECTS are the screens that live during a job */
             int stay = m.scr == K_TUNE || m.scr == K_OBJS
@@ -2251,8 +2372,8 @@ static int cmd_klipper(const char *dump, const char *hostport, const char *scree
             next = 0;
             const char *tok = b[hit].token;
             char path[640], en[400];
-            if (!strcmp(tok, "print")) {
-                urlenc(kf[m.sel].name, en, sizeof en);
+            if (!strcmp(tok, "print") || !strcmp(tok, "again")) {
+                urlenc(tok[0] == 'p' ? kf[m.sel].name : k.file, en, sizeof en);
                 snprintf(path, sizeof path, "/printer/print/start?filename=%s", en);
                 tok = path;
             } else if (tok[0] != '/') {
@@ -2267,7 +2388,7 @@ static int cmd_klipper(const char *dump, const char *hostport, const char *scree
             snprintf(note, sizeof note, "%s %s", lab,
                      rc == 200 ? "ok" : rc == -2 ? "running" : "failed");
             note_t = now_ms();
-            if (rc == 200 && !strcmp(b[hit].token, "print")) m.scr = K_HOME;
+            if (rc == 200 && (!strcmp(b[hit].token, "print") || !strcmp(b[hit].token, "again"))) m.scr = K_HOME;
         }
     }
 }

@@ -85,7 +85,7 @@ power off and walk away.
    the status, sends the button presses, and POSTs `firmware_restart` when
    Klipper reports the MCU lost (at most every 20 s). While Klipper is idle
    it has menus: Print (Moonraker's gcode files, newest first, with the
-   slicer's metadata; starting a print takes two taps), Preheat (PLA, PETG,
+   slicer's thumbnail, time and grams; starting a print takes two taps), Preheat (PLA, PETG,
    ABS, TPU, cooldown), Filament (load, unload, purge 20 mm through the
    `LOAD_FILAMENT` / `UNLOAD_FILAMENT` macros in printer.cfg) and Tools
    (part and chamber fan, light off / on / 30 %, Move: home and jog, motors off, About with
@@ -100,6 +100,13 @@ power off and walk away.
    `exclude_object` (the one printing now in blue) and a button per object;
    two taps skip it (`EXCLUDE_OBJECT`). The last object left cannot be
    skipped: that is Cancel. Needs "label objects" in the slicer.
+   After a job ends the home screen shows a card until OK: done, cancelled
+   or failed (with Klipper's message), real time against the estimate,
+   filament, cost, and REPRINT (two taps). The cost rates are read from
+   Moonraker's database; change them from the host with
+   `curl -X POST localhost:7125/server/database/item -H "Content-Type: application/json"
+   -d '{"namespace":"ad4","key":"cost","value":{"price_kg":14,"density":1.24,"machine_h":0.75}}'`
+   ($ per kg, g/cm³, $ per hour of printer time). Without them it shows no cost.
    To swap the panel binary on a running printer, kill the
    `ad4-screen klipper` process, not the `sh -c while` loop around it.
    Its HOME runs `HOME_XYZ` (`host/home_xyz.py`): all

@@ -118,7 +118,7 @@ Decision (S1, 2026-11-03): OrcaSlicer for the AD4 and the CC2.
 
 | ID | Item | Approach | Status |
 |---|---|---|---|
-| X1 | Home Assistant | Moonraker integration: state, progress, camera, light, notifications. | idea |
+| X1 | Home Assistant | Moonraker integration: state, progress, camera, light, notifications. On Caleb's hub 2026-11-03 (homeserver repo, not this one): an HA REST sensor polls Moonraker for state, progress, temps, file and time left; `ad4-notify.service` pushes job events to the phone. Left: camera and light in HA. | wip |
 | X2 | Spoolman | Filament inventory; ties to the MaterialCost rates in FreeCAD so job cost and remaining spool stay right. | idea |
 
 ## Suggested first steps

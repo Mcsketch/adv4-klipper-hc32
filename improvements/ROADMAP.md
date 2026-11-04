@@ -35,7 +35,7 @@ numbers that matter, from the first layer to the last.
 | J3 | Panel: remaining time and finish clock | Remaining = estimate x (1 - p) x ((1 - p) + p x drift), where p is `M73` progress and drift is `print_duration` / (estimate x p), clamped 0.5-3; no estimate: extrapolate from elapsed after 5 %. Until the first extrusion it shows "HEATING, THEN" and the full estimate. The clock comes from Moonraker's `Date` header (the SoC has no RTC) and `/etc/localtime` (America/Denver, copied to the SoC). Installed 2026-11-03; left: check against a real print. | wip |
 | J4 | Panel: model thumbnail | Slicer embeds a PNG thumbnail; Moonraker extracts it to `.thumbs/`. The panel fetches it over HTTP and decodes it with a vendored single-file decoder (lodepng or stb_image, static, no libs). Large one on the job screen, small one in the Print list. Done with stb_image (PNG only): 160 px on the job screen, 128 px on the file screen, transparent pixels blended. Tested with an uploaded file. Left: the small one in the Print list. | wip |
 | J5 | Panel: job screen | Thumbnail, name, progress bar, layer N / M, elapsed, remaining, finish clock, filament used (m and g), speed and flow %, temps with targets, fan. Installed 2026-11-03 with all of these except grams and speed / flow % (those come with J6). Layer N / M needs `SET_PRINT_STATS_INFO`, which the S2 machine preset now sends. Left: check on a real print. | wip |
-| J6 | Panel: tune during a job | Speed % (`M220`), flow % (`M221`), Z babystep (`SET_GCODE_OFFSET Z_ADJUST`, keep with `NOZZLE_OFFSET`), fan, temps, pressure advance. Big +/- buttons, the changed value highlighted. | ready |
+| J6 | Panel: tune during a job | Built 2026-11-03: a TUNE button between PAUSE and CANCEL opens rows of - / + for speed (`M220`, 10 % steps, 20-100 %: down only, because the 60 mm/s cap is in the slicer and `max_velocity` is 150), flow (`M221`, 2 %, 80-120 %), Z offset (`SET_GCODE_OFFSET Z_ADJUST MOVE=1`, 0.02 mm, within +/-1 mm), nozzle (5 C, 180-260) and part fan (10 %; the slicer's next fan command overrides it). A value off its default is amber. Left: install on the panel, then Caleb tries each row during a print. Pressure advance waits for Q-series calibration. | wip |
 | J7 | Panel: cancel one object | List from `exclude_object` (needs "label objects" in the slicer); tap one, confirm, `EXCLUDE_OBJECT NAME=`. Draw the bed with the objects' outlines so you pick the right one. | ready after J1 |
 | J8 | Panel: end of job | Finished screen with real time vs estimate, filament used, cost (from the FreeCAD MaterialCost rates), buzzer cue; "Print again" button. | idea |
 | J9 | Live layer preview | Panel draws the current layer's toolpath from the G-code as it prints (outline, nozzle position). Needs a cheap way to read the layer from the file without loading it into the SoC's RAM. | idea, stretch |
@@ -109,7 +109,7 @@ Decision (S1, 2026-11-03): OrcaSlicer for the AD4 and the CC2.
 | P1 | Job screen and tune | J5, J6, J7. | |
 | P2 | Swap screen | M1. | |
 | P3 | Queue and history | B2; last jobs with time, filament, result; reprint. | idea |
-| P4 | Light toggle | Installed 2026-11-03: TOOLS has a LIGHT button between BACK and ABOUT that cycles off, on, 30 % (`SET_PIN PIN=light`) and shows the current value; it is hidden if printer.cfg has no `[output_pin light]`. The camera needs no toggle: `ad4-cam` only opens it while someone watches. Left: Caleb taps it once. | wip |
+| P4 | Light toggle | Installed 2026-11-03: TOOLS has a LIGHT button between BACK and ABOUT that cycles off, on, 30 % (`SET_PIN PIN=light`) and shows the current value; it is hidden if printer.cfg has no `[output_pin light]`. The camera needs no toggle: `ad4-cam` only opens it while someone watches. Caleb confirmed it on the printer 2026-11-03. | done |
 | P5 | Settings | Network (IP, link, Tailscale name of the host), screen brightness and sleep, buzzer volume, units. | idea |
 | P6 | Files on the stick | Print G-code straight from a USB stick in the printer: copy to Moonraker, then start. | idea |
 | P7 | Look | Consistent icons, bigger touch targets, a clear active state; previews with `make -C src preview` before each install. | idea |
@@ -125,7 +125,7 @@ Decision (S1, 2026-11-03): OrcaSlicer for the AD4 and the CC2.
 
 1. S1 done (OrcaSlicer). S2: the Orca profile bundle (everything in J and M builds on its output).
 2. J1-J5: job info on the panel; the most visible win. J3-J5 installed, waiting for a real print.
-3. C1-C3, C5 done: camera and light. P4 (panel light button) installed.
+3. C1-C3, C5, P4 done: camera, light, panel light button.
 4. M4 done: phone pushes for start, pause, done, failure.
 5. J6, J7: tune and cancel one object from the panel during a job.
 6. M1 with Q6: filament swap and runout share one flow (deferred by Caleb 2026-11-03).

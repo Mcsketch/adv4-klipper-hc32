@@ -91,7 +91,11 @@ power off and walk away.
    (part and chamber fan, light off / on / 30 %, Move: home and jog, motors off, About with
    firmware restart). During a job the home screen shows the slicer's
    thumbnail, time left, the finish time, layer N / M, progress, elapsed
-   time, part fan and filament used (see `improvements/ROADMAP.md`, J3-J5).
+   time, part fan and filament used (see `improvements/ROADMAP.md`, J3-J5),
+   with Pause / Resume, Tune and Cancel. Tune has - / + for speed (10 %
+   steps, down only: 60 mm/s is a slicer cap), flow (2 %), Z offset
+   (0.02 mm, applied at once), nozzle (5 C) and part fan (10 %); a value
+   off its default is amber. The Z offset lasts until Klipper restarts.
    Its HOME runs `HOME_XYZ` (`host/home_xyz.py`): all
    three axes in one move, each at Z's 5 mm/s; `G28` still homes one axis
    at a time. A job starting from anywhere, or two minutes without a

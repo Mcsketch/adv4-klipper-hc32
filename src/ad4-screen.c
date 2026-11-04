@@ -1365,6 +1365,7 @@ typedef struct {
     char ver[48];                     /* Klipper software_version */
     char homed[8];                    /* toolhead homed_axes */
     double et, ett, bt, btt, prog, dur, tot, fused, pfan, cfan, light, pos[3];
+    double speed, flow, zoff;         /* gcode_move: M220, M221, SET_GCODE_OFFSET */
     int layer, nlayer;                /* SET_PRINT_STATS_INFO, 0 = not sent */
 } kstat;
 
@@ -1386,7 +1387,7 @@ static void k_poll(const char *host, int port, kstat *k) {
                  "/printer/objects/query?print_stats=state,filename,print_duration,total_duration,filament_used,info"
                  "&extruder=temperature,target&heater_bed=temperature,target"
                  "&display_status=progress&fan=speed&fan_generic%20chamber_fan=speed&output_pin%20light=value"
-                 "&toolhead=position,homed_axes",
+                 "&toolhead=position,homed_axes&gcode_move=speed_factor,extrude_factor,homing_origin",
                  buf, sizeof buf) != 200)
         return;
     if ((b = jobj(buf, "print_stats", &e))) {
@@ -1413,6 +1414,14 @@ static void k_poll(const char *host, int port, kstat *k) {
         const char *v = jval(b, e, "position");
         if (v) sscanf(v, "[%lf ,%lf ,%lf", &k->pos[0], &k->pos[1], &k->pos[2]);
         jstr(b, e, "homed_axes", k->homed, sizeof k->homed);
+    }
+    if ((b = jobj(buf, "gcode_move", &e))) {
+        k->speed = jnum(b, e, "speed_factor");
+        k->flow = jnum(b, e, "extrude_factor");
+        const char *v = jval(b, e, "homing_origin");
+        double o[3] = { 0 };
+        if (v) sscanf(v, "[%lf ,%lf ,%lf", &o[0], &o[1], &o[2]);
+        k->zoff = o[2];
     }
 }
 
@@ -1580,7 +1589,7 @@ static void k_hm(double sec, char *o, int n) {
 
 /* ---- screens. Buttons whose token starts with '/' POST that path to
  * Moonraker; the rest move between screens. */
-enum { K_HOME, K_FILES, K_FILE, K_HEAT, K_TOOLS, K_ABOUT, K_FIL, K_MOVE };
+enum { K_HOME, K_FILES, K_FILE, K_HEAT, K_TOOLS, K_ABOUT, K_FIL, K_MOVE, K_TUNE };
 typedef struct {
     int scr, page, sel, nfiles, ft, step;
     kmeta meta; kimg img;             /* the file picked in PRINT */
@@ -1599,6 +1608,42 @@ static const double k_step[] = { 10, 1, 0.1 };
 #define K_G2 0x39465au
 #define K_GS "/printer/gcode/script?script="
 
+/* TUNE: one row per setting, - and + either side of the value. Speed only
+ * goes down: the 60 mm/s cap lives in the slicer, max_velocity is higher. */
+#define K_NTUNE 5
+static const char *const k_tlab[K_NTUNE] = { "SPEED", "FLOW", "Z OFFSET", "NOZZLE", "PART FAN" };
+
+static double k_tval(const kstat *k, int i) {
+    double v[K_NTUNE] = { k->speed * 100, k->flow * 100, k->zoff, k->ett, k->pfan * 100 };
+    return v[i];
+}
+
+static int k_tune(const kstat *k, btn *b) {
+    static const double step[K_NTUNE] = { 10, 2, 0.02, 5, 10 };
+    static const double lo[K_NTUNE] = { 20, 80, -1, 180, 0 }, hi[K_NTUNE] = { 100, 120, 1, 260, 100 };
+    static char cmd[K_NTUNE][2][96];
+    int n = 0;
+    for (int i = 0; i < K_NTUNE; i++)
+        for (int d = 0; d < 2; d++) {
+            double cur = k_tval(k, i), v = cur + (d ? step[i] : -step[i]);
+            v = (long)(v / step[i] + (v < 0 ? -0.5 : 0.5)) * step[i];   /* no libm */
+            int ok = v >= lo[i] - 1e-6 && v <= hi[i] + 1e-6;
+            switch (i) {
+            case 0: snprintf(cmd[i][d], 96, K_GS "M220%%20S%.0f", v); break;
+            case 1: snprintf(cmd[i][d], 96, K_GS "M221%%20S%.0f", v); break;
+            case 2: snprintf(cmd[i][d], 96, K_GS "SET_GCODE_OFFSET%%20Z_ADJUST%%3D%.2f%%20MOVE%%3D1",
+                             d ? step[i] : -step[i]); break;
+            case 3: snprintf(cmd[i][d], 96, K_GS "M104%%20S%.0f", v); break;
+            case 4: snprintf(cmd[i][d], 96, K_GS "M106%%20S%.0f", v * 2.55); break;
+            }
+            if (i == 3 && k->ett <= 0) ok = 0;   /* not re-heating a nozzle that is off */
+            b[n++] = (btn){ d ? 346 : 24, 108 + i * 96, 110, 88, d ? "+" : "-",
+                            ok ? cmd[i][d] : "none", ok ? C_ACC : K_G2, ok ? C_ACCD : K_G2, 4, 0, 0 };
+        }
+    b[n++] = KB(24, 432, "BACK", "back", K_G1, K_G2, 0);
+    return n;
+}
+
 static int k_buttons(const kstat *k, const kmenu *m, btn *b) {
     static char pf[32], cf[32], lf[32];
     int n = 0;
@@ -1608,12 +1653,15 @@ static int k_buttons(const kstat *k, const kmenu *m, btn *b) {
         return 1;
     }
     if (k_busy(k)) {
+        if (m->scr == K_TUNE) return k_tune(k, b);
         if (!strcmp(k->pstate, "printing"))
-            b[0] = KB(24, 208, "PAUSE", "/printer/print/pause", C_WARN, 0xa86f22u, 0);
+            b[0] = KB(24, 136, "PAUSE", "/printer/print/pause", C_WARN, 0xa86f22u, 0);
         else
-            b[0] = KB(24, 208, "RESUME", "/printer/print/resume", C_OK, 0x1f8a60u, 0);
-        b[1] = KB(248, 208, "CANCEL", "/printer/print/cancel", C_ERRD, 0x6d2530u, 1);
-        return 2;
+            b[0] = KB(24, 136, "RESUME", "/printer/print/resume", C_OK, 0x1f8a60u, 0);
+        b[1] = KB(172, 136, "TUNE", "tune", C_ACC, C_ACCD, 0);
+        b[2] = KB(320, 136, "CANCEL", "/printer/print/cancel", C_ERRD, 0x6d2530u, 1);
+        for (int i = 0; i < 3; i++) b[i].sc = 2;   /* three across: CANCEL fits at 2 */
+        return 3;
     }
     switch (m->scr) {
     case K_HOME:
@@ -1834,7 +1882,7 @@ static void k_paint(const surf *s, const kstat *k, const kmenu *m, const btn *b,
                     int nb, int armed, const char *eth, const char *wifi,
                     const char *note, const char *hostport) {
     static const char *const title[] = {
-        "ADVENTURER 4", "PRINT", "PRINT", "PREHEAT", "TOOLS", "ABOUT", "FILAMENT", "MOVE" };
+        "ADVENTURER 4", "PRINT", "PRINT", "PREHEAT", "TOOLS", "ABOUT", "FILAMENT", "MOVE", "TUNE" };
     const char *lab, *foot = "";
     char pg[32];
     unsigned col = k_chip(k, &lab);
@@ -1881,6 +1929,23 @@ static void k_paint(const surf *s, const kstat *k, const kmenu *m, const btn *b,
         else text(s, 24, 140, "not homed: tap HOME first", 2, C_WARN);
         break;
     }
+    case K_TUNE:
+        /* a value off its default is drawn amber */
+        for (int i = 0; i < K_NTUNE; i++) {
+            static const double def[K_NTUNE] = { 100, 100, 0, -1, -1 };
+            double v = k_tval(k, i);
+            char t[24];
+            int y = 108 + i * 96;
+            if (i == 2) snprintf(t, sizeof t, "%+.2f mm", v);
+            else if (i == 3) snprintf(t, sizeof t, v > 0 ? "%.0f C" : "off", v);
+            else snprintf(t, sizeof t, "%.0f%%", v);
+            rrect(s, 142, y, 196, 88, 14, C_CARD, C_CARD2);
+            textc(s, 240, y + 12, k_tlab[i], 2, C_DIM);
+            double dv = v - def[i];
+            textc(s, 240, y + 40, t, 3, def[i] >= -0.5 && (dv > 0.001 || dv < -0.001) ? C_WARN : C_TXT);
+        }
+        if (!strcmp(k->pstate, "paused")) foot = "paused";
+        break;
     case K_ABOUT: {
         const char *kv[] = {
             "PRINTER ETH0", eth, "PRINTER WIFI", wifi, "MOONRAKER", hostport,
@@ -1939,6 +2004,7 @@ static void k_nav(const char *host, int port, kmenu *m, const btn *b) {
     else if (!strcmp(t, "about")) m->scr = K_ABOUT;
     else if (!strcmp(t, "fil")) m->scr = K_FIL;
     else if (!strcmp(t, "move")) m->scr = K_MOVE;
+    else if (!strcmp(t, "tune")) m->scr = K_TUNE;
     else if (!strcmp(t, "ftemp")) m->ft = (m->ft + 1) % 4;
     else if (!strcmp(t, "step")) m->step = (m->step + 1) % 3;
     else if (!strcmp(t, "prev")) m->page--;
@@ -2015,8 +2081,11 @@ static int cmd_klipper(const char *dump, const char *hostport, const char *scree
                 k_thumb(host, port, k.file, &m.jmeta, &m.jimg);
                 m.jt = t;
             }
-            /* a job started elsewhere, a fault, or two idle minutes: back home */
-            if (m.scr != K_HOME && (!k_idle(&k) || (!dump && t - touch_t > 120000))) {
+            /* a job started elsewhere, a fault, or two idle minutes: back home;
+             * TUNE is the one screen that lives during a job */
+            int stay = m.scr == K_TUNE ? k_busy(&k) && k.online && !strcmp(k.kstate, "ready")
+                                       : k_idle(&k);
+            if (m.scr != K_HOME && (!stay || (!dump && t - touch_t > 120000))) {
                 m.scr = K_HOME;
                 armed = -1;
             }

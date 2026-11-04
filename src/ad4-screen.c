@@ -1363,6 +1363,7 @@ typedef struct {
     char kstate[16], kmsg[160];       /* klippy: ready/startup/shutdown/error */
     char pstate[16], file[96];        /* print_stats */
     char pmsg[160];                   /* print_stats message: why a job failed */
+    char dmsg[96];                    /* display_status message: why a job stopped (B2) */
     char ver[48];                     /* Klipper software_version */
     char homed[8];                    /* toolhead homed_axes */
     double et, ett, bt, btt, prog, dur, tot, fused, pfan, cfan, light, pos[3];
@@ -1387,7 +1388,7 @@ static void k_poll(const char *host, int port, kstat *k) {
     if (http_req(host, port, "GET",
                  "/printer/objects/query?print_stats=state,filename,print_duration,total_duration,filament_used,info,message"
                  "&extruder=temperature,target&heater_bed=temperature,target"
-                 "&display_status=progress&fan=speed&fan_generic%20chamber_fan=speed&output_pin%20light=value"
+                 "&display_status=progress,message&fan=speed&fan_generic%20chamber_fan=speed&output_pin%20light=value"
                  "&toolhead=position,homed_axes&gcode_move=speed_factor,extrude_factor,homing_origin",
                  buf, sizeof buf) != 200)
         return;
@@ -1407,7 +1408,10 @@ static void k_poll(const char *host, int port, kstat *k) {
     if ((b = jobj(buf, "heater_bed", &e))) {
         k->bt = jnum(b, e, "temperature"); k->btt = jnum(b, e, "target");
     }
-    if ((b = jobj(buf, "display_status", &e))) k->prog = jnum(b, e, "progress");
+    if ((b = jobj(buf, "display_status", &e))) {
+        k->prog = jnum(b, e, "progress");
+        jstr(b, e, "message", k->dmsg, sizeof k->dmsg);
+    }
     if ((b = jobj(buf, "fan", &e))) k->pfan = jnum(b, e, "speed");
     if ((b = jobj(buf, "fan_generic chamber_fan", &e))) k->cfan = jnum(b, e, "speed");
     /* [output_pin light] (PA4); -1 hides the button when printer.cfg has none */
@@ -1764,6 +1768,32 @@ static int k_objbtn(const kmenu *m, btn *b) {
     return n;
 }
 
+/* LOAD_FILAMENT / UNLOAD_FILAMENT are macros in printer.cfg. During a pause
+ * they run at the job's own nozzle target (no TEMP=), so RESUME prints at
+ * the temperature the slicer set, and there is no COOLDOWN. */
+static int k_fil(const kstat *k, const kmenu *m, btn *b) {
+    static char ld[96], ul[96], pu[96], tl[16];
+    int n = 0, job = k_busy(k);
+    int ft = k_ftemp[m->ft];
+    if (job) {
+        snprintf(ld, sizeof ld, K_GS "LOAD_FILAMENT");
+        snprintf(ul, sizeof ul, K_GS "UNLOAD_FILAMENT");
+        snprintf(pu, sizeof pu, K_GS "LOAD_FILAMENT%%20LENGTH%%3D20");
+    } else {
+        snprintf(ld, sizeof ld, K_GS "LOAD_FILAMENT%%20TEMP%%3D%d", ft);
+        snprintf(ul, sizeof ul, K_GS "UNLOAD_FILAMENT%%20TEMP%%3D%d", ft);
+        snprintf(pu, sizeof pu, K_GS "LOAD_FILAMENT%%20TEMP%%3D%d%%20LENGTH%%3D20", ft);
+    }
+    snprintf(tl, sizeof tl, "TEMP\n%d C", ft);
+    b[n++] = KT(24, 290, 208, "LOAD", ld, C_OK, 0x1f8a60u);
+    b[n++] = KT(248, 290, 208, "UNLOAD", ul, C_WARN, 0xa86f22u);
+    b[n++] = KT(24, 436, 208, "PURGE\n20 mm", pu, C_ACC, C_ACCD);
+    if (!job) b[n++] = KT(248, 436, 208, tl, "ftemp", K_G1, K_G2);
+    b[n++] = KB(24, 208, "BACK", "back", K_G1, K_G2, 0);
+    if (!job) b[n++] = KB(248, 208, "COOLDOWN", K_GS "TURN_OFF_HEATERS", K_G1, K_G2, 0);
+    return n;
+}
+
 static int k_buttons(const kstat *k, const kmenu *m, btn *b) {
     static char pf[32], cf[32], lf[32];
     int n = 0;
@@ -1775,14 +1805,19 @@ static int k_buttons(const kstat *k, const kmenu *m, btn *b) {
     if (k_busy(k)) {
         if (m->scr == K_TUNE) return k_tune(k, b);
         if (m->scr == K_OBJS) return k_objbtn(m, b);
-        if (!strcmp(k->pstate, "printing"))
+        int paused = !strcmp(k->pstate, "paused");
+        if (m->scr == K_FIL && paused) return k_fil(k, m, b);
+        if (!paused)
             b[0] = KB(24, 136, "PAUSE", "/printer/print/pause", C_WARN, 0xa86f22u, 0);
         else
-            b[0] = KB(24, 136, "RESUME", "/printer/print/resume", C_OK, 0x1f8a60u, 0);
+            b[0] = KB(24, 136, k->dmsg[0] ? "READY" : "RESUME", "/printer/print/resume", C_OK, 0x1f8a60u, 0);
         b[1] = KB(172, 136, "TUNE", "tune", C_ACC, C_ACCD, 0);
         b[2] = KB(320, 136, "CANCEL", "/printer/print/cancel", C_ERRD, 0x6d2530u, 1);
         for (int i = 0; i < 3; i++) b[i].sc = 2;   /* three across: CANCEL fits at 2 */
-        return 3;
+        if (!paused) return 3;
+        /* inside the stop card (k_stop) */
+        b[3] = (btn){ 204, 426, 232, 60, "FILAMENT", "fil", C_ACC, C_ACCD, 2, 0, 0 };
+        return 4;
     }
     switch (m->scr) {
     case K_HOME:
@@ -1851,22 +1886,9 @@ static int k_buttons(const kstat *k, const kmenu *m, btn *b) {
         b[n++] = KB(24, 208, "BACK", "back", K_G1, K_G2, 0);
         b[n++] = KB(248, 208, "FIRMWARE\nRESTART", "/printer/firmware_restart", C_ACC, C_ACCD, 1);
         break;
-    case K_FIL: {
-        /* LOAD_FILAMENT / UNLOAD_FILAMENT are macros in printer.cfg */
-        static char ld[96], ul[96], pu[96], tl[16];
-        int ft = k_ftemp[m->ft];
-        snprintf(ld, sizeof ld, K_GS "LOAD_FILAMENT%%20TEMP%%3D%d", ft);
-        snprintf(ul, sizeof ul, K_GS "UNLOAD_FILAMENT%%20TEMP%%3D%d", ft);
-        snprintf(pu, sizeof pu, K_GS "LOAD_FILAMENT%%20TEMP%%3D%d%%20LENGTH%%3D20", ft);
-        snprintf(tl, sizeof tl, "TEMP\n%d C", ft);
-        b[n++] = KT(24, 290, 208, "LOAD", ld, C_OK, 0x1f8a60u);
-        b[n++] = KT(248, 290, 208, "UNLOAD", ul, C_WARN, 0xa86f22u);
-        b[n++] = KT(24, 436, 208, "PURGE\n20 mm", pu, C_ACC, C_ACCD);
-        b[n++] = KT(248, 436, 208, tl, "ftemp", K_G1, K_G2);
-        b[n++] = KB(24, 208, "BACK", "back", K_G1, K_G2, 0);
-        b[n++] = KB(248, 208, "COOLDOWN", K_GS "TURN_OFF_HEATERS", K_G1, K_G2, 0);
+    case K_FIL:
+        n = k_fil(k, m, b);
         break;
-    }
     case K_MOVE: {
         /* relative jogs inside a saved gcode state; XY 50 mm/s, Z 5 mm/s */
         static const char *const lab[6] = { "X-", "X+", "Y-", "Y+", "Z-", "Z+" };
@@ -1968,38 +1990,49 @@ static void k_job(const surf *s, const kstat *k, const kmenu *m, unsigned col) {
     if (l > 6 && !strcmp(f + l - 6, ".gcode")) l -= 6;
     if (l > 24) snprintf(nm, sizeof nm, "%.22s..", f);
     else snprintf(nm, sizeof nm, "%.*s", l, f);
-    text(s, 44, 298, nm, 2, C_TXT);
+    if (!strcmp(k->pstate, "paused")) {
+        /* B2: a plate stop (AD4_NEXT_OBJECT, AD4_PAUSE_LAYER) or a plain pause;
+         * printer.cfg's PAUSE has lifted clear and brought the bed forward */
+        const char *why = k->dmsg[0] ? k->dmsg : "Paused";
+        text_wrap(s, 44, 298, why, tw(why, 3) <= 392 ? 3 : 2, C_WARN, 392);
+        rrect(s, 44, 346, 140, 140, 12, C_BG1, C_BG1);
+        if (m->jimg.px) k_img(s, 44, 346, 140, &m->jimg, C_BG1);
+        text(s, 204, 348, nm, 1, C_DIM);
+        text_wrap(s, 204, 366, "Set up, then tap READY.", 2, C_TXT, 232);
+    } else {
+        text(s, 44, 298, nm, 2, C_TXT);
 
-    rrect(s, 44, 326, 160, 160, 12, C_BG1, C_BG1);
-    if (m->jimg.px) k_img(s, 44, 326, 160, &m->jimg, C_BG1);
-    else { textc(s, 124, 390, "NO", 2, C_DIM); textc(s, 124, 412, "PREVIEW", 2, C_DIM); }
+        rrect(s, 44, 326, 160, 160, 12, C_BG1, C_BG1);
+        if (m->jimg.px) k_img(s, 44, 326, 160, &m->jimg, C_BG1);
+        else { textc(s, 124, 390, "NO", 2, C_DIM); textc(s, 124, 412, "PREVIEW", 2, C_DIM); }
 
-    /* klipper_estimator's time excludes PRINT_START, as print_duration does;
-     * until the first extrusion the job is still heating and homing */
-    int heat = k->fused <= 0 && !strcmp(k->pstate, "printing");
-    double left = k_left(k, t);
-    const char *lab[3] = { heat ? "HEATING, THEN" : "TIME LEFT", "DONE AT", "LAYER" };
-    if (left < 0) snprintf(v, sizeof v, "--");
-    else k_hm(left, v, sizeof v);
-    time_t now = time(NULL) + g_wall;
-    struct tm tm;
-    /* g_wall comes from Moonraker's Date header; no header, no clock */
-    if (left < 0 || now < 1700000000) snprintf(r, sizeof r, "--");
-    else {
-        now += (time_t)left;
-        localtime_r(&now, &tm);
-        strftime(r, sizeof r, left > 20 * 3600 ? "%a %H:%M" : "%H:%M", &tm);
-        if (!tm.tm_gmtoff) strcat(r, " UTC");
-    }
-    char ly[32];
-    if (k->nlayer > 0) snprintf(ly, sizeof ly, "%d / %d", k->layer, k->nlayer);
-    else if (t->layers > 0) snprintf(ly, sizeof ly, "? / %.0f", t->layers);
-    else snprintf(ly, sizeof ly, "--");
-    const char *val[3] = { v, r, ly };
-    for (int i = 0; i < 3; i++) {
-        int y = 326 + i * 56;
-        text(s, 224, y, lab[i], 2, i == 0 && heat ? C_WARN : C_DIM);
-        text(s, 224, y + 20, val[i], tw(val[i], 3) <= 212 ? 3 : 2, C_TXT);
+        /* klipper_estimator's time excludes PRINT_START, as print_duration does;
+         * until the first extrusion the job is still heating and homing */
+        int heat = k->fused <= 0 && !strcmp(k->pstate, "printing");
+        double left = k_left(k, t);
+        const char *lab[3] = { heat ? "HEATING, THEN" : "TIME LEFT", "DONE AT", "LAYER" };
+        if (left < 0) snprintf(v, sizeof v, "--");
+        else k_hm(left, v, sizeof v);
+        time_t now = time(NULL) + g_wall;
+        struct tm tm;
+        /* g_wall comes from Moonraker's Date header; no header, no clock */
+        if (left < 0 || now < 1700000000) snprintf(r, sizeof r, "--");
+        else {
+            now += (time_t)left;
+            localtime_r(&now, &tm);
+            strftime(r, sizeof r, left > 20 * 3600 ? "%a %H:%M" : "%H:%M", &tm);
+            if (!tm.tm_gmtoff) strcat(r, " UTC");
+        }
+        char ly[32];
+        if (k->nlayer > 0) snprintf(ly, sizeof ly, "%d / %d", k->layer, k->nlayer);
+        else if (t->layers > 0) snprintf(ly, sizeof ly, "? / %.0f", t->layers);
+        else snprintf(ly, sizeof ly, "--");
+        const char *val[3] = { v, r, ly };
+        for (int i = 0; i < 3; i++) {
+            int y = 326 + i * 56;
+            text(s, 224, y, lab[i], 2, i == 0 && heat ? C_WARN : C_DIM);
+            text(s, 224, y + 20, val[i], tw(val[i], 3) <= 212 ? 3 : 2, C_TXT);
+        }
     }
 
     progress(s, 514, (int)(k->prog * 100 + 0.5), col);
@@ -2074,6 +2107,13 @@ static void k_paint(const surf *s, const kstat *k, const kmenu *m, const btn *b,
     case K_FIL:
         k_temp(s, 24, 118, "NOZZLE", k->et, k->ett);
         k_temp(s, 248, 118, "BED", k->bt, k->btt);
+        if (m->scr == K_FIL && k_busy(k)) {
+            char jt[16];
+            snprintf(jt, sizeof jt, "%.0f C", k->ett);
+            rrect(s, 248, 436, 208, 130, 18, C_CARD, C_CARD2);
+            textc(s, 352, 470, "JOB TEMP", 2, C_DIM);
+            textc(s, 352, 498, jt, 3, C_TXT);
+        }
         if (m->scr == K_HOME && k_ended(k) && !m->ack) { k_end(s, k, m); break; }
         if (m->scr != K_HOME || k_idle(k)) break;
         rrect(s, 24, 282, 432, k_busy(k) && k->online && !strcmp(k->kstate, "ready") ? 220 : 306,
@@ -2324,8 +2364,10 @@ static int cmd_klipper(const char *dump, const char *hostport, const char *scree
             was = k_busy(&k);
             /* a job started elsewhere, a fault, or two idle minutes: back home;
              * TUNE and OBJECTS are the screens that live during a job */
-            int stay = m.scr == K_TUNE || m.scr == K_OBJS
-                     ? k_busy(&k) && k.online && !strcmp(k.kstate, "ready") : k_idle(&k);
+            int ok = k.online && !strcmp(k.kstate, "ready");
+            int stay = m.scr == K_TUNE || m.scr == K_OBJS ? k_busy(&k) && ok
+                     : m.scr == K_FIL && k_busy(&k) ? ok && !strcmp(k.pstate, "paused")
+                     : k_idle(&k);
             if (m.scr == K_OBJS && stay) m.nobj = k_objs(host, port);
             if (m.scr != K_HOME && (!stay || (!dump && t - touch_t > 120000))) {
                 m.scr = K_HOME;

@@ -77,8 +77,8 @@ Decision (S1, 2026-11-03): OrcaSlicer for the AD4 and the CC2.
 
 | ID | Item | Approach | Status |
 |---|---|---|---|
-| B1 | Sequential (one object after another) | Slicer "print sequence: by object" with the AD4's real clearances: measure the nozzle-to-gantry height and the head's footprint around the nozzle. A wrong number crashes the head into a finished part, so measure twice and test with two short objects. | ready |
-| B2 | Job queue | Moonraker's job queue (already loaded): queue several files; between jobs the panel asks "plate cleared?" before starting the next. Queue screen on the panel. | ready |
+| B1 | Sequential (one object after another) | Used by B2. Slicer "print sequence: by object" with the AD4's real clearances: measure the nozzle-to-gantry height and the head's footprint around the nozzle. A wrong number crashes the head into a finished part, so measure twice and test with two short objects. | ready |
+| B2 | Plate stops | [B2-plate-stops.md](B2-plate-stops.md). Several parts on one plate, by object; the printer stops between them (and at chosen layers) for a filament swap or magnets, READY on the panel carries on, no plate clearing. Macros, Orca hooks, panel and notification in place 2026-11-04 (panel md5 c2ee17e3). Left: measure the head clearance for Orca, then a test plate with Caleb. | wip |
 | B3 | Cancel one object | J7. | |
 
 ## 5. Multicolour without an AMS
@@ -108,7 +108,7 @@ Decision (S1, 2026-11-03): OrcaSlicer for the AD4 and the CC2.
 |---|---|---|---|
 | P1 | Job screen and tune | J5, J6, J7. | |
 | P2 | Swap screen | M1. | |
-| P3 | Queue and history | B2; last jobs with time, filament, result; reprint. | idea |
+| P3 | Queue and history | Last jobs with time, filament, result; reprint. | idea |
 | P4 | Light toggle | Installed 2026-11-03: TOOLS has a LIGHT button between BACK and ABOUT that cycles off, on, 30 % (`SET_PIN PIN=light`) and shows the current value; it is hidden if printer.cfg has no `[output_pin light]`. The camera needs no toggle: `ad4-cam` only opens it while someone watches. Caleb confirmed it on the printer 2026-11-03. | done |
 | P5 | Settings | Network (IP, link, Tailscale name of the host), screen brightness and sleep, buzzer volume, units. | idea |
 | P6 | Files on the stick | Print G-code straight from a USB stick in the printer: copy to Moonraker, then start. | idea |

@@ -11,7 +11,8 @@ passed on finish, pause and error when --image is set. The command is
 anything that sends a message: on Caleb's hub it is the lab's notify.sh
 (Home Assistant companion app).
 
-Events: started (min, with the finish time), paused (high), finished
+Events: started (min, with the finish time), paused (high, with the
+panel message such as "Next: object 2 of 3"), finished
 (default), cancelled (min), error (urgent). Nothing is sent for the state
 found at start-up, and nothing when Klipper loses the printer while idle
 (switching the printer off is normal).
@@ -58,7 +59,7 @@ def main():
     while True:
         try:
             st = get(a.moonraker, "/printer/objects/query?print_stats"
-                     "&display_status=progress&webhooks")["status"]
+                     "&display_status=progress,message&webhooks")["status"]
         except Exception:
             time.sleep(a.interval)
             continue
@@ -80,8 +81,10 @@ def main():
                     pass
                 send("printing", msg, "min")
             elif state == "paused":
-                pct = st.get("display_status", {}).get("progress", 0) * 100
-                send("paused", f"{job} at {pct:.0f} %", "high", True)
+                ds = st.get("display_status", {})
+                why = ds.get("message") or ""
+                send("paused", f"{job} at {ds.get('progress', 0) * 100:.0f} %"
+                     + (f": {why}" if why else ""), "high", True)
             elif state == "complete":
                 send("done", f"{job} in {hm(ps.get('total_duration', 0))}", "default", True)
             elif state == "cancelled":

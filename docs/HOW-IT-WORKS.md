@@ -100,6 +100,12 @@ power off and walk away.
    `exclude_object` (the one printing now in blue) and a button per object;
    two taps skip it (`EXCLUDE_OBJECT`). The last object left cannot be
    skipped: that is Cancel. Needs "label objects" in the slicer.
+   Paused, the home screen shows why (the `SET_DISPLAY_TEXT` message, e.g.
+   "Next: object 2 of 3" from a by-object plate) with READY, Tune, Cancel
+   and Filament; Filament then loads and unloads at the job's temperature
+   (`improvements/B2-plate-stops.md`). `PAUSE` lifts clear of every part
+   printed so far and brings the bed forward; `RESUME` returns over the part
+   before going down.
    After a job ends the home screen shows a card until OK: done, cancelled
    or failed (with Klipper's message), real time against the estimate,
    filament, cost, and REPRINT (two taps). The cost rates are read from

@@ -40,7 +40,7 @@ Klipper's `CONFIG_SERIAL_BAUD` falls back to 250000 unless
 | Hot end heatsink fan | PC2 | `heater_fan`, on above 50 °C |
 | Mainboard fan | PC5 | `controller_fan` |
 | Chamber fan | PB9 | `fan_generic` |
-| Unknown | PA4 | 0-100 % software PWM in the stock firmware, maybe the light |
+| Chamber light | PA4 | `[output_pin light]`, software PWM 0-100 % (stock `M144`-`M146`) |
 
 Z's driver is not on the TMC UART bus (fixed 1/8 step). Reading every mux
 state at UART addresses 0-3 finds only X, Y, E and a fourth TMC2209 on

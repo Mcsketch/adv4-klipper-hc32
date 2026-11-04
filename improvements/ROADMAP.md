@@ -11,7 +11,7 @@ processing on), Mainsail, `exclude_object`, `pause_resume`, `respond`,
 menus, `HOME_XYZ`, `PRINT_START` / `PRINT_END`, `LOAD_FILAMENT` /
 `UNLOAD_FILAMENT`.
 
-Missing that matters: no light control, no `M600`, `[bed_mesh]` present but no probe,
+Missing that matters: no `M600`, `[bed_mesh]` present but no probe,
 no recorded slicer choice, no pressure advance or input shaper calibration.
 
 Known limits that cap everything below:
@@ -48,7 +48,7 @@ numbers that matter, from the first layer to the last.
 | C2 | Stream server on the SoC | Done 2026-11-03: `src/ad4-cam.c`, port 8080, 1280x720 MJPEG at up to 15 fps. `/stream` and `/snapshot`, plus the stock UI's `/?action=stream` and `/?action=snapshot`. Up to 4 clients, a slow one skips frames. Opens the camera on the first request and closes it 10 s after the last, so it costs nothing while nobody watches. Measured: snapshot 1.3 s cold, stream about 9.4 fps in the dark, about 1 % CPU, 2.4 MB RSS. Started from `klipper-boot.sh` (`CAM_PORT`). | done |
 | C3 | Camera in Mainsail | Done 2026-11-03: Moonraker `[webcam ad4]` (mjpegstreamer, 16:9) with `/webcam/stream` and `/webcam/snapshot`, which Caddy :8095 proxies to the printer (browsers can't reach 192.168.100.x), so it works over Tailscale like Mainsail. Flip/rotate still unchecked: the chamber is too dark to tell until C5. | done |
 | C4 | Timelapse | moonraker-timelapse on the host, snapshot from C2 at each layer change (park optional). | idea |
-| C5 | Light | Stock firmware software-PWMs PA4 0-100 % (`M144`-`M146`). Under Klipper: `[output_pin light]` on PA4 with PWM; verify with Caleb watching (PA4 is not a heater, fan or stepper pin). Panel button, on during jobs, off after, Mainsail control. | ready |
+| C5 | Light | Done 2026-11-03 (Caleb at the printer): PA4 is the chamber light. `[output_pin light]`, software PWM at 1 kHz; the camera saw it dim at 30 % and full at 100 %. `PRINT_START` turns it on, `PRINT_END` off; Mainsail shows it under Miscellaneous. Camera image is upright, no flip needed. Panel button: P4. | done |
 | C6 | Failure detection | Spaghetti detection from the camera (Obico self-hosted, or a lighter model on the ProDesk). Watch the ProDesk's memory: it has OOM-crashed before. | idea, stretch |
 
 ## 3. Slicer
@@ -109,7 +109,7 @@ Decision (S1, 2026-11-03): OrcaSlicer for the AD4 and the CC2.
 | P1 | Job screen and tune | J5, J6, J7. | |
 | P2 | Swap screen | M1. | |
 | P3 | Queue and history | B2; last jobs with time, filament, result; reprint. | idea |
-| P4 | Light and camera toggles | C5; camera on/off to save SoC CPU when nobody watches. | after C2, C5 |
+| P4 | Light toggle | Light on/off (and dim) on the panel; `SET_PIN PIN=light`. The camera needs no toggle: `ad4-cam` only opens it while someone watches. | ready |
 | P5 | Settings | Network (IP, link, Tailscale name of the host), screen brightness and sleep, buzzer volume, units. | idea |
 | P6 | Files on the stick | Print G-code straight from a USB stick in the printer: copy to Moonraker, then start. | idea |
 | P7 | Look | Consistent icons, bigger touch targets, a clear active state; previews with `make -C src preview` before each install. | idea |
@@ -125,5 +125,5 @@ Decision (S1, 2026-11-03): OrcaSlicer for the AD4 and the CC2.
 
 1. S1 done (OrcaSlicer). S2: the Orca profile bundle (everything in J and M builds on its output).
 2. J1-J5: job info on the panel; the most visible win. J3-J5 installed, waiting for a real print.
-3. C5: light (C1-C3 camera done), then check the camera's orientation.
+3. C1-C3, C5 done: camera and light. P4 adds the panel toggles.
 4. M1 with Q6: filament swap and runout share one flow.

@@ -88,7 +88,7 @@ power off and walk away.
    slicer's metadata; starting a print takes two taps), Preheat (PLA, PETG,
    ABS, TPU, cooldown), Filament (load, unload, purge 20 mm through the
    `LOAD_FILAMENT` / `UNLOAD_FILAMENT` macros in printer.cfg) and Tools
-   (part and chamber fan, Move: home and jog, motors off, About with
+   (part and chamber fan, light off / on / 30 %, Move: home and jog, motors off, About with
    firmware restart). During a job the home screen shows the slicer's
    thumbnail, time left, the finish time, layer N / M, progress, elapsed
    time, part fan and filament used (see `improvements/ROADMAP.md`, J3-J5).

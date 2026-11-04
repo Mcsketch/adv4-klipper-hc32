@@ -1364,7 +1364,7 @@ typedef struct {
     char pstate[16], file[96];        /* print_stats */
     char ver[48];                     /* Klipper software_version */
     char homed[8];                    /* toolhead homed_axes */
-    double et, ett, bt, btt, prog, dur, tot, fused, pfan, cfan, pos[3];
+    double et, ett, bt, btt, prog, dur, tot, fused, pfan, cfan, light, pos[3];
     int layer, nlayer;                /* SET_PRINT_STATS_INFO, 0 = not sent */
 } kstat;
 
@@ -1385,7 +1385,7 @@ static void k_poll(const char *host, int port, kstat *k) {
     if (http_req(host, port, "GET",
                  "/printer/objects/query?print_stats=state,filename,print_duration,total_duration,filament_used,info"
                  "&extruder=temperature,target&heater_bed=temperature,target"
-                 "&display_status=progress&fan=speed&fan_generic%20chamber_fan=speed"
+                 "&display_status=progress&fan=speed&fan_generic%20chamber_fan=speed&output_pin%20light=value"
                  "&toolhead=position,homed_axes",
                  buf, sizeof buf) != 200)
         return;
@@ -1407,6 +1407,8 @@ static void k_poll(const char *host, int port, kstat *k) {
     if ((b = jobj(buf, "display_status", &e))) k->prog = jnum(b, e, "progress");
     if ((b = jobj(buf, "fan", &e))) k->pfan = jnum(b, e, "speed");
     if ((b = jobj(buf, "fan_generic chamber_fan", &e))) k->cfan = jnum(b, e, "speed");
+    /* [output_pin light] (PA4); -1 hides the button when printer.cfg has none */
+    k->light = (b = jobj(buf, "output_pin light", &e)) ? jnum(b, e, "value") : -1;
     if ((b = jobj(buf, "toolhead", &e))) {
         const char *v = jval(b, e, "position");
         if (v) sscanf(v, "[%lf ,%lf ,%lf", &k->pos[0], &k->pos[1], &k->pos[2]);
@@ -1598,7 +1600,7 @@ static const double k_step[] = { 10, 1, 0.1 };
 #define K_GS "/printer/gcode/script?script="
 
 static int k_buttons(const kstat *k, const kmenu *m, btn *b) {
-    static char pf[32], cf[32];
+    static char pf[32], cf[32], lf[32];
     int n = 0;
     if (!k->online || !strcmp(k->kstate, "startup")) return 0;
     if (strcmp(k->kstate, "ready")) {
@@ -1654,8 +1656,22 @@ static int k_buttons(const kstat *k, const kmenu *m, btn *b) {
                     k->cfan > 0 ? C_ACC : K_G1, k->cfan > 0 ? C_ACCD : K_G2);
         b[n++] = KT(24, 436, 208, "MOVE", "move", C_ACC, C_ACCD);
         b[n++] = KT(248, 436, 208, "MOTORS\nOFF", K_GS "M84", K_G1, K_G2);
-        b[n++] = KB(24, 208, "BACK", "back", K_G1, K_G2, 0);
-        b[n++] = KB(248, 208, "ABOUT", "about", K_G1, K_G2, 0);
+        if (k->light < 0) {
+            b[n++] = KB(24, 208, "BACK", "back", K_G1, K_G2, 0);
+            b[n++] = KB(248, 208, "ABOUT", "about", K_G1, K_G2, 0);
+            break;
+        }
+        /* LIGHT cycles off -> on -> 30 % -> off */
+        if (k->light <= 0) snprintf(lf, sizeof lf, "LIGHT\noff");
+        else if (k->light >= 1) snprintf(lf, sizeof lf, "LIGHT\non");
+        else snprintf(lf, sizeof lf, "LIGHT\n%.0f%%", k->light * 100);
+        b[n++] = KB(24, 136, "BACK", "back", K_G1, K_G2, 0);
+        b[n++] = (btn){ 172, 600, 136, 120, lf,
+                        k->light <= 0 ? K_GS "SET_PIN%20PIN%3Dlight%20VALUE%3D1"
+                        : k->light >= 1 ? K_GS "SET_PIN%20PIN%3Dlight%20VALUE%3D0.3"
+                        : K_GS "SET_PIN%20PIN%3Dlight%20VALUE%3D0",
+                        k->light > 0 ? C_WARN : K_G1, k->light > 0 ? 0xa86f22u : K_G2, 2, 0, 0 };
+        b[n++] = KB(320, 136, "ABOUT", "about", K_G1, K_G2, 0);
         break;
     case K_ABOUT:
         b[n++] = KB(24, 208, "BACK", "back", K_G1, K_G2, 0);

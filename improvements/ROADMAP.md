@@ -109,7 +109,7 @@ Decision (S1, 2026-11-03): OrcaSlicer for the AD4 and the CC2.
 | P1 | Job screen and tune | J5, J6, J7. | |
 | P2 | Swap screen | M1. | |
 | P3 | Queue and history | B2; last jobs with time, filament, result; reprint. | idea |
-| P4 | Light toggle | Light on/off (and dim) on the panel; `SET_PIN PIN=light`. The camera needs no toggle: `ad4-cam` only opens it while someone watches. | ready |
+| P4 | Light toggle | Installed 2026-11-03: TOOLS has a LIGHT button between BACK and ABOUT that cycles off, on, 30 % (`SET_PIN PIN=light`) and shows the current value; it is hidden if printer.cfg has no `[output_pin light]`. The camera needs no toggle: `ad4-cam` only opens it while someone watches. Left: Caleb taps it once. | wip |
 | P5 | Settings | Network (IP, link, Tailscale name of the host), screen brightness and sleep, buzzer volume, units. | idea |
 | P6 | Files on the stick | Print G-code straight from a USB stick in the printer: copy to Moonraker, then start. | idea |
 | P7 | Look | Consistent icons, bigger touch targets, a clear active state; previews with `make -C src preview` before each install. | idea |
@@ -125,5 +125,5 @@ Decision (S1, 2026-11-03): OrcaSlicer for the AD4 and the CC2.
 
 1. S1 done (OrcaSlicer). S2: the Orca profile bundle (everything in J and M builds on its output).
 2. J1-J5: job info on the panel; the most visible win. J3-J5 installed, waiting for a real print.
-3. C1-C3, C5 done: camera and light. P4 adds the panel toggles.
+3. C1-C3, C5 done: camera and light. P4 (panel light button) installed.
 4. M1 with Q6: filament swap and runout share one flow.

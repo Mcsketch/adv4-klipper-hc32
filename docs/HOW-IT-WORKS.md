@@ -96,6 +96,12 @@ power off and walk away.
    steps, down only: 60 mm/s is a slicer cap), flow (2 %), Z offset
    (0.02 mm, applied at once), nozzle (5 C) and part fan (10 %); a value
    off its default is amber. The Z offset lasts until Klipper restarts.
+   Tune's Objects page draws the bed with each object's outline from
+   `exclude_object` (the one printing now in blue) and a button per object;
+   two taps skip it (`EXCLUDE_OBJECT`). The last object left cannot be
+   skipped: that is Cancel. Needs "label objects" in the slicer.
+   To swap the panel binary on a running printer, kill the
+   `ad4-screen klipper` process, not the `sh -c while` loop around it.
    Its HOME runs `HOME_XYZ` (`host/home_xyz.py`): all
    three axes in one move, each at Z's 5 mm/s; `G28` still homes one axis
    at a time. A job starting from anywhere, or two minutes without a

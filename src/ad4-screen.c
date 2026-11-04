@@ -1589,9 +1589,84 @@ static void k_hm(double sec, char *o, int n) {
 
 /* ---- screens. Buttons whose token starts with '/' POST that path to
  * Moonraker; the rest move between screens. */
-enum { K_HOME, K_FILES, K_FILE, K_HEAT, K_TOOLS, K_ABOUT, K_FIL, K_MOVE, K_TUNE };
+/* ---- J7: the job's objects from exclude_object (needs "label objects" in the slicer) */
+#define K_MAXO 6
+#define K_MAXP 24
 typedef struct {
-    int scr, page, sel, nfiles, ft, step;
+    char name[64];
+    double cx, cy;
+    int np, excl, cur;
+    double p[K_MAXP][2];
+} kobj;
+static kobj ko[K_MAXO];
+
+/* Returns the number of objects, or -1 when Moonraker did not answer. */
+static int k_objs(const char *host, int port) {
+    static char buf[32768];
+    const char *b, *e;
+    int n = 0;
+    if (http_req(host, port, "GET", "/printer/objects/query?exclude_object", buf, sizeof buf) != 200 ||
+        !(b = jobj(buf, "exclude_object", &e)))
+        return -1;
+    char cur[64] = "";
+    jstr(b, e, "current_object", cur, sizeof cur);
+    const char *xl = jval(b, e, "excluded_objects"), *xe = xl ? strchr(xl, ']') : NULL;
+    const char *p = jval(b, e, "objects");
+    if (!p || *p != '[') return 0;
+    for (p++; n < K_MAXO; ) {
+        while (*p == ' ' || *p == ',') p++;
+        if (*p != '{') break;
+        const char *q = strchr(p, '}');
+        if (!q) break;
+        kobj *o = &ko[n];
+        memset(o, 0, sizeof *o);
+        jstr(p, q, "name", o->name, sizeof o->name);
+        const char *v = jval(p, q, "center");
+        if (v) sscanf(v, "[%lf ,%lf", &o->cx, &o->cy);
+        if ((v = jval(p, q, "polygon")))
+            for (const char *r = v + 1; o->np < K_MAXP && (r = strchr(r, '[')) && r < q; r++)
+                if (sscanf(r, "[%lf ,%lf", &o->p[o->np][0], &o->p[o->np][1]) == 2) o->np++;
+        char pat[72];
+        snprintf(pat, sizeof pat, "\"%s\"", o->name);
+        const char *x = xl ? strstr(xl, pat) : NULL;
+        o->excl = x && x < xe;
+        o->cur = !strcmp(o->name, cur);
+        if (o->name[0]) n++;
+        p = q + 1;
+    }
+    return n;
+}
+
+/* "block.stl_id_0_copy_0" -> "block" */
+static void k_oname(const char *n, char *o, int sz) {
+    int l = (int)strlen(n);
+    const char *c = strstr(n, ".stl");
+    if (!c) c = strstr(n, "_id_");
+    if (c) l = (int)(c - n);
+    if (l > 9) l = 9;
+    snprintf(o, sz, "%.*s", l, n);
+}
+
+static void k_line(const surf *s, int x0, int y0, int x1, int y1, unsigned c) {
+    int dx = abs(x1 - x0), dy = -abs(y1 - y0), sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
+    for (int err = dx + dy;;) {
+        fill(s, x0, y0, 2, 2, c);
+        if (x0 == x1 && y0 == y1) break;
+        int e2 = 2 * err;
+        if (e2 >= dy) { err += dy; x0 += sx; }
+        if (e2 <= dx) { err += dx; y0 += sy; }
+    }
+}
+
+/* the bed, 220 x 200 mm at 1.2 px/mm, back edge at the top */
+#define K_BX 108
+#define K_BY 108
+#define K_BMX(x) (K_BX + (int)((x) * 1.2))
+#define K_BMY(y) (K_BY + (int)((200 - (y)) * 1.2))
+
+enum { K_HOME, K_FILES, K_FILE, K_HEAT, K_TOOLS, K_ABOUT, K_FIL, K_MOVE, K_TUNE, K_OBJS };
+typedef struct {
+    int scr, page, sel, nfiles, ft, step, nobj;
     kmeta meta; kimg img;             /* the file picked in PRINT */
     char jfile[96]; kmeta jmeta; kimg jimg; long jt;   /* the running job */
 } kmenu;
@@ -1640,6 +1715,27 @@ static int k_tune(const kstat *k, btn *b) {
             b[n++] = (btn){ d ? 346 : 24, 108 + i * 96, 110, 88, d ? "+" : "-",
                             ok ? cmd[i][d] : "none", ok ? C_ACC : K_G2, ok ? C_ACCD : K_G2, 4, 0, 0 };
         }
+    b[n++] = KB(24, 208, "BACK", "back", K_G1, K_G2, 0);
+    b[n++] = KB(248, 208, "OBJECTS", "objs", C_ACC, C_ACCD, 0);
+    return n;
+}
+
+/* OBJECTS: two columns of the job's objects; a tap (and a confirm) skips one */
+static int k_objbtn(const kmenu *m, btn *b) {
+    static char lab[K_MAXO][32], cmd[K_MAXO][240];
+    int n = 0;
+    for (int i = 0; i < m->nobj; i++) {
+        char nm[16], en[160];
+        k_oname(ko[i].name, nm, sizeof nm);
+        if (ko[i].excl) snprintf(lab[i], sizeof lab[i], "%d skipped", i + 1);
+        else snprintf(lab[i], sizeof lab[i], "%d %s", i + 1, nm);
+        urlenc(ko[i].name, en, sizeof en);
+        snprintf(cmd[i], sizeof cmd[i], K_GS "EXCLUDE_OBJECT%%20NAME%%3D%s", en);
+        int on = !ko[i].excl && m->nobj > 1;   /* never the last one: that is CANCEL */
+        b[n++] = (btn){ 24 + i % 2 * 224, 372 + i / 2 * 76, 208, 68, lab[i], on ? cmd[i] : "none",
+                        ko[i].excl ? K_G2 : ko[i].cur ? C_ACC : K_G1,
+                        ko[i].excl ? K_G2 : ko[i].cur ? C_ACCD : K_G2, 2, on, 0 };
+    }
     b[n++] = KB(24, 432, "BACK", "back", K_G1, K_G2, 0);
     return n;
 }
@@ -1654,6 +1750,7 @@ static int k_buttons(const kstat *k, const kmenu *m, btn *b) {
     }
     if (k_busy(k)) {
         if (m->scr == K_TUNE) return k_tune(k, b);
+        if (m->scr == K_OBJS) return k_objbtn(m, b);
         if (!strcmp(k->pstate, "printing"))
             b[0] = KB(24, 136, "PAUSE", "/printer/print/pause", C_WARN, 0xa86f22u, 0);
         else
@@ -1882,7 +1979,7 @@ static void k_paint(const surf *s, const kstat *k, const kmenu *m, const btn *b,
                     int nb, int armed, const char *eth, const char *wifi,
                     const char *note, const char *hostport) {
     static const char *const title[] = {
-        "ADVENTURER 4", "PRINT", "PRINT", "PREHEAT", "TOOLS", "ABOUT", "FILAMENT", "MOVE", "TUNE" };
+        "ADVENTURER 4", "PRINT", "PRINT", "PREHEAT", "TOOLS", "ABOUT", "FILAMENT", "MOVE", "TUNE", "OBJECTS" };
     const char *lab, *foot = "";
     char pg[32];
     unsigned col = k_chip(k, &lab);
@@ -1946,6 +2043,27 @@ static void k_paint(const surf *s, const kstat *k, const kmenu *m, const btn *b,
         }
         if (!strcmp(k->pstate, "paused")) foot = "paused";
         break;
+    case K_OBJS: {
+        rrect(s, K_BX - 4, K_BY - 4, 272, 248, 10, C_BG1, C_BG1);
+        if (m->nobj <= 0) {
+            textc_wrap(s, 240, 180, m->nobj < 0 ? "Could not read the objects."
+                       : "No object labels in this file. Turn on label objects in the slicer.",
+                       2, C_DIM, 240);
+            break;
+        }
+        for (int i = 0; i < m->nobj; i++) {
+            const kobj *o = &ko[i];
+            unsigned c = o->excl ? C_CARD2 : o->cur ? C_ACC : C_TXT;
+            for (int j = 0; j < o->np; j++) {
+                int a = (j + 1) % o->np;
+                k_line(s, K_BMX(o->p[j][0]), K_BMY(o->p[j][1]), K_BMX(o->p[a][0]), K_BMY(o->p[a][1]), c);
+            }
+            char nb[4];
+            snprintf(nb, sizeof nb, "%d", i + 1);
+            textc(s, K_BMX(o->cx), K_BMY(o->cy) - 8, nb, 2, o->excl ? C_DIM : c);
+        }
+        break;
+    }
     case K_ABOUT: {
         const char *kv[] = {
             "PRINTER ETH0", eth, "PRINTER WIFI", wifi, "MOONRAKER", hostport,
@@ -2005,13 +2123,15 @@ static void k_nav(const char *host, int port, kmenu *m, const btn *b) {
     else if (!strcmp(t, "fil")) m->scr = K_FIL;
     else if (!strcmp(t, "move")) m->scr = K_MOVE;
     else if (!strcmp(t, "tune")) m->scr = K_TUNE;
+    else if (!strcmp(t, "objs")) { m->scr = K_OBJS; m->nobj = k_objs(host, port); }
     else if (!strcmp(t, "ftemp")) m->ft = (m->ft + 1) % 4;
     else if (!strcmp(t, "step")) m->step = (m->step + 1) % 3;
     else if (!strcmp(t, "prev")) m->page--;
     else if (!strcmp(t, "next")) m->page++;
     else if (!strcmp(t, "back"))
         m->scr = m->scr == K_FILE ? K_FILES
-               : m->scr == K_ABOUT || m->scr == K_MOVE ? K_TOOLS : K_HOME;
+               : m->scr == K_ABOUT || m->scr == K_MOVE ? K_TOOLS
+               : m->scr == K_OBJS ? K_TUNE : K_HOME;
 }
 
 static int cmd_klipper(const char *dump, const char *hostport, const char *screen) {
@@ -2082,9 +2202,10 @@ static int cmd_klipper(const char *dump, const char *hostport, const char *scree
                 m.jt = t;
             }
             /* a job started elsewhere, a fault, or two idle minutes: back home;
-             * TUNE is the one screen that lives during a job */
-            int stay = m.scr == K_TUNE ? k_busy(&k) && k.online && !strcmp(k.kstate, "ready")
-                                       : k_idle(&k);
+             * TUNE and OBJECTS are the screens that live during a job */
+            int stay = m.scr == K_TUNE || m.scr == K_OBJS
+                     ? k_busy(&k) && k.online && !strcmp(k.kstate, "ready") : k_idle(&k);
+            if (m.scr == K_OBJS && stay) m.nobj = k_objs(host, port);
             if (m.scr != K_HOME && (!stay || (!dump && t - touch_t > 120000))) {
                 m.scr = K_HOME;
                 armed = -1;

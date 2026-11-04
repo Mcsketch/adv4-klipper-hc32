@@ -67,7 +67,7 @@ Back to stock: [docs/ROLLBACK.md](docs/ROLLBACK.md), the same thing with the
 stick/install/     install stick script          stick/common/   shared: lib.sh, boot script, settings
 stick/rollback/    rollback stick script         src/            ad4-bridge, ad4-screen, ad4-buzz, ad4-cam (C)
 bin/               prebuilt ARM binaries         firmware/       Klipper defconfig, hex, build.sh
-host/              printer.cfg, Klipper patch    tools/          release builder, dev tools
+host/              printer.cfg, patch, notify    tools/          release builder, dev tools
 docs/              documentation                 experimental/   HC32 (HD board) port, unverified
 improvements/      roadmap of extra features
 ```

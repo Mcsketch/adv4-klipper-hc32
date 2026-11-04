@@ -71,6 +71,18 @@ handle_path /webcam/* {
 }
 ```
 
+Phone notifications (optional): `host/ad4-notify.py` watches Moonraker and
+runs a command of yours on print start, pause, finish, cancel and failure:
+`CMD TITLE MESSAGE PRIORITY [SNAPSHOT_URL]`. Wrap whatever you send with
+(ntfy, Home Assistant, Pushover) in a small script and run it as a service:
+
+```
+python3 host/ad4-notify.py --cmd /usr/local/bin/my-notify \
+    --image http://HOST:PORT/webcam/snapshot
+```
+
+The snapshot URL is fetched by the phone, so it must be reachable from there.
+
 ## 2. The stick
 
 Unzip `ad4-klipper-install-VERSION.zip` onto the empty FAT32 stick, so the

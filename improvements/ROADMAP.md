@@ -88,7 +88,7 @@ Decision (S1, 2026-11-03): OrcaSlicer for the AD4 and the CC2.
 | M1 | `M600` filament change | Macro: `PAUSE`, lift, park front, retract and unload, wait. Panel shows a swap screen (new colour's name and swatch from the slicer, Unload / Load / Purge / Resume), buzzer, phone notification. Resume purges, wipes, returns. | ready |
 | M2 | Colour change by layer | Slicer colour-change at height inserts `M600`. Flags, text, logos, topographic maps. | after M1 |
 | M3 | Several colours per layer | Slicer single-extruder multi-material with `T0`-`Tn` mapped to an M1-style manual swap plus a prime tower. Every swap needs a person, so worth it only for a few swaps per print; the slicer's swap count shows the cost before printing. | after M1 |
-| M4 | Notify the phone | Moonraker notifier (Home Assistant or ntfy) on swap, pause, finish, error. | ready |
+| M4 | Notify the phone | Done 2026-11-03: `host/ad4-notify.py` polls Moonraker's `print_stats` every 5 s and runs a command on each event: started (with the finish clock from the file's estimate), paused, done (with duration), cancelled, failed (with Klipper's message; a shutdown mid-job counts). Pause, done and failure attach the camera snapshot. Nothing is sent for switching the printer off while idle. Caleb's hub runs it as `ad4-notify.service` through the lab's `notify.sh` (Home Assistant push). Swap (M1) will notify through `PAUSE`. | done |
 
 ## 6. Speed and quality
 
@@ -126,4 +126,6 @@ Decision (S1, 2026-11-03): OrcaSlicer for the AD4 and the CC2.
 1. S1 done (OrcaSlicer). S2: the Orca profile bundle (everything in J and M builds on its output).
 2. J1-J5: job info on the panel; the most visible win. J3-J5 installed, waiting for a real print.
 3. C1-C3, C5 done: camera and light. P4 (panel light button) installed.
-4. M1 with Q6: filament swap and runout share one flow.
+4. M4 done: phone pushes for start, pause, done, failure.
+5. J6, J7: tune and cancel one object from the panel during a job.
+6. M1 with Q6: filament swap and runout share one flow (deferred by Caleb 2026-11-03).

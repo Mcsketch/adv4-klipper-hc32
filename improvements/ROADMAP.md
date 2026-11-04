@@ -65,13 +65,12 @@ height-range modifiers, calibration tools, editable profiles kept in git.
 | PrusaSlicer | Solid, good multi-material and sequential. | Fewer calibration tools, weaker Klipper extras. |
 | Bambu Studio, Cura | | Klipper support and profile control are weaker. |
 
-Recommendation: OrcaSlicer, unless its CC2 support is worse than
-ElegooSlicer's; then stay on ElegooSlicer, since the profiles carry over.
+Decision (S1, 2026-11-03): OrcaSlicer for the AD4 and the CC2.
 
 | ID | Item | Approach | Status |
 |---|---|---|---|
-| S1 | Decide | Install Orca next to ElegooSlicer, slice the same model for the AD4 in both, compare. Caleb picks. | ready |
-| S2 | AD4 profile bundle in git | `improvements/slicer/`: printer, filament and process profiles for the chosen slicer, with `PRINT_START BED= EXTRUDER=`, labels on, thumbnails 32x32 and 160x160 PNG, `M73`, Klipper flavour, klipper_estimator post-process, 60 mm/s cap. | after S1 |
+| S1 | Decide | Done 2026-11-03: OrcaSlicer 2.4.2 and ElegooSlicer 1.5.3.5 sliced the same two-object plate with the same AD4 presets to identical G-code (22m 24s, 100 layers, 1148 mm, `M73`, `EXCLUDE_OBJECT_DEFINE`); Moonraker reads slicer, time, layers and filament from both. Findings: the current ElegooSlicer process presets have label objects and `exclude_object` off (J7 needs them on); CLI slicing writes no thumbnails, only the GUI does. Both ship CC2 and AD4 profiles. **Caleb picked OrcaSlicer for both printers**; ElegooSlicer stays installed until Orca has sent a job to the CC2 with Caleb at it. | done |
+| S2 | AD4 profile bundle in git | `improvements/slicer/`: OrcaSlicer printer, filament and process profiles, with `PRINT_START BED= EXTRUDER=`, labels on, thumbnails 32x32 and 160x160 PNG, `M73`, Klipper flavour, klipper_estimator post-process, 60 mm/s cap. Then send one job from Orca to the CC2 (Caleb at it). | ready |
 | S3 | Calibrate | PA, flow, temperature towers per filament with the slicer's tools; results into the filament profiles and `printer.cfg`. Input shaper by ringing tower (no accelerometer). | after S2 |
 | S4 | FreeCAD Slicer workbench | Caleb's own workbench already slices for the AD4; make it use the same profiles and send to Moonraker. Tracked in its own entry. | idea |
 
@@ -125,7 +124,7 @@ ElegooSlicer's; then stay on ElegooSlicer, since the profiles carry over.
 
 ## Suggested first steps
 
-1. S1: pick the slicer (everything in J and M builds on its output).
+1. S1 done (OrcaSlicer). S2: the Orca profile bundle (everything in J and M builds on its output).
 2. J1-J5: job info on the panel; the most visible win.
 3. C1-C3, C5: camera and light.
 4. M1 with Q6: filament swap and runout share one flow.

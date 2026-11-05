@@ -80,6 +80,7 @@ Decision (S1, 2026-11-03): OrcaSlicer for the AD4 and the CC2.
 | B1 | Sequential (one object after another) | Used by B2. Slicer "print sequence: by object" with the AD4's real clearances: radius 60 mm measured 2026-11-04 (nozzle 30 mm from the head's left, 50 from its back); height to rod 24.93 (Orca's, below the measured ~30). Test with two short objects. | ready |
 | B2 | Plate stops | [B2-plate-stops.md](B2-plate-stops.md). Several parts on one plate, by object; the printer stops between them (and at chosen layers) for a filament swap or magnets, READY on the panel carries on, no plate clearing. Macros, Orca hooks, panel and notification in place 2026-11-04 (panel md5 c2ee17e3). Clearance in the preset 2026-11-04. Left: a test plate with Caleb. | wip |
 | B3 | Cancel one object | J7. | |
+| B4 | Redo a failed part | While stopped (any pause, a plate stop, a layer pause), REDO on the stop card (two taps) runs `PLATE_REDO`: purge 20 mm, rewind the file to where the current part starts (at a between-objects stop: the part just finished), and on READY reprint it from its first layer. `PRINT_START` and `PLATE_NEXT_OBJECT` note each part's start; the replay skips the heating/homing or the stop. Clear the failed part (on the first part also the skirt) before READY. Written 2026-11-05 after a part printed with no filament; done by hand on that job (`M26`). Left: go live after the job, test. | wip |
 
 ## 5. Multicolour without an AMS
 

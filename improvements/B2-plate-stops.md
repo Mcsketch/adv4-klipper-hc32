@@ -58,6 +58,12 @@ the job's own temperature; the temperature and cooldown buttons are hidden,
 so the job resumes at the slicer's temperature. The phone notification for
 a pause carries the same message.
 
+A failed part: tap REDO on the stop card (twice). `PLATE_REDO` purges 20 mm,
+rewinds the job to the start of the current part (at a between-objects stop,
+the part just finished) and shows "Redo object N". Take the failed part off
+(on the first part also the skirt), tap READY, and the part prints again from
+its first layer. Roadmap B4.
+
 ## Using it
 
 Plate of parts:

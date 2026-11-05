@@ -2016,9 +2016,10 @@ static int k_buttons(const kstat *k, const kmenu *m, btn *b) {
         b[2] = KB(320, 136, "CANCEL", "/printer/print/cancel", C_ERRD, 0x6d2530u, 1);
         for (int i = 0; i < 3; i++) b[i].sc = 2;   /* three across: CANCEL fits at 2 */
         if (!paused) return 3;
-        /* inside the stop card (k_stop) */
-        b[3] = (btn){ 204, 426, 232, 60, "FILAMENT", "fil", C_ACC, C_ACCD, 2, 0, 0 };
-        return 4;
+        /* inside the stop card (k_stop); REDO = printer.cfg's PLATE_REDO (B4) */
+        b[3] = (btn){ 204, 426, 140, 60, "FILAMENT", "fil", C_ACC, C_ACCD, 2, 0, 0 };
+        b[4] = (btn){ 352, 426, 84, 60, "REDO", K_GS "PLATE_REDO", C_WARN, 0xa86f22u, 2, 1, 0 };
+        return 5;
     }
     switch (m->scr) {
     case K_HOME:

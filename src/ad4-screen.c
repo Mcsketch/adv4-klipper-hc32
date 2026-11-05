@@ -1532,16 +1532,7 @@ typedef struct {
     char thumb[160];                  /* relative to the file's folder */
 } kmeta;
 
-static void k_meta(const char *host, int port, const char *name, kmeta *m) {
-    static char buf[16384];
-    char path[640], en[400];
-    const char *b, *e;
-    memset(m, 0, sizeof *m);
-    urlenc(name, en, sizeof en);
-    snprintf(path, sizeof path, "/server/files/metadata?filename=%s", en);
-    if (http_req(host, port, "GET", path, buf, sizeof buf) != 200 ||
-        !(b = jobj(buf, "result", &e)))
-        return;
+static void k_meta_at(const char *b, const char *e, kmeta *m) {
     m->ok = 1;
     m->est = jnum(b, e, "estimated_time");
     m->fil = jnum(b, e, "filament_total");
@@ -1565,6 +1556,46 @@ static void k_meta(const char *host, int port, const char *name, kmeta *m) {
             jstr(o, c, "relative_path", m->thumb, sizeof m->thumb);
         }
     }
+}
+
+static void k_meta(const char *host, int port, const char *name, kmeta *m) {
+    static char buf[16384];
+    char path[640], en[400];
+    const char *b, *e;
+    memset(m, 0, sizeof *m);
+    urlenc(name, en, sizeof en);
+    snprintf(path, sizeof path, "/server/files/metadata?filename=%s", en);
+    if (http_req(host, port, "GET", path, buf, sizeof buf) == 200 &&
+        (b = jobj(buf, "result", &e)))
+        k_meta_at(b, e, m);
+}
+
+/* ---- P3: the last jobs from Moonraker's history, newest first */
+typedef struct { char name[128], status[20]; double end, dur, fused; int exists; } kjob;
+static kjob kh[K_ROWS];
+
+/* Returns the number of jobs, or -1 when Moonraker did not answer. Each
+ * job's metadata goes to meta[i] (for the thumbnail and grams). */
+static int k_hist(const char *host, int port, kmeta *meta) {
+    static char buf[32768];
+    int n = 0;
+    if (http_req(host, port, "GET", "/server/history/list?limit=6&order=desc", buf, sizeof buf) != 200)
+        return -1;
+    for (const char *p = strstr(buf, "{\"job_id\":"); p && n < K_ROWS; n++) {
+        const char *q = strstr(p + 1, "{\"job_id\":"), *e = q ? q : buf + strlen(buf), *mb, *me;
+        kjob *j = &kh[n];
+        jstr(p, e, "filename", j->name, sizeof j->name);
+        jstr(p, e, "status", j->status, sizeof j->status);
+        j->end = jnum(p, e, "end_time");
+        j->dur = jnum(p, e, "print_duration");
+        j->fused = jnum(p, e, "filament_used");
+        const char *v = jval(p, e, "exists");
+        j->exists = v && *v == 't';
+        memset(&meta[n], 0, sizeof meta[n]);
+        if ((mb = jobj(p, "metadata", &me)) && me < e) k_meta_at(mb, me, &meta[n]);
+        p = q;
+    }
+    return n;
 }
 
 typedef struct { unsigned char *px; int w, h; } kimg;
@@ -1703,12 +1734,12 @@ static void k_line(const surf *s, int x0, int y0, int x1, int y1, unsigned c) {
 #define K_BMX(x) (K_BX + (int)((x) * 1.2))
 #define K_BMY(y) (K_BY + (int)((200 - (y)) * 1.2))
 
-enum { K_HOME, K_FILES, K_FILE, K_HEAT, K_TOOLS, K_ABOUT, K_FIL, K_MOVE, K_TUNE, K_OBJS };
+enum { K_HOME, K_FILES, K_FILE, K_HEAT, K_TOOLS, K_ABOUT, K_FIL, K_MOVE, K_TUNE, K_OBJS, K_HIST };
 typedef struct {
-    int scr, page, sel, nfiles, ft, step, nobj;
+    int scr, page, sel, nfiles, ft, step, nobj, nhist;
     kmeta meta; kimg img;             /* the file picked in PRINT */
     char jfile[96]; kmeta jmeta; kimg jimg; long jt;   /* the running job */
-    kmeta rmeta[K_ROWS]; kimg rimg[K_ROWS];            /* the Print list's visible rows */
+    kmeta rmeta[K_ROWS]; kimg rimg[K_ROWS];            /* the Print list's or History's rows */
     int ack;                          /* the finished job's card was dismissed */
     double rate[3];                   /* $/kg, g/cm3, $/printer hour; 0 = not set */
 } kmenu;
@@ -1850,7 +1881,8 @@ static int k_buttons(const kstat *k, const kmenu *m, btn *b) {
             b[n++] = KB(248, 208, "REPRINT", "again", C_OK, 0x1f8a60u, 1);
             break;
         }
-        b[n++] = (btn){ 24, 290, 432, 130, "PRINT", "files", C_OK, 0x1f8a60u, 4, 0, 0 };
+        b[n++] = (btn){ 24, 290, 284, 130, "PRINT", "files", C_OK, 0x1f8a60u, 4, 0, 0 };
+        b[n++] = (btn){ 320, 290, 136, 130, "HISTORY", "hist", C_ACC, C_ACCD, 2, 0, 0 };
         b[n++] = KT(24, 436, 208, "PREHEAT", "heat", C_WARN, 0xa86f22u);
         b[n++] = KT(248, 436, 208, "FILAMENT", "fil", C_ACC, C_ACCD);
         b[n++] = KB(24, 208, "TOOLS", "tools", C_ACC, C_ACCD, 0);
@@ -1868,6 +1900,13 @@ static int k_buttons(const kstat *k, const kmenu *m, btn *b) {
     case K_FILE:
         b[n++] = KB(24, 208, "BACK", "back", K_G1, K_G2, 0);
         b[n++] = KB(248, 208, "PRINT", "print", C_OK, 0x1f8a60u, 1);
+        break;
+    case K_HIST:
+        /* two taps on a job print it again; a deleted file cannot */
+        for (int i = 0; i < m->nhist; i++)
+            b[n++] = (btn){ 24, 108 + i * 80, 432, 72, kh[i].name, kh[i].exists ? "hjob" : "hgone",
+                            0, 0, 0, kh[i].exists, i };
+        b[n++] = KB(24, 432, "BACK", "back", K_G1, K_G2, 0);
         break;
     case K_HEAT:
         b[n++] = KT(24, 290, 208, "PLA\n210/60", K_GS "M104%20S210%0AM140%20S60", C_WARN, 0xa86f22u);
@@ -2006,6 +2045,44 @@ static void k_file_row(const surf *s, const btn *b, const kmenu *m) {
     } else
         k_size(f->size, ln, sizeof ln);
     text(s, b->x + 76, b->y + 44, ln, 2, C_DIM);
+}
+
+/* name; result and printed time; when, filament, grams */
+static void k_hist_row(const surf *s, const btn *b, const kmenu *m, int armed) {
+    const kjob *j = &kh[b->arg];
+    const kmeta *t = &m->rmeta[b->arg];
+    char nm[32], hm[16], ln[64], when[24] = "";
+    const char *f = strrchr(j->name, '/');
+    f = f ? f + 1 : j->name;
+    int l = (int)strlen(f);
+    if (l > 6 && !strcmp(f + l - 6, ".gcode")) l -= 6;
+    if (l > 21) snprintf(nm, sizeof nm, "%.19s..", f);
+    else snprintf(nm, sizeof nm, "%.*s", l, f);
+    rrect(s, b->x, b->y, b->w, b->h, 14, armed ? C_ERRD : C_CARD, armed ? C_ERRD : C_CARD2);
+    rrect(s, b->x + 8, b->y + 8, 56, 56, 8, C_BG1, C_BG1);
+    if (m->rimg[b->arg].px) k_img(s, b->x + 8, b->y + 8, 56, &m->rimg[b->arg], C_BG1);
+    text(s, b->x + 76, b->y + 8, nm, 2, j->exists ? C_TXT : C_DIM);
+    const char *st = j->status;
+    unsigned c = C_ERR;
+    if (!strcmp(st, "completed")) { st = "DONE"; c = C_OK; }
+    else if (!strcmp(st, "cancelled")) { st = "CANCELLED"; c = C_WARN; }
+    else if (!strcmp(st, "in_progress")) { st = "PRINTING"; c = C_ACC; }
+    else st = "FAILED";
+    text(s, b->x + 76, b->y + 32, st, 2, c);
+    k_hm(j->dur, hm, sizeof hm);
+    text(s, b->x + 76 + tw(st, 2) + 16, b->y + 32, hm, 2, C_DIM);
+    time_t te = (time_t)j->end;
+    struct tm tm;
+    if (te > 1700000000) {
+        localtime_r(&te, &tm);
+        strftime(when, sizeof when, "%b %d %H:%M", &tm);
+        if (!tm.tm_gmtoff) strcat(when, " UTC");
+    }
+    double g = t->grams > 0 && t->fil > 0 ? t->grams * j->fused / t->fil : 0;
+    if (g > 0) snprintf(ln, sizeof ln, "%s   %.2f m  %.0f g", when, j->fused / 1000, g);
+    else snprintf(ln, sizeof ln, "%s   %.2f m", when, j->fused / 1000);
+    if (!j->exists) strcat(ln, "   file deleted");
+    text(s, b->x + 76, b->y + 56, ln, 1, C_DIM);
 }
 
 static void k_file_card(const surf *s, const kmenu *m) {
@@ -2150,7 +2227,8 @@ static void k_paint(const surf *s, const kstat *k, const kmenu *m, const btn *b,
                     int nb, int armed, const char *eth, const char *wifi,
                     const char *note, const char *hostport) {
     static const char *const title[] = {
-        "ADVENTURER 4", "PRINT", "PRINT", "PREHEAT", "TOOLS", "ABOUT", "FILAMENT", "MOVE", "TUNE", "OBJECTS" };
+        "ADVENTURER 4", "PRINT", "PRINT", "PREHEAT", "TOOLS", "ABOUT", "FILAMENT", "MOVE", "TUNE", "OBJECTS",
+        "HISTORY" };
     const char *lab, *foot = "";
     char pg[32];
     unsigned col = k_chip(k, &lab);
@@ -2197,6 +2275,14 @@ static void k_paint(const surf *s, const kstat *k, const kmenu *m, const btn *b,
         break;
     case K_FILE:
         k_file_card(s, m);
+        break;
+    case K_HIST:
+        if (m->nhist <= 0) {
+            rrect(s, 24, 108, 432, 160, 18, C_CARD, C_CARD2);
+            text_wrap(s, 44, 128, m->nhist < 0 ? "Could not read the job history." : "No jobs yet.",
+                      2, C_DIM, 392);
+        } else
+            foot = "tap a job twice to reprint";
         break;
     case K_MOVE: {
         char ps[64];
@@ -2260,6 +2346,10 @@ static void k_paint(const surf *s, const kstat *k, const kmenu *m, const btn *b,
 
     for (int i = 0; i < nb; i++) {
         if (!strcmp(b[i].token, "file")) { k_file_row(s, &b[i], m); continue; }
+        if (!strcmp(b[i].token, "hjob") || !strcmp(b[i].token, "hgone")) {
+            k_hist_row(s, &b[i], m, i == armed);
+            continue;
+        }
         btn t = b[i];
         if (i == armed) { t.top = C_ERR; t.bot = C_ERRD; }
         draw_btn(s, &t);
@@ -2316,6 +2406,12 @@ static void k_nav(const char *host, int port, kmenu *m, const btn *b) {
     const char *t = b->token;
     if (!strcmp(t, "files")) { m->scr = K_FILES; m->page = 0; m->nfiles = k_files(host, port); k_rows(host, port, m); }
     else if (!strcmp(t, "ack")) m->ack = 1;
+    else if (!strcmp(t, "hist")) {
+        m->scr = K_HIST;
+        m->nhist = k_hist(host, port, m->rmeta);
+        for (int i = 0; i < K_ROWS; i++)
+            k_thumb(host, port, i < m->nhist ? kh[i].name : "", &m->rmeta[i], &m->rimg[i]);
+    }
     else if (!strcmp(t, "file")) {
         m->sel = b->arg;
         k_meta(host, port, kf[m->sel].name, &m->meta);
@@ -2471,8 +2567,9 @@ static int cmd_klipper(const char *dump, const char *hostport, const char *scree
             next = 0;
             const char *tok = b[hit].token;
             char path[640], en[400];
-            if (!strcmp(tok, "print") || !strcmp(tok, "again")) {
-                urlenc(tok[0] == 'p' ? kf[m.sel].name : k.file, en, sizeof en);
+            if (!strcmp(tok, "print") || !strcmp(tok, "again") || !strcmp(tok, "hjob")) {
+                urlenc(tok[0] == 'p' ? kf[m.sel].name : tok[0] == 'h' ? kh[b[hit].arg].name : k.file,
+                       en, sizeof en);
                 snprintf(path, sizeof path, "/printer/print/start?filename=%s", en);
                 tok = path;
             } else if (tok[0] != '/') {
@@ -2487,7 +2584,8 @@ static int cmd_klipper(const char *dump, const char *hostport, const char *scree
             snprintf(note, sizeof note, "%s %s", lab,
                      rc == 200 ? "ok" : rc == -2 ? "running" : "failed");
             note_t = now_ms();
-            if (rc == 200 && (!strcmp(b[hit].token, "print") || !strcmp(b[hit].token, "again"))) m.scr = K_HOME;
+            if (rc == 200 && (!strcmp(b[hit].token, "print") || !strcmp(b[hit].token, "again") ||
+                              !strcmp(b[hit].token, "hjob"))) m.scr = K_HOME;
         }
     }
 }
@@ -2511,7 +2609,7 @@ static void usage(void) {
         "       ad4-screen confirm TITLE BODY [GO_LABEL] [SECS]\n"
         "       ad4-screen touch [SECS]\n"
         "       ad4-screen calib [SECS]\n"
-        "       ad4-screen klipper [HOST[:PORT]] [--dump FILE.ppm [files|file|heat|tools|about|fil|move]]\n"
+        "       ad4-screen klipper [HOST[:PORT]] [--dump FILE.ppm [files|file|hist|heat|tools|about|fil|move]]\n"
         "env: AD4_MCU AD4_IP AD4_PORT AD4_INSTALLED AD4_STICK AD4_ROT AD4_CAL\n");
 }
 

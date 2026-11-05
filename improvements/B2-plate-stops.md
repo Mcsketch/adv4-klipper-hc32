@@ -76,14 +76,13 @@ Pause at a layer (magnets, nuts, a colour change):
 
 ## Before the first real plate
 
-- [ ] **Measure the head clearance.** The printer preset still has Orca's
-      generic Flashforge values (radius 47 mm, height to rod and to lid
-      34 mm). Measure, from the nozzle tip: the distance to the farthest
-      point of the head and fan shroud in X and Y (radius = the largest), and
-      the height from the nozzle tip to the lowest part of the gantry that
-      moves over the bed. Put them in Printer settings > Basic information >
-      Extruder clearance (radius, height to rod, height to lid) of
-      `AD4 0.4 Nozzle (Caleb)`.
+- [x] **Head clearance.** Measured on Caleb's unit: the head is 50 mm wide
+      and 80 mm deep, the nozzle 30 mm from its left side and 50 mm from its
+      back, so the farthest corner is √(30² + 50²) = 58.3 mm away. The
+      preset's radius is 60 (Orca's AD4 profile has 42.3, which lets the
+      back of the head reach a part). Nozzle tip to the bottom of the X rods
+      is about 30 mm; the preset keeps Orca's 24.93 for height to rod, the
+      lower of the two. Height to lid stays 250 (the build height).
 - [ ] Test with Caleb at the printer: two or three 10 mm cubes by object,
       one stop with a filament swap, one `AD4_PAUSE_LAYER` with a message.
       Watch the lift and the return over the part.

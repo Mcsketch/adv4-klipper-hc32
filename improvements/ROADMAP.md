@@ -77,8 +77,8 @@ Decision (S1, 2026-11-03): OrcaSlicer for the AD4 and the CC2.
 
 | ID | Item | Approach | Status |
 |---|---|---|---|
-| B1 | Sequential (one object after another) | Used by B2. Slicer "print sequence: by object" with the AD4's real clearances: measure the nozzle-to-gantry height and the head's footprint around the nozzle. A wrong number crashes the head into a finished part, so measure twice and test with two short objects. | ready |
-| B2 | Plate stops | [B2-plate-stops.md](B2-plate-stops.md). Several parts on one plate, by object; the printer stops between them (and at chosen layers) for a filament swap or magnets, READY on the panel carries on, no plate clearing. Macros, Orca hooks, panel and notification in place 2026-11-04 (panel md5 c2ee17e3). Left: measure the head clearance for Orca, then a test plate with Caleb. | wip |
+| B1 | Sequential (one object after another) | Used by B2. Slicer "print sequence: by object" with the AD4's real clearances: radius 60 mm measured 2026-11-04 (nozzle 30 mm from the head's left, 50 from its back); height to rod 24.93 (Orca's, below the measured ~30). Test with two short objects. | ready |
+| B2 | Plate stops | [B2-plate-stops.md](B2-plate-stops.md). Several parts on one plate, by object; the printer stops between them (and at chosen layers) for a filament swap or magnets, READY on the panel carries on, no plate clearing. Macros, Orca hooks, panel and notification in place 2026-11-04 (panel md5 c2ee17e3). Clearance in the preset 2026-11-04. Left: a test plate with Caleb. | wip |
 | B3 | Cancel one object | J7. | |
 
 ## 5. Multicolour without an AMS

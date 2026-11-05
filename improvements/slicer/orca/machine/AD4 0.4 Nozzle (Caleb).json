@@ -6,6 +6,7 @@
     "deretraction_speed": [
         "20"
     ],
+    "extruder_clearance_radius": "60",
     "from": "User",
     "inherits": "Flashforge Adventurer 4 Series 0.4 Nozzle",
     "max_layer_height": [

@@ -30,8 +30,8 @@ The printer side is in `host/printer.cfg`:
 
 | Macro | |
 |---|---|
-| `AD4_NEXT_OBJECT` | Orca's between-objects hook. Sets the panel message "Next: object N of M", then `PAUSE`. |
-| `AD4_PAUSE_LAYER` | Orca's pause G-code. `MSG=` sets the message; without it "Layer pause". |
+| `PLATE_NEXT_OBJECT` | Orca's between-objects hook. Sets the panel message "Next: object N of M", then `PAUSE`. |
+| `PLATE_PAUSE_LAYER` | Orca's pause G-code. `MSG=` sets the message; without it "Layer pause". |
 | `PAUSE` | Replaces mainsail.cfg's. Remembers the tallest Z this job has reached, retracts 1 mm, lifts to 10 mm above that (capped 2 mm below Z max) and brings the bed forward. Raises the idle timeout to 1 h. |
 | `RESUME` | Goes back over the part at that safe height, primes 1 mm, puts the idle timeout back, clears the message, then `RESUME_BASE` drops straight down to where it stopped. |
 
@@ -70,9 +70,9 @@ Pause at a layer (magnets, nuts, a colour change):
 
 1. In the preview, drag the layer slider to the layer **above** the pocket's
    last open layer, right-click the + > **Add pause**. It runs
-   `AD4_PAUSE_LAYER` before that layer.
+   `PLATE_PAUSE_LAYER` before that layer.
 2. For a message on the panel use **Add custom G-code** instead:
-   `AD4_PAUSE_LAYER MSG="Insert 6x3 magnets"`.
+   `PLATE_PAUSE_LAYER MSG="Insert 6x3 magnets"`.
 
 ## Before the first real plate
 
@@ -84,7 +84,7 @@ Pause at a layer (magnets, nuts, a colour change):
       is about 30 mm; the preset keeps Orca's 24.93 for height to rod, the
       lower of the two. Height to lid stays 250 (the build height).
 - [ ] Test with Caleb at the printer: two or three 10 mm cubes by object,
-      one stop with a filament swap, one `AD4_PAUSE_LAYER` with a message.
+      one stop with a filament swap, one `PLATE_PAUSE_LAYER` with a message.
       Watch the lift and the return over the part.
 
 ## Later

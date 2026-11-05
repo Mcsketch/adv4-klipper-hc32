@@ -2047,7 +2047,7 @@ static void k_job(const surf *s, const kstat *k, const kmenu *m, unsigned col) {
     if (l > 24) snprintf(nm, sizeof nm, "%.22s..", f);
     else snprintf(nm, sizeof nm, "%.*s", l, f);
     if (!strcmp(k->pstate, "paused")) {
-        /* B2: a plate stop (AD4_NEXT_OBJECT, AD4_PAUSE_LAYER) or a plain pause;
+        /* B2: a plate stop (PLATE_NEXT_OBJECT, PLATE_PAUSE_LAYER) or a plain pause;
          * printer.cfg's PAUSE has lifted clear and brought the bed forward */
         const char *why = k->dmsg[0] ? k->dmsg : "Paused";
         text_wrap(s, 44, 298, why, tw(why, 3) <= 392 ? 3 : 2, C_WARN, 392);

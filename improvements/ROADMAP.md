@@ -11,7 +11,7 @@ processing on), Mainsail, `exclude_object`, `pause_resume`, `respond`,
 menus, `HOME_XYZ`, `PRINT_START` / `PRINT_END`, `LOAD_FILAMENT` /
 `UNLOAD_FILAMENT`.
 
-Missing that matters: no `M600`, `[bed_mesh]` present but no probe,
+Missing that matters: no `M600`, no bed mesh in use (manual only, Q5),
 no recorded slicer choice, no pressure advance or input shaper calibration.
 
 Known limits that cap everything below:
@@ -99,7 +99,7 @@ Decision (S1, 2026-11-03): OrcaSlicer for the AD4 and the CC2.
 | Q2 | Input shaper | Ringing tower, read the frequencies by eye, `[input_shaper]`. Lets accelerations go up without ringing. Low value for now: the 3 mm³/s flow cap holds walls near 36 mm/s, where ringing is small. Do after Q1 if the tower or a real print shows ringing. | ready |
 | Q3 | Max flow | The slicer's max volumetric speed test per filament; the hot end slips near 4.8 mm³/s with PLA. Above that, speed only buys you skipped extrusion. | ready |
 | Q4 | Lift the 60 mm/s cap | Only if Q1-Q3 show headroom, and only on Caleb's decision. | blocked on Caleb |
-| Q5 | Bed levelling | `[bed_mesh]` is in the config but there is no probe. Find out what the stock firmware used for levelling (sensor, pins) before buying anything. | idea |
+| Q5 | Bed levelling | [Q5-bed-levelling.md](Q5-bed-levelling.md). The stock "auto calibration" was a manual paper test at 9 points: no sensor, nothing to buy. Klipper's `BED_MESH_CALIBRATE METHOD=manual` does the same; the unit's stock values are in the live config as `[bed_mesh stock]` (left edge ~0.25 mm low). Left: manual mesh and a first-layer test with Caleb. | wip |
 | Q6 | Filament runout | The stock firmware reads PB7 (input, pull-down) every tick and flags it after 5000 ticks low: probably the runout switch. `[filament_switch_sensor]` on PB7 calling M1's swap flow. Verify with Caleb pulling filament. | ready |
 | Q7 | Chamber by material | 2026-11-05: Orca passes `PRINT_START MATERIAL=[filament_type]`; the chamber fan (PB9) runs full for PLA and anything unlisted, half for PETG/PET, off for ABS, ASA, PC, PA and HIPS. `PRINT_END` and `CANCEL_PRINT` turn it off. | done, untested on a print |
 

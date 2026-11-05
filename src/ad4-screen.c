@@ -1369,6 +1369,8 @@ typedef struct {
     double et, ett, bt, btt, prog, dur, tot, fused, pfan, cfan, light, pos[3];
     double speed, flow, zoff;         /* gcode_move: M220, M221, SET_GCODE_OFFSET */
     int layer, nlayer;                /* SET_PRINT_STATS_INFO, 0 = not sent */
+    int fdir;                         /* _FIL_STATE: 1 load, -1 unload, 0 none */
+    double fe0, flen, fe;             /* its start and length, live extruder position */
 } kstat;
 
 static void k_poll(const char *host, int port, kstat *k) {
@@ -1389,7 +1391,8 @@ static void k_poll(const char *host, int port, kstat *k) {
                  "/printer/objects/query?print_stats=state,filename,print_duration,total_duration,filament_used,info,message"
                  "&extruder=temperature,target&heater_bed=temperature,target"
                  "&display_status=progress,message&fan=speed&fan_generic%20chamber_fan=speed&output_pin%20light=value"
-                 "&toolhead=position,homed_axes&gcode_move=speed_factor,extrude_factor,homing_origin",
+                 "&toolhead=position,homed_axes&gcode_move=speed_factor,extrude_factor,homing_origin"
+                 "&motion_report=live_position&gcode_macro%20_FIL_STATE=dir,e0,len",
                  buf, sizeof buf) != 200)
         return;
     if ((b = jobj(buf, "print_stats", &e))) {
@@ -1428,6 +1431,17 @@ static void k_poll(const char *host, int port, kstat *k) {
         double o[3] = { 0 };
         if (v) sscanf(v, "[%lf ,%lf ,%lf", &o[0], &o[1], &o[2]);
         k->zoff = o[2];
+    }
+    if ((b = jobj(buf, "gcode_macro _FIL_STATE", &e))) {
+        k->fdir = (int)jnum(b, e, "dir");
+        k->fe0 = jnum(b, e, "e0");
+        k->flen = jnum(b, e, "len");
+    }
+    if ((b = jobj(buf, "motion_report", &e))) {
+        const char *v = jval(b, e, "live_position");
+        double q[4] = { 0 };
+        if (v) sscanf(v, "[%lf ,%lf ,%lf ,%lf", &q[0], &q[1], &q[2], &q[3]);
+        k->fe = q[3];
     }
 }
 
@@ -1771,10 +1785,20 @@ static int k_objbtn(const kmenu *m, btn *b) {
 /* LOAD_FILAMENT / UNLOAD_FILAMENT are macros in printer.cfg. During a pause
  * they run at the job's own nozzle target (no TEMP=), so RESUME prints at
  * the temperature the slicer set, and there is no COOLDOWN. */
+/* A load or unload is running. A macro stopped by an error leaves dir set,
+ * but every such stop (heater off, shutdown, restart) leaves no target. */
+static int k_filrun(const kstat *k) {
+    return k->fdir && k->ett > 0;
+}
+
 static int k_fil(const kstat *k, const kmenu *m, btn *b) {
     static char ld[96], ul[96], pu[96], tl[16];
     int n = 0, job = k_busy(k);
     int ft = k_ftemp[m->ft];
+    if (k_filrun(k)) {
+        b[n++] = KB(24, 432, "BACK", "back", K_G1, K_G2, 0);
+        return n;
+    }
     if (job) {
         snprintf(ld, sizeof ld, K_GS "LOAD_FILAMENT");
         snprintf(ul, sizeof ul, K_GS "UNLOAD_FILAMENT");
@@ -1923,6 +1947,38 @@ static void k_temp(const surf *s, int x, int y, const char *label,
     if (tgt > 0) snprintf(t, sizeof t, "target %.0f", tgt);
     else snprintf(t, sizeof t, "off");
     text(s, x + 16, y + 114, t, 2, tgt > 0 ? C_WARN : C_DIM);
+}
+
+/* The filament tip between the extruder gears and the nozzle, from the
+ * extruder's live position: fills on a load, drains on an unload, in mm. */
+static void k_filbar(const surf *s, const kstat *k) {
+    int load = k->fdir > 0;
+    double moved = load ? k->fe - k->fe0 : k->fe0 - k->fe;
+    if (moved < 0) moved = 0;
+    if (moved > k->flen) moved = k->flen;
+    double in = load ? moved : k->flen - moved;
+    double f = k->flen > 0 ? in / k->flen : 0;
+    unsigned col = load ? C_OK : C_WARN;
+    char big[16], sub[32], st[48];
+    rrect(s, 24, 290, 432, 276, 18, C_CARD, C_CARD2);
+    text(s, 44, 308, !load ? "UNLOADING" : k->flen <= 50 ? "PURGING" : "LOADING", 2, col);
+    snprintf(big, sizeof big, "%.0f", in);
+    text(s, 44, 340, big, 6, C_TXT);
+    snprintf(sub, sizeof sub, "/ %.0f mm", k->flen);
+    text(s, 44 + tw(big, 6) + 10, 372, sub, 2, C_DIM);
+    rrect(s, 44, 420, 392, 40, 10, C_BG1, C_BG1);
+    int w = (int)(392 * f + 0.5);
+    if (w >= 20) rrect(s, 44, 420, w, 40, 10, col, col);
+    else if (w > 0) fill(s, 44, 420, w, 40, col);
+    text(s, 44, 470, "GEARS", 1, C_DIM);
+    text(s, 436 - tw("NOZZLE", 1), 470, "NOZZLE", 1, C_DIM);
+    if (moved < 0.5 && k->et < k->ett - 2)
+        snprintf(st, sizeof st, "Heating %.0f / %.0f C", k->et, k->ett);
+    else if (load)
+        snprintf(st, sizeof st, moved < k->flen - 120 ? "Down the tube" : "Through the hot end");
+    else
+        snprintf(st, sizeof st, moved < 95 ? "Out of the hot end" : "Back up the tube");
+    text(s, 44, 500, st, 2, C_TXT);
 }
 
 static void k_size(double sz, char *o, int n) {
@@ -2107,6 +2163,7 @@ static void k_paint(const surf *s, const kstat *k, const kmenu *m, const btn *b,
     case K_FIL:
         k_temp(s, 24, 118, "NOZZLE", k->et, k->ett);
         k_temp(s, 248, 118, "BED", k->bt, k->btt);
+        if (m->scr == K_FIL && k_filrun(k)) { k_filbar(s, k); break; }
         if (m->scr == K_FIL && k_busy(k)) {
             char jt[16];
             snprintf(jt, sizeof jt, "%.0f C", k->ett);

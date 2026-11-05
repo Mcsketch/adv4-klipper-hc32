@@ -86,8 +86,10 @@ power off and walk away.
    Klipper reports the MCU lost (at most every 20 s). While Klipper is idle
    it has menus: Print (Moonraker's gcode files, newest first, with the
    slicer's thumbnail, time and grams; starting a print takes two taps), Preheat (PLA, PETG,
-   ABS, TPU, cooldown), Filament (load, unload, purge 20 mm through the
-   `LOAD_FILAMENT` / `UNLOAD_FILAMENT` macros in printer.cfg) and Tools
+   ABS, TPU, cooldown), Filament (load and unload the whole ~690 mm
+   Bowden tube, purge 20 mm, through the `LOAD_FILAMENT` / `UNLOAD_FILAMENT`
+   macros in printer.cfg; while one runs, a bar from GEARS to NOZZLE follows
+   the filament tip in mm, from the extruder's live position) and Tools
    (part and chamber fan, light off / on / 30 %, Move: home and jog, motors off, About with
    firmware restart). During a job the home screen shows the slicer's
    thumbnail, time left, the finish time, layer N / M, progress, elapsed

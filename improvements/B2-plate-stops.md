@@ -88,10 +88,14 @@ Pause at a layer (magnets, nuts, a colour change):
       preset's radius is 60 (Orca's AD4 profile has 42.3, which lets the
       back of the head reach a part). Nozzle tip to the bottom of the X rods
       is about 30 mm; the preset keeps Orca's 24.93 for height to rod, the
-      lower of the two. Height to lid stays 250 (the build height).
-- [ ] Test with Caleb at the printer: two or three 10 mm cubes by object,
+      lower of the two. Height to lid stays 250 (the build height). All
+      three are written into the preset (2026-11-05), not inherited.
+- [x] Test with Caleb at the printer: two or three 10 mm cubes by object,
       one stop with a filament swap, one `PLATE_PAUSE_LAYER` with a message.
       Watch the lift and the return over the part.
+      Done 2026-11-05 (`ad4_b2_test_3cubes_v2`): both stops parked and
+      returned cleanly; the swap was short, so cube 2 was rewound by hand
+      (M26), which became B4's REDO.
 
 ## Later
 

@@ -6,7 +6,7 @@
 TEST_SPEED homes X and Y before and after the fast moves and prints
 GET_POSITION each time. The X and Y step counts after both homings should
 match to within the endstops' repeat (a fraction of a full step). Ctrl+C
-sends an emergency stop. Roadmap Q8.
+sends an emergency stop. Roadmap Q4.
 """
 import argparse, json, re, sys, urllib.parse, urllib.request
 

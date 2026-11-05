@@ -60,7 +60,7 @@
         "220x200",
         "0x200"
     ],
-    "machine_start_gcode": "SET_PRINT_STATS_INFO TOTAL_LAYER=[total_layer_count]\nPRINT_START BED=[bed_temperature_initial_layer_single] EXTRUDER=[nozzle_temperature_initial_layer]\n",
+    "machine_start_gcode": "SET_PRINT_STATS_INFO TOTAL_LAYER=[total_layer_count]\nPRINT_START BED=[bed_temperature_initial_layer_single] EXTRUDER=[nozzle_temperature_initial_layer] MATERIAL=[filament_type[initial_extruder]]\n",
     "thumbnails": "32x32/PNG, 160x160/PNG",
     "layer_change_gcode": ";AFTER_LAYER_CHANGE\n;[layer_z]\nSET_PRINT_STATS_INFO CURRENT_LAYER={layer_num + 1}\nTIMELAPSE_TAKE_FRAME",
     "machine_pause_gcode": "PLATE_PAUSE_LAYER",

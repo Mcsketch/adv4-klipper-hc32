@@ -5,7 +5,7 @@ Adventurer 4 profile and changes only what Klipper and this printer need.
 
 | File | |
 |---|---|
-| `orca/machine/AD4 0.4 Nozzle (Caleb).json` | Klipper flavour, `SET_PRINT_STATS_INFO` total and current layer (the panel's layer N / M), 220 x 200 bed with origin at 0,0, 60 mm/s and 2000 mm/s² limits, retraction 5.5 mm at 25 mm/s, `PRINT_START BED= EXTRUDER=` / `PRINT_END`, `TIMELAPSE_TAKE_FRAME` at each layer change (C4), between-objects `PLATE_NEXT_OBJECT` and pause `PLATE_PAUSE_LAYER` (plate stops, B2), extruder clearance radius 60 mm (measured; height to rod stays Orca's 24.93), upload to Moonraker (Orca's OctoPrint host type), 32x32 and 160x160 PNG thumbnails |
+| `orca/machine/AD4 0.4 Nozzle (Caleb).json` | Klipper flavour, `SET_PRINT_STATS_INFO` total and current layer (the panel's layer N / M), 220 x 200 bed with origin at 0,0, 60 mm/s and 2000 mm/s² limits, retraction 5.5 mm at 25 mm/s, `PRINT_START BED= EXTRUDER= MATERIAL=` (chamber fan by filament type, Q7) / `PRINT_END`, `TIMELAPSE_TAKE_FRAME` at each layer change (C4), between-objects `PLATE_NEXT_OBJECT` and pause `PLATE_PAUSE_LAYER` (plate stops, B2), extruder clearance radius 60 mm (measured; height to rod stays Orca's 24.93), upload to Moonraker (Orca's OctoPrint host type), 32x32 and 160x160 PNG thumbnails |
 | `orca/process/AD4 PLA *.json` | Standard, Cosmetic, Fast Draft, Structural. All have object labels and `EXCLUDE_OBJECT` on, all speeds at or under 60 mm/s, and klipper_estimator as the post-processing step |
 | `orca/filament/AD4 *.json` | Rapid PLA+ (225 °C, fan 40 %) and SUNLU PLA (flow 0.96). Max volumetric speed 3 mm³/s, because the hot end slips near 4.8 |
 | `orca/klipper_estimator_ad4.json` | This printer's limits for klipper_estimator, from `dump-config` |

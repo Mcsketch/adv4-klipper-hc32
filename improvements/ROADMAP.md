@@ -100,7 +100,7 @@ Decision (S1, 2026-11-03): OrcaSlicer for the AD4 and the CC2.
 | Q4 | Lift the 60 mm/s cap | Only if Q1-Q3 show headroom, and only on Caleb's decision. | blocked on Caleb |
 | Q5 | Bed levelling | `[bed_mesh]` is in the config but there is no probe. Find out what the stock firmware used for levelling (sensor, pins) before buying anything. | idea |
 | Q6 | Filament runout | The stock firmware reads PB7 (input, pull-down) every tick and flags it after 5000 ticks low: probably the runout switch. `[filament_switch_sensor]` on PB7 calling M1's swap flow. Verify with Caleb pulling filament. | ready |
-| Q7 | Chamber by material | Chamber fan (PB9) on for PLA (heat creep), off or low for ABS/ASA, from `PRINT_START MATERIAL=`. | idea |
+| Q7 | Chamber by material | 2026-11-05: Orca passes `PRINT_START MATERIAL=[filament_type]`; the chamber fan (PB9) runs full for PLA and anything unlisted, half for PETG/PET, off for ABS, ASA, PC, PA and HIPS. `PRINT_END` and `CANCEL_PRINT` turn it off. | done, untested on a print |
 
 ## 7. Panel and menus
 

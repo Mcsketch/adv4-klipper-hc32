@@ -118,7 +118,7 @@ power off and walk away.
    To swap the panel binary on a running printer, kill the
    `ad4-screen klipper` process, not the `sh -c while` loop around it.
    Its HOME runs `HOME_XYZ`, a macro for `G28` (one axis at a time).
-   `host/home_xyz.py` (all three in one move) is off; why is in
+   The old all-axes-in-one-move homing is gone; why is in
    `host/printer.cfg`. A job starting from anywhere, or two minutes without a
    touch, returns it to the home screen.
 5. WiFi from `/etc/wpa_supplicant.conf` (the network saved in the stock UI).

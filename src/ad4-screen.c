@@ -1375,7 +1375,12 @@ typedef struct {
     int layer, nlayer;                /* SET_PRINT_STATS_INFO, 0 = not sent */
     int fdir;                         /* _FIL_STATE: 1 load, -1 unload, 0 none */
     double fe0, flen, fe;             /* its start and length, live extruder position */
+    char smode[12];                   /* SPEED_MODE's saved choice, "" = never set */
+    int mode[5][4];                   /* its modes: mm/s, accel, nozzle C, flow % */
 } kstat;
+
+/* printer.cfg's SPEED_MODE names; the last, BRACE, is locked */
+static const char *const k_mname[5] = { "CRUSH", "WOODY", "BUZZ", "MCQUEEN", "BRACE" };
 
 static void k_poll(const char *host, int port, kstat *k) {
     static char buf[8192];
@@ -1396,7 +1401,8 @@ static void k_poll(const char *host, int port, kstat *k) {
                  "&extruder=temperature,target&heater_bed=temperature,target"
                  "&display_status=progress,message&fan=speed&fan_generic%20chamber_fan=speed&output_pin%20light=value"
                  "&toolhead=position,homed_axes&gcode_move=speed_factor,extrude_factor,homing_origin"
-                 "&motion_report=live_position&gcode_macro%20_FIL_STATE=dir,e0,len",
+                 "&motion_report=live_position&gcode_macro%20_FIL_STATE=dir,e0,len"
+                 "&save_variables=variables&gcode_macro%20SPEED_MODE=modes",
                  buf, sizeof buf) != 200)
         return;
     if ((b = jobj(buf, "print_stats", &e))) {
@@ -1436,6 +1442,13 @@ static void k_poll(const char *host, int port, kstat *k) {
         if (v) sscanf(v, "[%lf ,%lf ,%lf", &o[0], &o[1], &o[2]);
         k->zoff = o[2];
     }
+    if ((b = jobj(buf, "save_variables", &e))) jstr(b, e, "speed_mode", k->smode, sizeof k->smode);
+    if ((b = jobj(buf, "gcode_macro SPEED_MODE", &e)))
+        for (int i = 0; i < 5; i++) {
+            const char *v = jval(b, e, k_mname[i]);
+            if (v) sscanf(v, "[%d ,%d ,%d ,%d", &k->mode[i][0], &k->mode[i][1],
+                          &k->mode[i][2], &k->mode[i][3]);
+        }
     if ((b = jobj(buf, "gcode_macro _FIL_STATE", &e))) {
         k->fdir = (int)jnum(b, e, "dir");
         k->fe0 = jnum(b, e, "e0");
@@ -1880,7 +1893,8 @@ static void k_line(const surf *s, int x0, int y0, int x1, int y1, unsigned c) {
 #define K_BMX(x) (K_BX + (int)((x) * 1.2))
 #define K_BMY(y) (K_BY + (int)((200 - (y)) * 1.2))
 
-enum { K_HOME, K_FILES, K_FILE, K_HEAT, K_TOOLS, K_ABOUT, K_FIL, K_MOVE, K_TUNE, K_OBJS, K_HIST, K_USB };
+enum { K_HOME, K_FILES, K_FILE, K_HEAT, K_TOOLS, K_ABOUT, K_FIL, K_MOVE, K_TUNE, K_OBJS, K_HIST, K_USB,
+       K_MODE, K_PAD, K_BRACE };
 typedef struct {
     int scr, page, sel, nfiles, ft, step, nobj, nhist, nusb;
     kmeta meta; kimg img;             /* the file picked in PRINT */
@@ -1888,6 +1902,8 @@ typedef struct {
     kmeta rmeta[K_ROWS]; kimg rimg[K_ROWS];            /* the Print list's or History's rows */
     int ack;                          /* the finished job's card was dismissed */
     double rate[3];                   /* $/kg, g/cm3, $/printer hour; 0 = not set */
+    int mback;                        /* SPEED MODE's BACK: TOOLS or TUNE */
+    char pad[12]; int padbad;         /* the gamepad's presses so far, a wrong one */
 } kmenu;
 
 /* FILAMENT's TEMP tile and MOVE's STEP tile cycle through these */
@@ -1902,8 +1918,8 @@ static const double k_step[] = { 10, 1, 0.1 };
 #define K_G2 0x39465au
 #define K_GS "/printer/gcode/script?script="
 
-/* TUNE: one row per setting, - and + either side of the value. Speed only
- * goes down: the 60 mm/s cap lives in the slicer, max_velocity is higher. */
+/* TUNE: one row per setting, - and + either side of the value. SPEED and
+ * FLOW reach past the speed modes' own factors (BRACE: M220 700, M221 170). */
 #define K_NTUNE 5
 static const char *const k_tlab[K_NTUNE] = { "SPEED", "FLOW", "Z OFFSET", "NOZZLE", "PART FAN" };
 
@@ -1914,7 +1930,7 @@ static double k_tval(const kstat *k, int i) {
 
 static int k_tune(const kstat *k, btn *b) {
     static const double step[K_NTUNE] = { 10, 2, 0.02, 5, 10 };
-    static const double lo[K_NTUNE] = { 20, 80, -1, 180, 0 }, hi[K_NTUNE] = { 100, 120, 1, 260, 100 };
+    static const double lo[K_NTUNE] = { 20, 80, -1, 180, 0 }, hi[K_NTUNE] = { 800, 200, 1, 260, 100 };
     static char cmd[K_NTUNE][2][96];
     int n = 0;
     for (int i = 0; i < K_NTUNE; i++)
@@ -1934,9 +1950,48 @@ static int k_tune(const kstat *k, btn *b) {
             b[n++] = (btn){ d ? 346 : 24, 108 + i * 96, 110, 88, d ? "+" : "-",
                             ok ? cmd[i][d] : "none", ok ? C_ACC : K_G2, ok ? C_ACCD : K_G2, 4, 0, 0 };
         }
-    b[n++] = KB(24, 208, "BACK", "back", K_G1, K_G2, 0);
-    b[n++] = KB(248, 208, "OBJECTS", "objs", C_ACC, C_ACCD, 0);
+    b[n++] = KB(24, 136, "BACK", "back", K_G1, K_G2, 0);
+    b[n++] = KB(172, 136, "SPEED\nMODE", "mode", C_ACC, C_ACCD, 0);
+    b[n++] = KB(320, 136, "OBJECTS", "objs", C_ACC, C_ACCD, 0);
+    for (int i = n - 3; i < n; i++) b[i].sc = 2;
     return n;
+}
+
+/* SPEED MODE: a tile per mode of printer.cfg's SPEED_MODE, saved for the
+ * next job and applied at once during one. BRACE sits behind the gamepad. */
+static int k_mode(const kstat *k, btn *b) {
+    static char lab[4][24], cmd[4][64];
+    int n = 0;
+    for (int i = 0; i < 4; i++) {
+        int on = !strcmp(k->smode, k_mname[i]) || (!k->smode[0] && i == 0);
+        if (k->mode[i][0] > 0) snprintf(lab[i], sizeof lab[i], "%s\n%d mm/s", k_mname[i], k->mode[i][0]);
+        else snprintf(lab[i], sizeof lab[i], "%s", k_mname[i]);
+        snprintf(cmd[i], sizeof cmd[i], K_GS "SPEED_MODE%%20NAME%%3D%s", k_mname[i]);
+        b[n++] = KT(24 + i % 2 * 224, 216 + i / 2 * 146, 208, lab[i], cmd[i],
+                    on ? C_OK : C_ACC, on ? 0x1f8a60u : C_ACCD);
+    }
+    b[n++] = (btn){ 24, 508, 432, 76, "BRACE YOURSELF", "pad", C_ERRD, 0x6d2530u, 3, 0, 0 };
+    b[n++] = KB(24, 432, "BACK", "back", K_G1, K_G2, 0);
+    return n;
+}
+
+/* the gamepad that unlocks BRACE: the Konami code, checked in k_nav */
+static int k_pad(btn *b) {
+    b[0] = (btn){ 104, 292, 72, 72, "", "padU", K_G1, K_G2, 4, 0, 0 };
+    b[1] = (btn){ 104, 436, 72, 72, "", "padD", K_G1, K_G2, 4, 0, 0 };
+    b[2] = (btn){ 32, 364, 72, 72, "", "padL", K_G1, K_G2, 4, 0, 0 };
+    b[3] = (btn){ 176, 364, 72, 72, "", "padR", K_G1, K_G2, 4, 0, 0 };
+    b[4] = (btn){ 256, 400, 84, 84, "B", "padB", C_ERR, C_ERRD, 4, 0, 0 };
+    b[5] = (btn){ 356, 336, 84, 84, "A", "padA", C_ERR, C_ERRD, 4, 0, 0 };
+    b[6] = KB(24, 432, "BACK", "back", K_G1, K_G2, 0);
+    return 7;
+}
+
+static int k_brace(btn *b) {
+    b[0] = KB(24, 208, "BACK", "back", K_G1, K_G2, 0);
+    b[1] = KB(248, 208, "PROCEED", K_GS "SPEED_MODE%20NAME%3DBRACE%20CODE%3DUUDDLRLRBA",
+              C_ERR, C_ERRD, 1);
+    return 2;
 }
 
 /* OBJECTS: two columns of the job's objects; a tap (and a confirm) skips one */
@@ -2003,6 +2058,9 @@ static int k_buttons(const kstat *k, const kmenu *m, btn *b) {
         b[0] = KB(24, 432, "FIRMWARE RESTART", "/printer/firmware_restart", C_ACC, C_ACCD, 0);
         return 1;
     }
+    if (m->scr == K_MODE) return k_mode(k, b);
+    if (m->scr == K_PAD) return k_pad(b);
+    if (m->scr == K_BRACE) return k_brace(b);
     if (k_busy(k)) {
         if (m->scr == K_TUNE) return k_tune(k, b);
         if (m->scr == K_OBJS) return k_objbtn(m, b);
@@ -2095,21 +2153,25 @@ static int k_buttons(const kstat *k, const kmenu *m, btn *b) {
         b[n++] = KT(24, 436, 208, "MOVE", "move", C_ACC, C_ACCD);
         b[n++] = KT(248, 436, 208, "MOTORS\nOFF", K_GS "M84", K_G1, K_G2);
         if (k->light < 0) {
-            b[n++] = KB(24, 208, "BACK", "back", K_G1, K_G2, 0);
-            b[n++] = KB(248, 208, "ABOUT", "about", K_G1, K_G2, 0);
+            b[n++] = KB(24, 136, "BACK", "back", K_G1, K_G2, 0);
+            b[n++] = KB(172, 136, "SPEED\nMODE", "mode", C_ACC, C_ACCD, 0);
+            b[n++] = KB(320, 136, "ABOUT", "about", K_G1, K_G2, 0);
+            b[n - 2].sc = 2;
             break;
         }
         /* LIGHT cycles off -> on -> 30 % -> off */
         if (k->light <= 0) snprintf(lf, sizeof lf, "LIGHT\noff");
         else if (k->light >= 1) snprintf(lf, sizeof lf, "LIGHT\non");
         else snprintf(lf, sizeof lf, "LIGHT\n%.0f%%", k->light * 100);
-        b[n++] = KB(24, 136, "BACK", "back", K_G1, K_G2, 0);
-        b[n++] = (btn){ 172, 600, 136, 120, lf,
+        /* four across */
+        b[n++] = (btn){ 24, 600, 102, 120, "BACK", "back", K_G1, K_G2, 2, 0, 0 };
+        b[n++] = (btn){ 134, 600, 102, 120, "SPEED\nMODE", "mode", C_ACC, C_ACCD, 2, 0, 0 };
+        b[n++] = (btn){ 244, 600, 102, 120, lf,
                         k->light <= 0 ? K_GS "SET_PIN%20PIN%3Dlight%20VALUE%3D1"
                         : k->light >= 1 ? K_GS "SET_PIN%20PIN%3Dlight%20VALUE%3D0.3"
                         : K_GS "SET_PIN%20PIN%3Dlight%20VALUE%3D0",
                         k->light > 0 ? C_WARN : K_G1, k->light > 0 ? 0xa86f22u : K_G2, 2, 0, 0 };
-        b[n++] = KB(320, 136, "ABOUT", "about", K_G1, K_G2, 0);
+        b[n++] = (btn){ 354, 600, 102, 120, "ABOUT", "about", K_G1, K_G2, 2, 0, 0 };
         break;
     case K_ABOUT:
         b[n++] = KB(24, 208, "BACK", "back", K_G1, K_G2, 0);
@@ -2411,12 +2473,30 @@ static void k_end(const surf *s, const kstat *k, const kmenu *m) {
     for (int i = 0; i < n; i++) text(s, 44, 426 + i * 28, l[i], 2, i == 0 && cx ? C_WARN : C_DIM);
 }
 
+/* a gamepad key: A and B round, the D-pad's arms with an arrow */
+static void k_padbtn(const surf *s, const btn *b) {
+    int d = b->token[3], cx = b->x + b->w / 2, cy = b->y + b->h / 2;
+    if (d == 'A' || d == 'B') {
+        rrect(s, b->x, b->y, b->w, b->h, b->w / 2, b->top, b->bot);
+        textc(s, cx, cy - 16, b->label, 4, 0xffffffu);
+        return;
+    }
+    rrect(s, b->x, b->y, b->w, b->h, 10, b->top, b->bot);
+    for (int i = 0; i < 18; i++)          /* apex first */
+        switch (d) {
+        case 'U': fill(s, cx - i, cy - 9 + i, 2 * i + 1, 1, 0xffffffu); break;
+        case 'D': fill(s, cx - i, cy + 9 - i, 2 * i + 1, 1, 0xffffffu); break;
+        case 'L': fill(s, cx - 9 + i, cy - i, 1, 2 * i + 1, 0xffffffu); break;
+        case 'R': fill(s, cx + 9 - i, cy - i, 1, 2 * i + 1, 0xffffffu); break;
+        }
+}
+
 static void k_paint(const surf *s, const kstat *k, const kmenu *m, const btn *b,
                     int nb, int armed, const char *eth, const char *wifi,
                     const char *note, const char *hostport) {
     static const char *const title[] = {
         "ADVENTURER 4", "PRINT", "PRINT", "PREHEAT", "TOOLS", "ABOUT", "FILAMENT", "MOVE", "TUNE", "OBJECTS",
-        "HISTORY", "USB STICK" };
+        "HISTORY", "USB STICK", "SPEED MODE", "UNLOCK", "BRACE YOURSELF" };
     const char *lab, *foot = "";
     char pg[32];
     unsigned col = k_chip(k, &lab);
@@ -2509,7 +2589,54 @@ static void k_paint(const surf *s, const kstat *k, const kmenu *m, const btn *b,
             textc(s, 240, y + 40, t, 3, def[i] >= -0.5 && (dv > 0.001 || dv < -0.001) ? C_WARN : C_TXT);
         }
         if (!strcmp(k->pstate, "paused")) foot = "paused";
+        else if (k->smode[0]) { snprintf(pg, sizeof pg, "speed mode %s", k->smode); foot = pg; }
         break;
+    case K_MODE: {
+        int i = 0;
+        while (i < 4 && strcmp(k->smode, k_mname[i])) i++;
+        if (!k->smode[0]) i = 0;
+        const int *v = k->mode[i];
+        char ln[4][24];
+        rrect(s, 24, 108, 432, 96, 18, i == 4 ? C_ERRD : C_CARD, i == 4 ? 0x6d2530u : C_CARD2);
+        text(s, 44, 122, "NOW", 2, i == 4 ? C_TXT : C_DIM);
+        text(s, 44, 150, i < 5 ? k_mname[i] : k->smode, 3, i == 4 ? 0xffffffu : C_OK);
+        snprintf(ln[0], 24, "%d mm/s", v[0]);
+        snprintf(ln[1], 24, "accel %d", v[1]);
+        if (v[2] > 0) snprintf(ln[2], 24, "nozzle %d C", v[2]);
+        else snprintf(ln[2], 24, "slicer temp");
+        snprintf(ln[3], 24, "flow %d %%", v[3]);
+        if (i < 5 && v[0] > 0)
+            for (int j = 0; j < 4; j++) text(s, 248, 116 + j * 21, ln[j], 2, C_TXT);
+        foot = k_busy(k) ? "a change applies now" : "applies to the next print";
+        break;
+    }
+    case K_PAD: {
+        int n = (int)strlen(m->pad);
+        textc(s, 240, 116, "ENTER THE CODE", 2, C_DIM);
+        for (int i = 0; i < 10; i++)
+            rrect(s, 46 + i * 40, 148, 28, 28, 14, i < n ? C_ERR : C_CARD2, i < n ? C_ERRD : C_CARD2);
+        if (m->padbad) textc(s, 240, 196, "WRONG. START OVER.", 2, C_ERR);
+        rrect(s, 24, 252, 432, 296, 48, C_CARD, C_CARD2);
+        rrect(s, 104, 364, 72, 72, 0, K_G2, K_G2);
+        break;
+    }
+    case K_BRACE: {
+        const int *v = k->mode[4];
+        char ln[2][40];
+        snprintf(ln[0], sizeof ln[0], "%d mm/s  accel %d", v[0], v[1]);
+        snprintf(ln[1], sizeof ln[1], "nozzle %d C  flow %d %%", v[2], v[3]);
+        rrect(s, 24, 108, 432, 476, 18, C_ERRD, 0x6d2530u);
+        textc(s, 240, 136, "BRACE YOURSELF", 3, 0xffffffu);
+        textc(s, 240, 192, ln[0], 2, 0xffffffu);
+        textc(s, 240, 220, ln[1], 2, 0xffffffu);
+        int y = text_wrap(s, 48, 276, "The machine's limit, for fast prints that need neither "
+                          "looks nor strength.", 2, 0xffffffu, 384) + 22;
+        y = text_wrap(s, 48, y, "Proceed with extreme caution and stay at the printer.",
+                      2, 0xffffffu, 384) + 22;
+        text_wrap(s, 48, y, "It locks again when the job ends: the next one runs MCQUEEN.",
+                  2, 0xffd0d4u, 384);
+        break;
+    }
     case K_OBJS: {
         rrect(s, K_BX - 4, K_BY - 4, 272, 248, 10, C_BG1, C_BG1);
         if (m->nobj <= 0) {
@@ -2548,6 +2675,7 @@ static void k_paint(const surf *s, const kstat *k, const kmenu *m, const btn *b,
     for (int i = 0; i < nb; i++) {
         if (!strcmp(b[i].token, "file")) { k_file_row(s, &b[i], m); continue; }
         if (!strcmp(b[i].token, "ufile")) { k_usb_row(s, &b[i], i == armed); continue; }
+        if (!strncmp(b[i].token, "pad", 3) && b[i].token[3]) { k_padbtn(s, &b[i]); continue; }
         if (!strcmp(b[i].token, "hjob") || !strcmp(b[i].token, "hgone")) {
             k_hist_row(s, &b[i], m, i == armed);
             continue;
@@ -2627,6 +2755,17 @@ static void k_nav(const char *host, int port, kmenu *m, const btn *b) {
     else if (!strcmp(t, "fil")) m->scr = K_FIL;
     else if (!strcmp(t, "move")) m->scr = K_MOVE;
     else if (!strcmp(t, "tune")) m->scr = K_TUNE;
+    else if (!strcmp(t, "mode")) { m->mback = m->scr; m->scr = K_MODE; }
+    else if (!strcmp(t, "pad")) { m->scr = K_PAD; m->pad[0] = 0; m->padbad = 0; }
+    else if (!strncmp(t, "pad", 3)) {
+        /* up up down down left right left right B A; a wrong press starts over */
+        static const char code[] = "UUDDLRLRBA";
+        int n = (int)strlen(m->pad);
+        m->padbad = code[n] != t[3];
+        if (m->padbad) m->pad[0] = 0;
+        else { m->pad[n] = t[3]; m->pad[n + 1] = 0; }
+        if (!strcmp(m->pad, code)) { m->scr = K_BRACE; m->pad[0] = 0; }
+    }
     else if (!strcmp(t, "objs")) { m->scr = K_OBJS; m->nobj = k_objs(host, port); }
     else if (!strcmp(t, "ftemp")) m->ft = (m->ft + 1) % 4;
     else if (!strcmp(t, "step")) m->step = (m->step + 1) % 3;
@@ -2638,7 +2777,9 @@ static void k_nav(const char *host, int port, kmenu *m, const btn *b) {
     else if (!strcmp(t, "back"))
         m->scr = m->scr == K_FILE ? K_FILES
                : m->scr == K_ABOUT || m->scr == K_MOVE ? K_TOOLS
-               : m->scr == K_OBJS ? K_TUNE : K_HOME;
+               : m->scr == K_OBJS ? K_TUNE
+               : m->scr == K_PAD || m->scr == K_BRACE ? K_MODE
+               : m->scr == K_MODE ? m->mback : K_HOME;
 }
 
 /* the copy from the stick: drawn straight to the screen between chunks */
@@ -2700,8 +2841,9 @@ static int cmd_klipper(const char *dump, const char *hostport, const char *scree
         nav.token = !strcmp(screen, "file") ? "files" : screen;
         k_nav(host, port, &m, &nav);
         if (!strcmp(screen, "file") && nkf > 0) { nav.token = "file"; k_nav(host, port, &m, &nav); }
+        if (!strcmp(screen, "brace")) m.scr = K_BRACE;
     }
-    btn b[12];
+    btn b[16];
     int nb = 0, armed = -1, pressed = 0, was = 0;
     long next = 0, armed_t = 0, note_t = 0, rst_t = -60000, touch_t = now_ms();
     char eth[32] = "", wifi[32] = "", note[48] = "";
@@ -2741,10 +2883,12 @@ static int cmd_klipper(const char *dump, const char *hostport, const char *scree
             }
             was = k_busy(&k);
             /* a job started elsewhere, a fault, or two idle minutes: back home;
-             * TUNE and OBJECTS are the screens that live during a job */
+             * TUNE and OBJECTS are the screens that live during a job, SPEED
+             * MODE and its gamepad live either way */
             int ok = k.online && !strcmp(k.kstate, "ready");
             int stay = m.scr == K_TUNE || m.scr == K_OBJS ? k_busy(&k) && ok
                      : m.scr == K_FIL && k_busy(&k) ? ok && !strcmp(k.pstate, "paused")
+                     : m.scr == K_MODE || m.scr == K_PAD || m.scr == K_BRACE ? ok
                      : k_idle(&k);
             if (m.scr == K_OBJS && stay) m.nobj = k_objs(host, port);
             if (m.scr != K_HOME && (!stay || (!dump && t - touch_t > 120000))) {
@@ -2832,6 +2976,7 @@ static int cmd_klipper(const char *dump, const char *hostport, const char *scree
             snprintf(note, sizeof note, "%s %s", lab,
                      rc == 200 ? "ok" : rc == -2 ? "running" : "failed");
             note_t = now_ms();
+            if (rc == 200 && m.scr == K_BRACE) m.scr = K_MODE;
             if (rc == 200 && (!strcmp(b[hit].token, "print") || !strcmp(b[hit].token, "again") ||
                               !strcmp(b[hit].token, "hjob"))) m.scr = K_HOME;
         }
@@ -2857,7 +3002,8 @@ static void usage(void) {
         "       ad4-screen confirm TITLE BODY [GO_LABEL] [SECS]\n"
         "       ad4-screen touch [SECS]\n"
         "       ad4-screen calib [SECS]\n"
-        "       ad4-screen klipper [HOST[:PORT]] [--dump FILE.ppm [files|file|hist|usb|heat|tools|about|fil|move]]\n"
+        "       ad4-screen klipper [HOST[:PORT]] [--dump FILE.ppm [files|file|hist|usb|heat|tools|about|fil|move|\n"
+        "                tune|mode|pad|brace]]\n"
         "env: AD4_MCU AD4_IP AD4_PORT AD4_INSTALLED AD4_STICK AD4_ROT AD4_CAL\n");
 }
 

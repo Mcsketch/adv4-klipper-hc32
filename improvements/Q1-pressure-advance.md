@@ -43,3 +43,9 @@ purge line.
 The 2026-11-03 ladder kept 0.05 and ruled out 0.5 (thin walls, confounded by
 heat creep, see RUNBOOK section 7). A value outside 0.02-0.15 on this tower
 means re-check the reading before using it.
+
+## Result (2026-11-04)
+
+Caleb's tower showed no clear best height: the corners looked the same from
+0 to 0.25. The walls ran at 40 mm/s with accel 500 (the hot end's flow limit),
+where PA changes little. Set to 0.04, a typical direct-drive value.

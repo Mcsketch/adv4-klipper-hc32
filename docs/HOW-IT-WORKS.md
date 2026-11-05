@@ -117,9 +117,9 @@ power off and walk away.
    ($ per kg, g/cm³, $ per hour of printer time). Without them it shows no cost.
    To swap the panel binary on a running printer, kill the
    `ad4-screen klipper` process, not the `sh -c while` loop around it.
-   Its HOME runs `HOME_XYZ` (`host/home_xyz.py`): all
-   three axes in one move, each at Z's 5 mm/s; `G28` still homes one axis
-   at a time. A job starting from anywhere, or two minutes without a
+   Its HOME runs `HOME_XYZ`, a macro for `G28` (one axis at a time).
+   `host/home_xyz.py` (all three in one move) is off; why is in
+   `host/printer.cfg`. A job starting from anywhere, or two minutes without a
    touch, returns it to the home screen.
 5. WiFi from `/etc/wpa_supplicant.conf` (the network saved in the stock UI).
 

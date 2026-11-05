@@ -57,6 +57,10 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <net/if.h>
+#include <sys/mount.h>
+#include <sys/stat.h>
+#include <dirent.h>
+#include <strings.h>
 #endif
 
 #include "ad4_font8x8.h"
@@ -1525,6 +1529,148 @@ static void urlenc(const char *s, char *o, int n) {
     o[j] = 0;
 }
 
+/* ---- a USB stick in the printer (P6): vfat only (the SoC's kernel has
+ * nothing else), mounted read-only while USB is open; G-code at the top
+ * level. A print copies the file to Moonraker's gcodes/usb/, then starts it.
+ * The stick must never hold Adventurer4*.tgz or flashforge_init.sh: the
+ * SoC's boot script installs or runs those from any stick present. */
+#define K_USBDIR "/tmp/usb"
+typedef struct { char name[256]; double mod, size; } kufile;
+static kufile ku[K_MAXF];
+static int nku, g_usbmnt;
+
+/* the stick's block device, or NULL; AD4_USB_DIR fakes one for --dump */
+static const char *k_usbdev(void) {
+    static const char *const dev[] = { "/dev/sda1", "/dev/sda" };
+    if (getenv("AD4_USB_DIR")) return "dump";
+    for (int i = 0; i < 2; i++)
+        if (access(dev[i], F_OK) == 0) return dev[i];
+    return NULL;
+}
+
+static const char *k_usbdir(void) { return g_env("AD4_USB_DIR", K_USBDIR); }
+
+static void k_usbumount(void) {
+    if (g_usbmnt) umount2(K_USBDIR, MNT_DETACH);
+    g_usbmnt = 0;
+}
+
+static int ku_cmp(const void *a, const void *b) {
+    double d = ((const kufile *)b)->mod - ((const kufile *)a)->mod;
+    return (d > 0) - (d < 0);
+}
+
+/* Returns the number of G-code files, -1 with no stick, -2 when it would
+ * not mount (not FAT32, or no partition). */
+static int k_usb(void) {
+    const char *dev = k_usbdev();
+    nku = 0;
+    if (!dev) return -1;
+    if (strcmp(dev, "dump") && !g_usbmnt) {
+        mkdir(K_USBDIR, 0755);
+        if (mount(dev, K_USBDIR, "vfat", MS_RDONLY | MS_NOSUID | MS_NODEV | MS_NOEXEC, "") != 0)
+            return -2;
+        g_usbmnt = 1;
+    }
+    DIR *d = opendir(k_usbdir());
+    if (!d) return -2;
+    struct dirent *e;
+    while (nku < K_MAXF && (e = readdir(d))) {
+        int l = (int)strlen(e->d_name);
+        if (e->d_name[0] == '.' || l < 3 || l >= (int)sizeof ku[0].name) continue;
+        const char *x = strrchr(e->d_name, '.');
+        if (!x || (strcasecmp(x, ".gcode") && strcasecmp(x, ".gco") && strcasecmp(x, ".g"))) continue;
+        char p[320];
+        struct stat st;
+        snprintf(p, sizeof p, "%s/%s", k_usbdir(), e->d_name);
+        if (stat(p, &st) || !S_ISREG(st.st_mode)) continue;
+        snprintf(ku[nku].name, sizeof ku[nku].name, "%s", e->d_name);
+        ku[nku].mod = (double)st.st_mtime;
+        ku[nku].size = (double)st.st_size;
+        nku++;
+    }
+    closedir(d);
+    qsort(ku, nku, sizeof *ku, ku_cmp);
+    return nku;
+}
+
+static int k_wall(int fd, const char *b, long n) {
+    while (n > 0) {
+        ssize_t w = write(fd, b, n);
+        if (w <= 0) return -1;
+        b += w; n -= w;
+    }
+    return 0;
+}
+
+/* Streams the stick's file to Moonraker as gcodes/usb/<name> (one multipart
+ * POST, 16 KB at a time; prog() repaints between chunks). Returns the HTTP
+ * status (201 on success) with Moonraker's path for it in out. */
+static int k_upload(const char *host, int port, const char *name, char *out, int outn,
+                    void (*prog)(void *, double, double), void *ctx) {
+    static const char bd[] = "ad4usbad4usbad4usb";
+    char src[320], fn[256], head[1024], tail[64];
+    static char buf[16384];
+    out[0] = 0;
+    snprintf(src, sizeof src, "%s/%s", k_usbdir(), name);
+    snprintf(fn, sizeof fn, "%s", name);
+    for (char *q = fn; *q; q++) if (*q == '"' || *q == '\\' || *q < ' ') *q = '_';
+    int in = open(src, O_RDONLY);
+    if (in < 0) return -1;
+    struct stat st;
+    if (fstat(in, &st)) { close(in); return -1; }
+    int hb = snprintf(buf, sizeof buf,
+        "--%s\r\nContent-Disposition: form-data; name=\"root\"\r\n\r\ngcodes\r\n"
+        "--%s\r\nContent-Disposition: form-data; name=\"path\"\r\n\r\nusb\r\n"
+        "--%s\r\nContent-Disposition: form-data; name=\"file\"; filename=\"%s\"\r\n"
+        "Content-Type: application/octet-stream\r\n\r\n", bd, bd, bd, fn);
+    int tb = snprintf(tail, sizeof tail, "\r\n--%s--\r\n", bd);
+    int h = snprintf(head, sizeof head,
+        "POST /server/files/upload HTTP/1.0\r\nHost: %s:%d\r\n"
+        "Content-Type: multipart/form-data; boundary=%s\r\nContent-Length: %lld\r\n\r\n",
+        host, port, bd, (long long)st.st_size + hb + tb);
+    struct sockaddr_in a;
+    memset(&a, 0, sizeof a);
+    a.sin_family = AF_INET;
+    a.sin_port = htons(port);
+    int fd = inet_pton(AF_INET, host, &a.sin_addr) == 1 ? socket(AF_INET, SOCK_STREAM, 0) : -1;
+    struct timeval tv = { 15, 0 };
+    if (fd >= 0) {
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    }
+    if (fd < 0 || connect(fd, (struct sockaddr *)&a, sizeof a) ||
+        k_wall(fd, head, h) || k_wall(fd, buf, hb)) {
+        if (fd >= 0) close(fd);
+        close(in);
+        return -1;
+    }
+    double done = 0;
+    long t = 0;
+    ssize_t r;
+    while ((r = read(in, buf, sizeof buf)) > 0) {
+        if (k_wall(fd, buf, r)) break;
+        done += r;
+        if (prog && now_ms() - t > 250) { prog(ctx, done, (double)st.st_size); t = now_ms(); }
+    }
+    close(in);
+    if (done != (double)st.st_size || k_wall(fd, tail, tb)) { close(fd); return -1; }
+    if (prog) prog(ctx, done, done);
+    /* Moonraker answers once the file is written and its metadata read */
+    tv.tv_sec = 60;
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    int got = 0;
+    while (got < (int)sizeof buf - 1 && (r = read(fd, buf + got, sizeof buf - 1 - got)) > 0)
+        got += (int)r;
+    close(fd);
+    buf[got] = 0;
+    int code = -1;
+    const char *b, *e;
+    sscanf(buf, "HTTP/%*s %d", &code);
+    if ((b = jobj(buf, "item", &e))) jstr(b, e, "path", out, outn);
+    return code;
+}
+
 typedef struct {
     int ok;
     double est, fil, grams, lh, ext, bed, layers, height;
@@ -1734,9 +1880,9 @@ static void k_line(const surf *s, int x0, int y0, int x1, int y1, unsigned c) {
 #define K_BMX(x) (K_BX + (int)((x) * 1.2))
 #define K_BMY(y) (K_BY + (int)((200 - (y)) * 1.2))
 
-enum { K_HOME, K_FILES, K_FILE, K_HEAT, K_TOOLS, K_ABOUT, K_FIL, K_MOVE, K_TUNE, K_OBJS, K_HIST };
+enum { K_HOME, K_FILES, K_FILE, K_HEAT, K_TOOLS, K_ABOUT, K_FIL, K_MOVE, K_TUNE, K_OBJS, K_HIST, K_USB };
 typedef struct {
-    int scr, page, sel, nfiles, ft, step, nobj, nhist;
+    int scr, page, sel, nfiles, ft, step, nobj, nhist, nusb;
     kmeta meta; kimg img;             /* the file picked in PRINT */
     char jfile[96]; kmeta jmeta; kimg jimg; long jt;   /* the running job */
     kmeta rmeta[K_ROWS]; kimg rimg[K_ROWS];            /* the Print list's or History's rows */
@@ -1893,9 +2039,28 @@ static int k_buttons(const kstat *k, const kmenu *m, btn *b) {
             int f = m->page * K_ROWS + i;
             b[n++] = (btn){ 24, 108 + i * 80, 432, 72, kf[f].name, "file", 0, 0, 0, 0, f };
         }
+        if (k_usbdev()) {
+            /* a stick is in: four across */
+            b[n++] = (btn){ 24, 600, 102, 120, "BACK", "back", K_G1, K_G2, 2, 0, 0 };
+            b[n++] = (btn){ 134, 600, 102, 120, "USB", "usb", C_OK, 0x1f8a60u, 2, 0, 0 };
+            if (m->page > 0) b[n++] = (btn){ 244, 600, 102, 120, "PREV", "prev", C_ACC, C_ACCD, 2, 0, 0 };
+            if ((m->page + 1) * K_ROWS < nkf)
+                b[n++] = (btn){ 354, 600, 102, 120, "NEXT", "next", C_ACC, C_ACCD, 2, 0, 0 };
+            break;
+        }
         b[n++] = KB(24, 136, "BACK", "back", K_G1, K_G2, 0);
         if (m->page > 0) b[n++] = KB(172, 136, "PREV", "prev", C_ACC, C_ACCD, 0);
         if ((m->page + 1) * K_ROWS < nkf) b[n++] = KB(320, 136, "NEXT", "next", C_ACC, C_ACCD, 0);
+        break;
+    case K_USB:
+        /* two taps on a file copy it to the printer and print it */
+        for (int i = 0; i < K_ROWS && m->page * K_ROWS + i < nku; i++) {
+            int f = m->page * K_ROWS + i;
+            b[n++] = (btn){ 24, 108 + i * 80, 432, 72, ku[f].name, "ufile", 0, 0, 0, 1, f };
+        }
+        b[n++] = KB(24, 136, "BACK", "back", K_G1, K_G2, 0);
+        if (m->page > 0) b[n++] = KB(172, 136, "PREV", "prev", C_ACC, C_ACCD, 0);
+        if ((m->page + 1) * K_ROWS < nku) b[n++] = KB(320, 136, "NEXT", "next", C_ACC, C_ACCD, 0);
         break;
     case K_FILE:
         b[n++] = KB(24, 208, "BACK", "back", K_G1, K_G2, 0);
@@ -2045,6 +2210,28 @@ static void k_file_row(const surf *s, const btn *b, const kmenu *m) {
     } else
         k_size(f->size, ln, sizeof ln);
     text(s, b->x + 76, b->y + 44, ln, 2, C_DIM);
+}
+
+/* name; size and the file's date on the stick */
+static void k_usb_row(const surf *s, const btn *b, int armed) {
+    const kufile *f = &ku[b->arg];
+    char nm[32], sz[24], ln[64], when[24] = "";
+    int l = (int)strlen(f->name);
+    const char *x = strrchr(f->name, '.');
+    if (x) l = (int)(x - f->name);
+    if (l > 25) snprintf(nm, sizeof nm, "%.23s..", f->name);
+    else snprintf(nm, sizeof nm, "%.*s", l, f->name);
+    rrect(s, b->x, b->y, b->w, b->h, 14, armed ? C_ERRD : C_CARD, armed ? C_ERRD : C_CARD2);
+    text(s, b->x + 16, b->y + 14, nm, 2, C_TXT);
+    k_size(f->size, sz, sizeof sz);
+    time_t te = (time_t)f->mod;
+    struct tm tm;
+    if (te > 1700000000) {
+        localtime_r(&te, &tm);
+        strftime(when, sizeof when, "%b %d %H:%M", &tm);
+    }
+    snprintf(ln, sizeof ln, "%s   %s", sz, when);
+    text(s, b->x + 16, b->y + 44, ln, 2, C_DIM);
 }
 
 /* name; result and printed time; when, filament, grams */
@@ -2228,7 +2415,7 @@ static void k_paint(const surf *s, const kstat *k, const kmenu *m, const btn *b,
                     const char *note, const char *hostport) {
     static const char *const title[] = {
         "ADVENTURER 4", "PRINT", "PRINT", "PREHEAT", "TOOLS", "ABOUT", "FILAMENT", "MOVE", "TUNE", "OBJECTS",
-        "HISTORY" };
+        "HISTORY", "USB STICK" };
     const char *lab, *foot = "";
     char pg[32];
     unsigned col = k_chip(k, &lab);
@@ -2275,6 +2462,19 @@ static void k_paint(const surf *s, const kstat *k, const kmenu *m, const btn *b,
         break;
     case K_FILE:
         k_file_card(s, m);
+        break;
+    case K_USB:
+        if (m->nusb <= 0) {
+            rrect(s, 24, 108, 432, 160, 18, C_CARD, C_CARD2);
+            text_wrap(s, 44, 128, m->nusb == -1 ? "No stick found. Put it in and tap PRINT again."
+                      : m->nusb == -2 ? "Could not read the stick. It has to be FAT32."
+                      : "No G-code files at the top of the stick.",
+                      2, C_DIM, 392);
+        } else if (nku > K_ROWS) {
+            snprintf(pg, sizeof pg, "page %d / %d", m->page + 1, (nku + K_ROWS - 1) / K_ROWS);
+            foot = pg;
+        } else
+            foot = "tap a file twice to print";
         break;
     case K_HIST:
         if (m->nhist <= 0) {
@@ -2346,6 +2546,7 @@ static void k_paint(const surf *s, const kstat *k, const kmenu *m, const btn *b,
 
     for (int i = 0; i < nb; i++) {
         if (!strcmp(b[i].token, "file")) { k_file_row(s, &b[i], m); continue; }
+        if (!strcmp(b[i].token, "ufile")) { k_usb_row(s, &b[i], i == armed); continue; }
         if (!strcmp(b[i].token, "hjob") || !strcmp(b[i].token, "hgone")) {
             k_hist_row(s, &b[i], m, i == armed);
             continue;
@@ -2406,6 +2607,7 @@ static void k_nav(const char *host, int port, kmenu *m, const btn *b) {
     const char *t = b->token;
     if (!strcmp(t, "files")) { m->scr = K_FILES; m->page = 0; m->nfiles = k_files(host, port); k_rows(host, port, m); }
     else if (!strcmp(t, "ack")) m->ack = 1;
+    else if (!strcmp(t, "usb")) { m->scr = K_USB; m->page = 0; m->nusb = k_usb(); }
     else if (!strcmp(t, "hist")) {
         m->scr = K_HIST;
         m->nhist = k_hist(host, port, m->rmeta);
@@ -2427,12 +2629,34 @@ static void k_nav(const char *host, int port, kmenu *m, const btn *b) {
     else if (!strcmp(t, "objs")) { m->scr = K_OBJS; m->nobj = k_objs(host, port); }
     else if (!strcmp(t, "ftemp")) m->ft = (m->ft + 1) % 4;
     else if (!strcmp(t, "step")) m->step = (m->step + 1) % 3;
-    else if (!strcmp(t, "prev")) { m->page--; k_rows(host, port, m); }
-    else if (!strcmp(t, "next")) { m->page++; k_rows(host, port, m); }
+    else if (!strcmp(t, "prev")) { m->page--; if (m->scr == K_FILES) k_rows(host, port, m); }
+    else if (!strcmp(t, "next")) { m->page++; if (m->scr == K_FILES) k_rows(host, port, m); }
+    else if (!strcmp(t, "back") && m->scr == K_USB) {
+        m->scr = K_FILES; m->page = 0; m->nfiles = k_files(host, port); k_rows(host, port, m);
+    }
     else if (!strcmp(t, "back"))
         m->scr = m->scr == K_FILE ? K_FILES
                : m->scr == K_ABOUT || m->scr == K_MOVE ? K_TOOLS
                : m->scr == K_OBJS ? K_TUNE : K_HOME;
+}
+
+/* the copy from the stick: drawn straight to the screen between chunks */
+typedef struct { surf *s, *fb; size_t len; const char *name; } kcopy;
+
+static void k_copyprog(void *v, double done, double size) {
+    kcopy *c = v;
+    char ln[64], a[24], b[24];
+    background(c->s);
+    header(c->s, "USB STICK", "COPYING", C_ACC);
+    rrect(c->s, 24, 108, 432, 140, 18, C_CARD, C_CARD2);
+    int y = text_wrap(c->s, 44, 128, c->name, 2, C_TXT, 392) + 16;
+    k_size(done, a, sizeof a);
+    k_size(size, b, sizeof b);
+    snprintf(ln, sizeof ln, "%s of %s", a, b);
+    text(c->s, 44, y, ln, 2, C_DIM);
+    progress(c->s, 272, size > 0 ? (int)(done * 100 / size) : 0, C_ACC);
+    textc(c->s, c->s->w / 2, 724, "leave the stick in", 2, C_DIM);
+    if (c->fb) memcpy(c->fb->mem, c->s->mem, c->len);
 }
 
 static int cmd_klipper(const char *dump, const char *hostport, const char *screen) {
@@ -2526,6 +2750,7 @@ static int cmd_klipper(const char *dump, const char *hostport, const char *scree
                 m.scr = K_HOME;
                 armed = -1;
             }
+            if (m.scr != K_USB) k_usbumount();
             nb = k_buttons(&k, &m, b);
             if (armed >= nb) armed = -1;
             k_paint(&s, &k, &m, b, nb, armed, eth, wifi, note, hp);
@@ -2567,6 +2792,28 @@ static int cmd_klipper(const char *dump, const char *hostport, const char *scree
             next = 0;
             const char *tok = b[hit].token;
             char path[640], en[400];
+            if (!strcmp(tok, "ufile")) {
+                char dst[256], rb[2048];
+                kcopy cc = { &s, &fbs, len, ku[b[hit].arg].name };
+                int rc = k_upload(host, port, ku[b[hit].arg].name, dst, sizeof dst, k_copyprog, &cc);
+                fprintf(stderr, "klipper: usb %s -> %d %s\n", ku[b[hit].arg].name, rc, dst);
+                k_usbumount();
+                if ((rc != 200 && rc != 201) || !dst[0]) {
+                    snprintf(note, sizeof note, "copy failed");
+                    note_t = now_ms();
+                    m.nusb = k_usb();
+                    continue;
+                }
+                urlenc(dst, en, sizeof en);
+                snprintf(path, sizeof path, "/printer/print/start?filename=%s", en);
+                rc = http_req(host, port, "POST", path, rb, sizeof rb);
+                fprintf(stderr, "klipper: %s -> %d\n", path, rc);
+                snprintf(note, sizeof note, "PRINT %s", rc == 200 ? "ok" : "failed");
+                note_t = now_ms();
+                m.scr = rc == 200 ? K_HOME : K_FILES;
+                if (m.scr == K_FILES) { m.page = 0; m.nfiles = k_files(host, port); k_rows(host, port, &m); }
+                continue;
+            }
             if (!strcmp(tok, "print") || !strcmp(tok, "again") || !strcmp(tok, "hjob")) {
                 urlenc(tok[0] == 'p' ? kf[m.sel].name : tok[0] == 'h' ? kh[b[hit].arg].name : k.file,
                        en, sizeof en);
@@ -2609,7 +2856,7 @@ static void usage(void) {
         "       ad4-screen confirm TITLE BODY [GO_LABEL] [SECS]\n"
         "       ad4-screen touch [SECS]\n"
         "       ad4-screen calib [SECS]\n"
-        "       ad4-screen klipper [HOST[:PORT]] [--dump FILE.ppm [files|file|hist|heat|tools|about|fil|move]]\n"
+        "       ad4-screen klipper [HOST[:PORT]] [--dump FILE.ppm [files|file|hist|usb|heat|tools|about|fil|move]]\n"
         "env: AD4_MCU AD4_IP AD4_PORT AD4_INSTALLED AD4_STICK AD4_ROT AD4_CAL\n");
 }
 

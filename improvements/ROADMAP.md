@@ -109,11 +109,11 @@ Decision (S1, 2026-11-03): OrcaSlicer for the AD4 and the CC2.
 |---|---|---|---|
 | P1 | Job screen and tune | J5, J6, J7. | |
 | P2 | Swap screen | M1. | |
-| P3 | Queue and history | On the panel 2026-11-05 (md5 1d92edcf): HISTORY beside PRINT on the home screen lists the last 6 jobs from Moonraker's history: thumbnail, name, DONE / CANCELLED / FAILED, printed time, when, filament m and g. Two taps on a job print it again; a deleted file is shown dim and cannot. Left: a queue (Moonraker's job queue) if ever wanted. | done |
+| P3 | Queue and history | On the panel 2026-11-05 (md5 1d92edcf): HISTORY beside PRINT on the home screen lists the last 5 jobs (since P7, History under the Print tab) from Moonraker's history: thumbnail, name, DONE / CANCELLED / FAILED, printed time, when, filament m and g. Two taps on a job print it again; a deleted file is shown dim and cannot. Left: a queue (Moonraker's job queue) if ever wanted. | done |
 | P4 | Light toggle | Installed 2026-11-03: TOOLS has a LIGHT button between BACK and ABOUT that cycles off, on, 30 % (`SET_PIN PIN=light`) and shows the current value; it is hidden if printer.cfg has no `[output_pin light]`. The camera needs no toggle: `ad4-cam` only opens it while someone watches. Caleb confirmed it on the printer 2026-11-03. | done |
 | P5 | Settings | Network (IP, link, Tailscale name of the host), screen brightness and sleep, buzzer volume, units. | idea |
 | P6 | Files on the stick | On the panel 2026-11-05 (md5 d3f03237): with a stick in, the Print list gets a USB button. It mounts the stick read-only (FAT32 only; the SoC kernel has no exFAT or NTFS) and lists the G-code at its top level. Two taps on a file stream it to Moonraker's `gcodes/usb/` (progress bar), unmount the stick and start the print. The copy stays in PRINT and HISTORY. Tested 2026-11-05 with a FAT32 stick: list, copy and start worked. Never leave `Adventurer4*.tgz` or `flashforge_init.sh` on a stick: the SoC's boot script installs or runs them. | done |
-| P7 | Look | Consistent icons, bigger touch targets, a clear active state; previews with `make -C src preview` before each install. | on panel 11-06 for review (Barlow, line icons, 4 tabs) |
+| P7 | Look | On the panel 2026-11-06 (03ae11f), kept by Caleb: Barlow, line icons, one accent, colour only for state; bottom tabs Home, Print, Heat, Tools; back arrow on sub-screens. Previews with `make -C src preview` before each install. | done |
 
 ## 8. Outside the printer
 

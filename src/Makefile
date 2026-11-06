@@ -17,14 +17,14 @@ $(OUT)/ad4-cam: CFLAGS += -U_TIME_BITS -D_TIME_BITS=32 -U_FILE_OFFSET_BITS -D_FI
 
 all: $(BINS)
 
-$(OUT)/%: %.c ad4_buzzer.h ad4_font8x8.h stb_image.h
+$(OUT)/%: %.c ad4_buzzer.h ad4_font8x8.h stb_image.h stb_truetype.h $(wildcard fonts/*.ttf)
 	@mkdir -p $(OUT)
-	$(CC) $(CFLAGS) -static -o $@ $<
+	$(CC) $(CFLAGS) -static -o $@ $< -lm
 	$(CROSS)strip $@
 
 preview:
 	@mkdir -p $(PREVIEW)
-	cc -std=gnu11 -O2 -Wall -DAD4_DUMP -o $(PREVIEW)/ad4-screen-host ad4-screen.c
+	cc -std=gnu11 -O2 -Wall -DAD4_DUMP -o $(PREVIEW)/ad4-screen-host ad4-screen.c -lm
 	cd $(PREVIEW) && export AD4_MCU=NA && ./ad4-screen-host splash --dump splash.ppm; \
 	  ./ad4-screen-host boot --dump boot.ppm; \
 	  ./ad4-screen-host confirm "Install Klipper?" "Flashes Klipper onto the mainboard and switches the panel to Klipper. Takes a few minutes. Do not power off while it runs.\nMainboard: NA (N32G455)" INSTALL --dump install-confirm.ppm; \

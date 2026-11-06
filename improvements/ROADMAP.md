@@ -113,7 +113,7 @@ Decision (S1, 2026-11-03): OrcaSlicer for the AD4 and the CC2.
 | P4 | Light toggle | Installed 2026-11-03: TOOLS has a LIGHT button between BACK and ABOUT that cycles off, on, 30 % (`SET_PIN PIN=light`) and shows the current value; it is hidden if printer.cfg has no `[output_pin light]`. The camera needs no toggle: `ad4-cam` only opens it while someone watches. Caleb confirmed it on the printer 2026-11-03. | done |
 | P5 | Settings | Network (IP, link, Tailscale name of the host), screen brightness and sleep, buzzer volume, units. | idea |
 | P6 | Files on the stick | On the panel 2026-11-05 (md5 d3f03237): with a stick in, the Print list gets a USB button. It mounts the stick read-only (FAT32 only; the SoC kernel has no exFAT or NTFS) and lists the G-code at its top level. Two taps on a file stream it to Moonraker's `gcodes/usb/` (progress bar), unmount the stick and start the print. The copy stays in PRINT and HISTORY. Tested 2026-11-05 with a FAT32 stick: list, copy and start worked. Never leave `Adventurer4*.tgz` or `flashforge_init.sh` on a stick: the SoC's boot script installs or runs them. | done |
-| P7 | Look | Consistent icons, bigger touch targets, a clear active state; previews with `make -C src preview` before each install. | idea |
+| P7 | Look | Consistent icons, bigger touch targets, a clear active state; previews with `make -C src preview` before each install. | on panel 11-06 for review (Barlow, line icons, 4 tabs) |
 
 ## 8. Outside the printer
 

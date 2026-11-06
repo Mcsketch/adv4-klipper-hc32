@@ -1487,19 +1487,9 @@ static int k_ended(const kstat *k) {
            !strcmp(k->pstate, "cancelled") || !strcmp(k->pstate, "error"));
 }
 
-static unsigned k_chip(const kstat *k, const char **label) {
-    if (!k->online) { *label = "HOST OFFLINE"; return C_ERR; }
-    if (!strcmp(k->kstate, "startup")) { *label = "STARTING"; return C_WARN; }
-    if (strcmp(k->kstate, "ready")) { *label = "NOT READY"; return C_ERR; }
-    if (!strcmp(k->pstate, "printing")) { *label = "PRINTING"; return C_ACC; }
-    if (!strcmp(k->pstate, "paused")) { *label = "PAUSED"; return C_WARN; }
-    *label = "READY";
-    return C_OK;
-}
-
 /* ---- local files: Moonraker's gcodes root, newest first */
 #define K_MAXF 64
-#define K_ROWS 6
+#define K_ROWS 5
 typedef struct { char name[128]; double mod, size; } kfile;
 static kfile kf[K_MAXF];
 static int nkf;
@@ -1738,7 +1728,7 @@ static kjob kh[K_ROWS];
 static int k_hist(const char *host, int port, kmeta *meta) {
     static char buf[32768];
     int n = 0;
-    if (http_req(host, port, "GET", "/server/history/list?limit=6&order=desc", buf, sizeof buf) != 200)
+    if (http_req(host, port, "GET", "/server/history/list?limit=5&order=desc", buf, sizeof buf) != 200)
         return -1;
     for (const char *p = strstr(buf, "{\"job_id\":"); p && n < K_ROWS; n++) {
         const char *q = strstr(p + 1, "{\"job_id\":"), *e = q ? q : buf + strlen(buf), *mb, *me;
@@ -1872,71 +1862,1334 @@ static void k_oname(const char *n, char *o, int sz) {
     const char *c = strstr(n, ".stl");
     if (!c) c = strstr(n, "_id_");
     if (c) l = (int)(c - n);
-    if (l > 9) l = 9;
     snprintf(o, sz, "%.*s", l, n);
 }
 
-static void k_line(const surf *s, int x0, int y0, int x1, int y1, unsigned c) {
-    int dx = abs(x1 - x0), dy = -abs(y1 - y0), sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
-    for (int err = dx + dy;;) {
-        fill(s, x0, y0, 2, 2, c);
-        if (x0 == x1 && y0 == y1) break;
-        int e2 = 2 * err;
-        if (e2 >= dy) { err += dy; x0 += sx; }
-        if (e2 <= dx) { err += dx; y0 += sy; }
-    }
-}
-
-/* the bed, 220 x 200 mm at 1.2 px/mm, back edge at the top */
-#define K_BX 108
-#define K_BY 108
-#define K_BMX(x) (K_BX + (int)((x) * 1.2))
-#define K_BMY(y) (K_BY + (int)((200 - (y)) * 1.2))
-
-enum { K_HOME, K_FILES, K_FILE, K_HEAT, K_TOOLS, K_ABOUT, K_FIL, K_MOVE, K_TUNE, K_OBJS, K_HIST, K_USB,
-       K_MODE, K_PAD, K_BRACE };
+enum { K_HOME, K_FILES, K_FILE, K_HEAT, K_TOOLS, K_ABOUT, K_MOVE, K_TUNE, K_OBJS, K_HIST, K_USB,
+       K_MODE, K_PAD, K_BRACE, K_FANS, K_HJOB };
 typedef struct {
-    int scr, page, sel, nfiles, ft, step, nobj, nhist, nusb;
+    int scr, page, sel, nfiles, step, nobj, nhist, nusb;
     kmeta meta; kimg img;             /* the file picked in PRINT */
     char jfile[96]; kmeta jmeta; kimg jimg; long jt;   /* the running job */
     kmeta rmeta[K_ROWS]; kimg rimg[K_ROWS];            /* the Print list's or History's rows */
     int ack;                          /* the finished job's card was dismissed */
     double rate[3];                   /* $/kg, g/cm3, $/printer hour; 0 = not set */
-    int mback;                        /* SPEED MODE's BACK: TOOLS or TUNE */
+    int mback;                        /* SPEED MODE's BACK: HOME, TOOLS or TUNE */
     char pad[12]; int padbad;         /* the gamepad's presses so far, a wrong one */
+    int hjob, hsrc, hback;            /* PAST JOB: kh[] row or the last job, and its BACK */
+    kjob last; kmeta lmeta; kimg limg; int nlast; long lt;   /* home's last job */
 } kmenu;
 
-/* FILAMENT's TEMP tile and MOVE's STEP tile cycle through these */
-static const int k_ftemp[] = { 220, 240, 250, 210 };
-static const double k_step[] = { 10, 1, 0.1 };
-
-#define KB(x, w, lab, tok, top, bot, dng) \
-    ((btn){ x, 600, w, 120, lab, tok, top, bot, 3, dng, 0 })
-#define KT(x, y, w, lab, tok, top, bot) \
-    ((btn){ x, y, w, 130, lab, tok, top, bot, 3, 0, 0 })
-#define K_G1 0x5a6a80u
-#define K_G2 0x39465au
+/* MOVE's step, mm */
+static const double k_step[] = { 0.1, 1, 10, 50 };
 #define K_GS "/printer/gcode/script?script="
 
-/* TUNE: one row per setting, - and + either side of the value. SPEED and
- * FLOW reach past the speed modes' own factors (BRACE: M220 700, M221 170). */
-#define K_NTUNE 5
-static const char *const k_tlab[K_NTUNE] = { "SPEED", "FLOW", "Z OFFSET", "NOZZLE", "PART FAN" };
+/* ------------------------------------------------------------ look (P7) */
+/* Flat and dark: Barlow (SIL OFL 1.1, fonts/OFL.txt) rasterised by
+ * stb_truetype v1.26, anti-aliased shapes, stroked line icons, one accent
+ * and colour only for state. The SoC has no FPU, so glyphs, icons and
+ * rounded corners are rendered once and cached. */
+#define STB_TRUETYPE_IMPLEMENTATION
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
+#include "stb_truetype.h"
+#pragma GCC diagnostic pop
+#include <math.h>
 
-static double k_tval(const kstat *k, int i) {
-    double v[K_NTUNE] = { k->speed * 100, k->flow * 100, k->zoff, k->ett, k->pfan * 100 };
-    return v[i];
+__asm__(".pushsection .rodata\n"
+        ".balign 4\n.global ad4_ttf_med\nad4_ttf_med:\n.incbin \"fonts/Barlow-Medium.ttf\"\n"
+        ".balign 4\n.global ad4_ttf_semi\nad4_ttf_semi:\n.incbin \"fonts/Barlow-SemiBold.ttf\"\n"
+        ".balign 4\n.global ad4_ttf_cond\nad4_ttf_cond:\n.incbin \"fonts/BarlowCondensed-SemiBold.ttf\"\n"
+        ".popsection\n");
+extern const unsigned char ad4_ttf_med[], ad4_ttf_semi[], ad4_ttf_cond[];
+
+#define U_SCR      0x0e1318u
+#define U_SURF     0x151c23u
+#define U_SURF2    0x1d262fu
+#define U_LINE     0x27323cu
+#define U_FG       0xe8edf1u
+#define U_MUT      0x8d9ba7u
+#define U_DIM      0x55626du
+#define U_ACC      0x4ea4ffu
+#define U_ACC_INK  0x04213du
+#define U_GO       0x2fbf71u
+#define U_GO_INK   0x03210fu
+#define U_STOP     0xe8504cu
+#define U_STOP_INK 0xffffffu
+#define U_WARN     0xf3a52bu
+#define U_WARN_INK 0x2b1900u
+#define U_HEAT     0xff7b3au
+
+/* ---- pixels with coverage */
+static unsigned pget(const surf *s, int x, int y) {
+    int fx = x, fy = y;
+    if (s->rot) { fx = s->fw - 1 - y; fy = x; }
+    const unsigned char *p = s->mem + (size_t)fy * s->stride + (size_t)fx * (s->bpp / 8);
+    unsigned v;
+    if (s->bpp == 16) { unsigned short t; memcpy(&t, p, 2); v = t; }
+    else memcpy(&v, p, 4);
+    unsigned r = v >> s->ro & ((1u << s->rl) - 1), g = v >> s->go & ((1u << s->gl) - 1),
+             b = v >> s->bo & ((1u << s->bl) - 1);
+    r = r << (8 - s->rl) | r >> (2 * s->rl - 8);
+    g = g << (8 - s->gl) | g >> (2 * s->gl - 8);
+    b = b << (8 - s->bl) | b >> (2 * s->bl - 8);
+    return r << 16 | g << 8 | b;
 }
 
-static int k_tune(const kstat *k, btn *b) {
-    static const double step[K_NTUNE] = { 10, 2, 0.02, 5, 10 };
-    static const double lo[K_NTUNE] = { 20, 80, -1, 180, 0 }, hi[K_NTUNE] = { 800, 200, 1, 260, 100 };
-    static char cmd[K_NTUNE][2][96];
+static int g_op = 256;                /* opacity of everything drawn: 82 = disabled */
+
+static void pxa(const surf *s, int x, int y, unsigned c, int a) {   /* a 0..256 */
+    if (x < 0 || y < 0 || x >= s->w || y >= s->h || a <= 0) return;
+    a = a * g_op >> 8;
+    if (a >= 256) px(s, x, y, c);
+    else if (a > 0) px(s, x, y, mix(pget(s, x, y), c, a));
+}
+
+/* a quarter circle's coverage, r x r, (0,0) the outer corner; t2 = ring
+ * thickness x 2, 0 = filled */
+static const unsigned char *k_corner(int r, int t2) {
+    static unsigned char *tab[65][8];
+    if (r > 64) r = 64;
+    if (t2 > 7) t2 = 7;
+    if (!tab[r][t2]) {
+        unsigned char *p = malloc(r * r + 1);
+        if (!p) return NULL;
+        for (int j = 0; j < r; j++)
+            for (int i = 0; i < r; i++) {
+                float dx = r - (i + .5f), dy = r - (j + .5f), d = sqrtf(dx * dx + dy * dy);
+                float o = r + .5f - d;
+                o = o < 0 ? 0 : o > 1 ? 1 : o;
+                if (t2) {
+                    float n = r - t2 / 2.0f + .5f - d;
+                    o -= n < 0 ? 0 : n > 1 ? 1 : n;
+                    if (o < 0) o = 0;
+                }
+                p[j * r + i] = (unsigned char)(o * 255 + .5f);
+            }
+        tab[r][t2] = p;
+    }
+    return tab[r][t2];
+}
+
+static void rr(const surf *s, int x, int y, int w, int h, int r, unsigned c) {
+    if (w <= 0 || h <= 0) return;
+    if (r > w / 2) r = w / 2;
+    if (r > h / 2) r = h / 2;
+    if (r > 64) r = 64;
+    const unsigned char *t = k_corner(r, 0);
+    for (int j = 0; j < h; j++) {
+        int cj = j < r ? j : j >= h - r ? h - 1 - j : -1;
+        for (int i = 0; i < w; i++) {
+            int ci = i < r ? i : i >= w - r ? w - 1 - i : -1, a = 256;
+            if (ci >= 0 && cj >= 0 && t) { a = t[cj * r + ci]; a += a >> 7; }
+            pxa(s, x + i, y + j, c, a);
+        }
+    }
+}
+
+static void rring(const surf *s, int x, int y, int w, int h, int r, int t2, unsigned c) {
+    if (w <= 0 || h <= 0) return;
+    if (r > w / 2) r = w / 2;
+    if (r > h / 2) r = h / 2;
+    if (r > 64) r = 64;
+    const unsigned char *t = k_corner(r, t2);
+    int tb = (t2 + 1) / 2;
+    for (int j = 0; j < h; j++) {
+        int cj = j < r ? j : j >= h - r ? h - 1 - j : -1;
+        for (int i = 0; i < w; i++) {
+            if (cj < 0 && i >= tb && i < w - tb) { i = w - tb - 1; continue; }
+            int ci = i < r ? i : i >= w - r ? w - 1 - i : -1, a;
+            if (ci >= 0 && cj >= 0) { a = t ? t[cj * r + ci] : 0; a += a >> 7; }
+            else {
+                int o = i, q = w - 1 - i;
+                if (q < o) o = q;
+                if (j < o) o = j;
+                if (h - 1 - j < o) o = h - 1 - j;
+                a = t2 * 128 - o * 256;
+                a = a > 256 ? 256 : a;
+            }
+            pxa(s, x + i, y + j, c, a);
+        }
+    }
+}
+
+/* ---- text */
+typedef struct { int f, px, ls; } ufont;      /* 0 Medium, 1 SemiBold, 2 Condensed; ls in 1/10 px */
+#define UF(f, p, l) ((ufont){ f, p, l })
+typedef struct { int f, px, cp, adv, x0, y0, w, h; unsigned char *bm; } uglyph;
+#define U_NG 4096
+static uglyph g_gl[U_NG];
+static stbtt_fontinfo g_ft[3];
+static int g_ftok;
+
+static uglyph *u_glyph(int f, int sz, int cp) {
+    if (!g_ftok) {
+        const unsigned char *d[3] = { ad4_ttf_med, ad4_ttf_semi, ad4_ttf_cond };
+        for (int i = 0; i < 3; i++) stbtt_InitFont(&g_ft[i], d[i], 0);
+        g_ftok = 1;
+    }
+    unsigned h = ((unsigned)cp * 2654435761u ^ (unsigned)sz * 40503u ^ (unsigned)f * 977u) & (U_NG - 1);
+    for (int n = 0; n < U_NG; n++, h = (h + 1) & (U_NG - 1)) {
+        uglyph *g = &g_gl[h];
+        if (g->px && g->f == f && g->px == sz && g->cp == cp) return g;
+        if (g->px) continue;
+        const stbtt_fontinfo *fi = &g_ft[f];
+        float sc = stbtt_ScaleForMappingEmToPixels(fi, (float)sz);
+        int adv, lsb;
+        stbtt_GetCodepointHMetrics(fi, cp, &adv, &lsb);
+        g->f = f; g->px = sz; g->cp = cp;
+        g->adv = (int)(adv * sc * 64 + .5f);
+        g->bm = stbtt_GetCodepointBitmap(fi, sc, sc, cp, &g->w, &g->h, &g->x0, &g->y0);
+        return g;
+    }
+    return NULL;
+}
+
+static int u_dec(const char **p) {
+    const unsigned char *s = (const unsigned char *)*p;
+    int c = *s++;
+    if (c >= 0xf0 && (s[0] & 0xc0) == 0x80 && (s[1] & 0xc0) == 0x80 && (s[2] & 0xc0) == 0x80) {
+        c = (c & 7) << 18 | (s[0] & 63) << 12 | (s[1] & 63) << 6 | (s[2] & 63); s += 3;
+    } else if (c >= 0xe0 && (s[0] & 0xc0) == 0x80 && (s[1] & 0xc0) == 0x80) {
+        c = (c & 15) << 12 | (s[0] & 63) << 6 | (s[1] & 63); s += 2;
+    } else if (c >= 0xc0 && (s[0] & 0xc0) == 0x80) {
+        c = (c & 31) << 6 | (s[0] & 63); s += 1;
+    } else if (c >= 0x80) c = '?';
+    *p = (const char *)s;
+    return c < 32 ? ' ' : c;
+}
+
+static int u_tw(ufont F, const char *t) {
+    int w = 0, n = 0;
+    while (*t) {
+        uglyph *g = u_glyph(F.f, F.px, u_dec(&t));
+        if (g) w += g->adv;
+        w += F.ls * 64 / 10;
+        n++;
+    }
+    if (n) w -= F.ls * 64 / 10;
+    return (w + 32) >> 6;
+}
+
+/* y is the baseline; al 0 left, 1 centre, 2 right; returns the right edge.
+ * s == NULL measures only. */
+static int u_text(const surf *s, int x, int y, ufont F, const char *t, unsigned c, int al) {
+    int w = u_tw(F, t);
+    if (al == 1) x -= w / 2;
+    else if (al == 2) x -= w;
+    if (!s) return x + w;
+    int pen = x * 64;
+    while (*t) {
+        uglyph *g = u_glyph(F.f, F.px, u_dec(&t));
+        if (!g) continue;
+        if (g->bm)
+            for (int j = 0; j < g->h; j++)
+                for (int i = 0; i < g->w; i++) {
+                    int a = g->bm[j * g->w + i];
+                    if (a) pxa(s, (pen >> 6) + g->x0 + i, y + g->y0 + j, c, a + (a >> 7));
+                }
+        pen += g->adv + F.ls * 64 / 10;
+    }
+    return x + w;
+}
+
+/* t, cut with an ellipsis to fit maxw */
+static const char *u_fit(ufont F, const char *t, int maxw) {
+    static char buf[4][200];
+    static int bi;
+    if (u_tw(F, t) <= maxw) return t;
+    char *b = buf[bi++ & 3];
+    int n = snprintf(b, 196, "%s", t);
+    if (n > 195) n = 195;
+    while (n > 0) {
+        n--;
+        while (n > 0 && ((unsigned char)b[n] & 0xc0) == 0x80) n--;
+        int e = n;
+        while (e > 0 && b[e - 1] == ' ') e--;
+        memcpy(b + e, "\xe2\x80\xa6", 4);
+        if (u_tw(F, b) <= maxw) break;
+    }
+    return b;
+}
+
+/* Greedy wrap, breaking after a space, '_' or '-', else anywhere (file names
+ * have no spaces); the last allowed line gets an ellipsis. Returns the lines
+ * used; s == NULL measures only. */
+static int u_wrap(const surf *s, int x, int y, ufont F, const char *t, unsigned c,
+                  int maxw, int lh, int maxl, int al) {
+    char ln[200];
+    int nl = 0;
+    while (*t == ' ') t++;
+    while (*t && nl < maxl) {
+        int len = (int)strlen(t);
+        if (nl == maxl - 1 || u_tw(F, t) <= maxw) {
+            u_text(s, x, y, F, u_fit(F, t, maxw), c, al);
+            return nl + 1;
+        }
+        int best = 0, brk = 0;
+        for (int i = 1; i <= len && i < 199; i++) {
+            if (i < len && ((unsigned char)t[i] & 0xc0) == 0x80) continue;
+            memcpy(ln, t, i);
+            ln[i] = 0;
+            if (u_tw(F, ln) > maxw) break;
+            best = i;
+            if (t[i - 1] == ' ' || t[i - 1] == '_' || t[i - 1] == '-') brk = i;
+        }
+        int take = brk ? brk : best ? best : 1;
+        memcpy(ln, t, take);
+        ln[take] = 0;
+        for (int e = take; e > 0 && ln[e - 1] == ' '; ) ln[--e] = 0;
+        u_text(s, x, y, F, ln, c, al);
+        t += take;
+        while (*t == ' ') t++;
+        y += lh;
+        nl++;
+    }
+    return nl;
+}
+
+/* ---- icons: SVG path data on a 24 grid, stroke 2, round caps and joins.
+ * O cx cy r is a circle, R x y w h a rectangle; '!' scales the tools icon
+ * down, '#' fills instead of stroking. */
+enum { I_HOME, I_PRINT, I_HEAT, I_TOOLS, I_BACK, I_CHEV, I_LIGHT, I_FAN, I_MOVE, I_GAUGE, I_POWER,
+       I_INFO, I_SPOOL, I_PAUSE, I_PLAY, I_X, I_REDO, I_TUNE, I_USB, I_LOCK, I_CHECK, I_OBJS,
+       I_HOMEAX, I_AU, I_AD, I_AL, I_AR, I_N };
+static const char *const k_icons[I_N] = {
+    "M3 11l9-8 9 8M5 9.5V20h5v-6h4v6h5V9.5",
+    "M12 3l8 4.5v9L12 21l-8-4.5v-9zM4 7.5l8 4.5 8-4.5M12 12v9",
+    "M12 3c.5 3 4.5 5 4.5 10a4.5 4.5 0 0 1-9 0c0-2.2 1-3.6 2.2-4.6.1 1.8.8 2.9 1.8 3.4C11.2 9 11 6 12 3z",
+    "!M14.5 6.5a4 4 0 0 0 5 5L21 13l-8 8-3-3 1.5-1.5a4 4 0 0 0-5-5L3 10l3-3 3 3 1.5-1.5a4 4 0 0 0 5-5z",
+    "M15 4l-8 8 8 8",
+    "M9 5l7 7-7 7",
+    "M9 18h6M10 21h4M12 3a6 6 0 0 0-3.8 10.6c.8.7 1.3 1.6 1.3 2.4h5c0-.8.5-1.7 1.3-2.4A6 6 0 0 0 12 3z",
+    "O12 12 2M12 10c-1-4 0-7 3-7s2.5 4.5-1.5 7.5M14 12c4-1 7 0 7 3s-4.5 2.5-7.5-1.5"
+    "M12 14c1 4 0 7-3 7s-2.5-4.5 1.5-7.5M10 12c-4 1-7 0-7-3s4.5-2.5 7.5 1.5",
+    "M12 3v18M3 12h18M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3",
+    "M4.5 18a9 9 0 1 1 15 0M12 14l4.5-5O12 14.5 1.3",
+    "M12 3v8M7 6.3a7.5 7.5 0 1 0 10 0",
+    "O12 12 9M12 11v6M12 7.5v.5",
+    "O12 12 9O12 12 3M12 3v6M12 15v6",
+    "M9 5v14M15 5v14",
+    "M7 4.5l12 7.5-12 7.5z",
+    "M6 6l12 12M18 6L6 18",
+    "M4 12a8 8 0 1 0 2.5-5.8M4 4v5h5",
+    "M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1O15 6 2O9 12 2O17 18 2",
+    "M12 21V5M8.5 7.5L12 3l3.5 4.5M12 15l-5-3V9M12 13l5-3V8O7 8 1.2R15.8 6 2.4 2.4",
+    "R5 11 14 10M8 11V8a4 4 0 0 1 8 0v3",
+    "M5 12.5l4.5 4.5L19 7.5",
+    "R3.5 3.5 7 7R13.5 3.5 7 7R3.5 13.5 7 7M14 14l6 6M20 14l-6 6",
+    "M4 11l8-7 8 7M6 10v10h12V10",
+    "#M12 5L20 17H4z",
+    "#M12 19L4 7h16z",
+    "#M5 12L17 4v16z",
+    "#M19 12L7 20V4z",
+};
+
+typedef struct { float x0, y0, x1, y1; } iseg;
+static iseg g_is[400];
+static int g_nis;
+static float g_itk = 1, g_ito;
+
+static void is_add(float x0, float y0, float x1, float y1) {
+    if (g_nis < 400)
+        g_is[g_nis++] = (iseg){ (x0 + g_ito) * g_itk, (y0 + g_ito) * g_itk,
+                                (x1 + g_ito) * g_itk, (y1 + g_ito) * g_itk };
+}
+
+static void is_cubic(float x0, float y0, float x1, float y1, float x2, float y2, float x3, float y3) {
+    float px0 = x0, py0 = y0;
+    for (int i = 1; i <= 12; i++) {
+        float t = i / 12.0f, u = 1 - t;
+        float x = u * u * u * x0 + 3 * u * u * t * x1 + 3 * u * t * t * x2 + t * t * t * x3;
+        float y = u * u * u * y0 + 3 * u * u * t * y1 + 3 * u * t * t * y2 + t * t * t * y3;
+        is_add(px0, py0, x, y);
+        px0 = x; py0 = y;
+    }
+}
+
+/* SVG F.6.5: endpoints to centre, no x-axis rotation */
+static void is_arc(float x1, float y1, float rx, float ry, int fa, int fs, float x2, float y2) {
+    float dx = (x1 - x2) / 2, dy = (y1 - y2) / 2;
+    rx = fabsf(rx); ry = fabsf(ry);
+    if (rx < 1e-4f || ry < 1e-4f) { is_add(x1, y1, x2, y2); return; }
+    float L = dx * dx / (rx * rx) + dy * dy / (ry * ry);
+    if (L > 1) { float q = sqrtf(L); rx *= q; ry *= q; }
+    float num = rx * rx * ry * ry - rx * rx * dy * dy - ry * ry * dx * dx;
+    float den = rx * rx * dy * dy + ry * ry * dx * dx;
+    float co = den > 0 && num > 0 ? sqrtf(num / den) : 0;
+    if (fa == fs) co = -co;
+    float cxp = co * rx * dy / ry, cyp = -co * ry * dx / rx;
+    float cx = cxp + (x1 + x2) / 2, cy = cyp + (y1 + y2) / 2;
+    float t1 = atan2f((dy - cyp) / ry, (dx - cxp) / rx);
+    float t2 = atan2f((-dy - cyp) / ry, (-dx - cxp) / rx), dt = t2 - t1;
+    if (fs && dt < 0) dt += 6.2831853f;
+    else if (!fs && dt > 0) dt -= 6.2831853f;
+    int n = (int)(fabsf(dt) * 6) + 2;
+    float px0 = x1, py0 = y1;
+    for (int i = 1; i <= n; i++) {
+        float t = t1 + dt * i / n, x = cx + rx * cosf(t), y = cy + ry * sinf(t);
+        if (i == n) { x = x2; y = y2; }
+        is_add(px0, py0, x, y);
+        px0 = x; py0 = y;
+    }
+}
+
+static int ip_num(const char **p, float *v) {
+    while (**p == ' ' || **p == ',') (*p)++;
+    char *e;
+    *v = strtof(*p, &e);
+    if (e == *p) return 0;
+    *p = e;
+    return 1;
+}
+
+static void ip_path(const char *d) {
+    float cx = 0, cy = 0, sx = 0, sy = 0, qx = 0, qy = 0, a[7];
+    char cmd = 0, last = 0;
+    g_nis = 0; g_itk = 1; g_ito = 0;
+    if (*d == '#') d++;
+    if (*d == '!') { g_itk = .9f; g_ito = 1.3f; d++; }
+    while (*d) {
+        while (*d == ' ' || *d == ',') d++;
+        if (!*d) break;
+        int lit = ((*d | 32) >= 'a' && (*d | 32) <= 'z');
+        if (lit) cmd = *d++;
+        else if (cmd == 'M') cmd = 'L';
+        else if (cmd == 'm') cmd = 'l';
+        char C = cmd & ~32;
+        int rel = cmd >= 'a';
+        int need = C == 'M' || C == 'L' ? 2 : C == 'H' || C == 'V' ? 1 : C == 'C' ? 6 :
+                   C == 'S' ? 4 : C == 'A' ? 7 : C == 'O' ? 3 : C == 'R' ? 4 : 0;
+        if (!need && !lit) return;
+        for (int n = 0; n < need; n++) if (!ip_num(&d, &a[n])) return;
+        float ox = rel ? cx : 0, oy = rel ? cy : 0;
+        switch (C) {
+        case 'M': cx = sx = a[0] + ox; cy = sy = a[1] + oy; break;
+        case 'L': is_add(cx, cy, a[0] + ox, a[1] + oy); cx = a[0] + ox; cy = a[1] + oy; break;
+        case 'H': is_add(cx, cy, a[0] + ox, cy); cx = a[0] + ox; break;
+        case 'V': is_add(cx, cy, cx, a[0] + oy); cy = a[0] + oy; break;
+        case 'C':
+            is_cubic(cx, cy, a[0] + ox, a[1] + oy, a[2] + ox, a[3] + oy, a[4] + ox, a[5] + oy);
+            qx = a[2] + ox; qy = a[3] + oy; cx = a[4] + ox; cy = a[5] + oy;
+            break;
+        case 'S': {
+            float x1 = last == 'C' || last == 'S' ? 2 * cx - qx : cx;
+            float y1 = last == 'C' || last == 'S' ? 2 * cy - qy : cy;
+            is_cubic(cx, cy, x1, y1, a[0] + ox, a[1] + oy, a[2] + ox, a[3] + oy);
+            qx = a[0] + ox; qy = a[1] + oy; cx = a[2] + ox; cy = a[3] + oy;
+            break;
+        }
+        case 'A':
+            is_arc(cx, cy, a[0], a[1], a[3] != 0, a[4] != 0, a[5] + ox, a[6] + oy);
+            cx = a[5] + ox; cy = a[6] + oy;
+            break;
+        case 'Z': is_add(cx, cy, sx, sy); cx = sx; cy = sy; break;
+        case 'O':
+            for (int i = 0; i < 24; i++) {
+                float t0 = i * 6.2831853f / 24, t1 = (i + 1) * 6.2831853f / 24;
+                is_add(a[0] + a[2] * cosf(t0), a[1] + a[2] * sinf(t0),
+                       a[0] + a[2] * cosf(t1), a[1] + a[2] * sinf(t1));
+            }
+            break;
+        case 'R':
+            is_add(a[0], a[1], a[0] + a[2], a[1]);
+            is_add(a[0] + a[2], a[1], a[0] + a[2], a[1] + a[3]);
+            is_add(a[0] + a[2], a[1] + a[3], a[0], a[1] + a[3]);
+            is_add(a[0], a[1] + a[3], a[0], a[1]);
+            break;
+        default: return;
+        }
+        last = C;
+    }
+}
+
+/* coverage of a stroke of half width hw along a segment, into m (sz x sz) */
+static void seg_cov(unsigned char *m, int sz, float x0, float y0, float x1, float y1, float hw) {
+    int ia = (int)floorf(fminf(x0, x1) - hw - 1), ib = (int)ceilf(fmaxf(x0, x1) + hw + 1);
+    int ja = (int)floorf(fminf(y0, y1) - hw - 1), jb = (int)ceilf(fmaxf(y0, y1) + hw + 1);
+    if (ia < 0) ia = 0;
+    if (ja < 0) ja = 0;
+    if (ib > sz) ib = sz;
+    if (jb > sz) jb = sz;
+    float dx = x1 - x0, dy = y1 - y0, l2 = dx * dx + dy * dy, lim = (hw + .5f) * (hw + .5f);
+    for (int j = ja; j < jb; j++)
+        for (int i = ia; i < ib; i++) {
+            float px0 = i + .5f, py0 = j + .5f, t = 0;
+            if (l2 > 0) {
+                t = ((px0 - x0) * dx + (py0 - y0) * dy) / l2;
+                t = t < 0 ? 0 : t > 1 ? 1 : t;
+            }
+            float ex = x0 + t * dx - px0, ey = y0 + t * dy - py0, d2 = ex * ex + ey * ey;
+            if (d2 >= lim) continue;
+            float cv = hw + .5f - sqrtf(d2);
+            int v = cv >= 1 ? 255 : (int)(cv * 255);
+            if (v > m[j * sz + i]) m[j * sz + i] = (unsigned char)v;
+        }
+}
+
+static const unsigned char *ic_mask(int id, int sz) {
+    static struct { int id, sz; unsigned char *m; } c[160];
+    static int nc;
+    for (int i = 0; i < nc; i++) if (c[i].id == id && c[i].sz == sz) return c[i].m;
+    unsigned char *m = calloc((size_t)sz * sz, 1);
+    if (!m) return NULL;
+    const char *d = k_icons[id];
+    float k = sz / 24.0f;
+    ip_path(d);
+    if (*d == '#') {
+        for (int j = 0; j < sz; j++)
+            for (int i = 0; i < sz; i++) {
+                int cnt = 0;
+                for (int v = 0; v < 4; v++)
+                    for (int u = 0; u < 4; u++) {
+                        float x = (i + (u + .5f) / 4) / k, y = (j + (v + .5f) / 4) / k;
+                        int in = 0;
+                        for (int q = 0; q < g_nis; q++) {
+                            const iseg *e = &g_is[q];
+                            if ((e->y0 <= y) != (e->y1 <= y) &&
+                                x < e->x0 + (y - e->y0) * (e->x1 - e->x0) / (e->y1 - e->y0)) in ^= 1;
+                        }
+                        cnt += in;
+                    }
+                m[j * sz + i] = (unsigned char)(cnt * 255 / 16);
+            }
+    } else
+        for (int q = 0; q < g_nis; q++)
+            seg_cov(m, sz, g_is[q].x0 * k, g_is[q].y0 * k, g_is[q].x1 * k, g_is[q].y1 * k, k);
+    if (nc < 160) c[nc++] = (typeof(c[0])){ id, sz, m };
+    return m;
+}
+
+static void icon(const surf *s, int id, int x, int y, int sz, unsigned c) {
+    const unsigned char *m = id >= 0 ? ic_mask(id, sz) : NULL;
+    if (!m) return;
+    for (int j = 0; j < sz; j++)
+        for (int i = 0; i < sz; i++) {
+            int a = m[j * sz + i];
+            if (a) pxa(s, x + i, y + j, c, a + (a >> 7));
+        }
+}
+
+/* an anti-aliased line, half width hw, straight onto the surface */
+static void aa_line(const surf *s, float x0, float y0, float x1, float y1, float hw, unsigned c) {
+    int ia = (int)floorf(fminf(x0, x1) - hw - 1), ib = (int)ceilf(fmaxf(x0, x1) + hw + 1);
+    int ja = (int)floorf(fminf(y0, y1) - hw - 1), jb = (int)ceilf(fmaxf(y0, y1) + hw + 1);
+    float dx = x1 - x0, dy = y1 - y0, l2 = dx * dx + dy * dy, lim = (hw + .5f) * (hw + .5f);
+    for (int j = ja; j < jb; j++)
+        for (int i = ia; i < ib; i++) {
+            float px0 = i + .5f, py0 = j + .5f, t = 0;
+            if (l2 > 0) {
+                t = ((px0 - x0) * dx + (py0 - y0) * dy) / l2;
+                t = t < 0 ? 0 : t > 1 ? 1 : t;
+            }
+            float ex = x0 + t * dx - px0, ey = y0 + t * dy - py0, d2 = ex * ex + ey * ey;
+            if (d2 >= lim) continue;
+            float cv = hw + .5f - sqrtf(d2);
+            pxa(s, i, j, c, cv >= 1 ? 256 : (int)(cv * 256));
+        }
+}
+
+static void poly_fill(const surf *s, float (*p)[2], int n, unsigned c, int a) {
+    float y0 = 1e9f, y1 = -1e9f;
+    for (int i = 0; i < n; i++) { y0 = fminf(y0, p[i][1]); y1 = fmaxf(y1, p[i][1]); }
+    for (int y = (int)y0; y <= (int)y1; y++) {
+        float yc = y + .5f, xs[K_MAXP];
+        int nx = 0;
+        for (int i = 0; i < n; i++) {
+            const float *A = p[i], *B = p[(i + 1) % n];
+            if ((A[1] <= yc) != (B[1] <= yc))
+                xs[nx++] = A[0] + (yc - A[1]) * (B[0] - A[0]) / (B[1] - A[1]);
+        }
+        for (int i = 1; i < nx; i++)
+            for (int j = i; j > 0 && xs[j - 1] > xs[j]; j--) { float t = xs[j]; xs[j] = xs[j - 1]; xs[j - 1] = t; }
+        for (int i = 0; i + 1 < nx; i += 2)
+            for (int x = (int)(xs[i] + .5f); x < (int)(xs[i + 1] + .5f); x++) pxa(s, x, y, c, a);
+    }
+}
+
+/* ---- widgets. Each draws and registers its button in one pass, so the
+ * touch areas are exactly what is on screen. */
+static btn g_b[48];
+static int g_nb, g_armed = -1;
+
+static void ui_reg(int x, int y, int w, int h, const char *lab, const char *tok, int dng, int arg) {
+    if (g_nb < 48) g_b[g_nb++] = (btn){ x, y, w, h, lab, tok, 0, 0, 0, dng, arg };
+}
+
+static int ui_armed(void) { return g_armed >= 0 && g_armed == g_nb; }
+
+enum { V_NORM, V_GO, V_STOP, V_WARN, V_ACC, V_GHOST };
+#define B_DNG   1
+#define B_OFF   2
+#define B_STACK 4
+
+static void ui_btn(const surf *s, int x, int y, int w, int h, const char *lab, const char *tok,
+                   int v, int ic, int fl, int arg) {
+    static const unsigned bgs[] = { U_SURF2, U_GO, U_STOP, U_WARN, U_ACC, 0 };
+    static const unsigned fgs[] = { U_FG, U_GO_INK, U_STOP_INK, U_WARN_INK, U_ACC_INK, U_FG };
+    int off = fl & B_OFF, armed = !off && ui_armed();
+    unsigned fg = fgs[v];
+    const char *t = lab;
+    if (off) g_op = 82;
+    if (armed) { rr(s, x, y, w, h, 12, 0xffffffu); fg = 0x111111u; t = "Tap again"; ic = -1; }
+    else if (v == V_GHOST) rring(s, x, y, w, h, 12, 3, U_LINE);
+    else rr(s, x, y, w, h, 12, bgs[v]);
+    if ((fl & B_STACK) && ic >= 0) {
+        int isz = h >= 90 ? 30 : 26, top = y + (h - isz - 6 - 12) / 2;
+        icon(s, ic, x + w / 2 - isz / 2, top, isz, fg);
+        u_text(s, x + w / 2, top + isz + 6 + 12, UF(1, 17, 0), u_fit(UF(1, 17, 0), t, w - 8), fg, 1);
+    } else {
+        int fs = h >= 90 ? 26 : h >= 70 ? 20 : 18;
+        if (u_tw(UF(1, 10, 0), t) <= 8) fs = 32;              /* a lone - or + */
+        ufont F = UF(1, fs, 0);
+        int isz = ic < 0 ? 0 : fs >= 26 ? 30 : fs >= 20 ? 26 : 22, gap = ic >= 0 && *t ? 10 : 0;
+        const char *ft = u_fit(F, t, w - 16 - isz - gap);
+        int lx = x + (w - u_tw(F, ft) - isz - gap) / 2;
+        if (ic >= 0) { icon(s, ic, lx, y + (h - isz) / 2, isz, fg); lx += isz + gap; }
+        u_text(s, lx, y + h / 2 + fs * 35 / 100, F, ft, fg, 0);
+    }
+    g_op = 256;
+    if (!off) ui_reg(x, y, w, h, lab, tok, fl & B_DNG, arg);
+}
+
+static int ui_pill(const surf *s, int x, int y, const char *t, unsigned c, unsigned bg) {
+    ufont F = UF(1, 13, 11);
+    int w = u_tw(F, t) + 22;
+    rr(s, x, y, w, 28, 14, mix(bg, c, 41));
+    u_text(s, x + 11, y + 19, F, t, c, 0);
+    return w;
+}
+
+static void ui_lab(const surf *s, int x, int y, const char *t, unsigned c, int al) {
+    u_text(s, x, y, UF(1, 14, 13), t, c, al);
+}
+
+static void ui_header(const surf *s, const char *title, int back, const char *pill, unsigned pc) {
+    fill(s, 0, 63, s->w, 1, U_LINE);
+    int tx = 16, x = 464;
+    if (back) {
+        icon(s, I_BACK, 15, 17, 30, U_FG);
+        ui_reg(0, 0, 72, 64, "Back", "back", 0, 0);   /* the whole corner, easy to hit */
+        tx = 68;
+    }
+    if (pill) x -= ui_pill(s, x - (u_tw(UF(1, 13, 11), pill) + 22), 18, pill, pc, U_SCR) + 10;
+    time_t now = time(NULL) + g_wall;
+    if (now > 1700000000) {
+        struct tm tm;
+        char c[8];
+        localtime_r(&now, &tm);
+        strftime(c, sizeof c, "%H:%M", &tm);
+        x = u_text(s, x, 38, UF(0, 18, 0), c, U_MUT, 2) - u_tw(UF(0, 18, 0), c) - 10;
+    }
+    u_text(s, tx, 40, UF(1, 24, 0), u_fit(UF(1, 24, 0), title, x - tx), U_FG, 0);
+}
+
+static void ui_tabs(const surf *s, int act, unsigned dot, int lock) {
+    static const char *const lab[4] = { "Home", "Print", "Heat", "Tools" };
+    static const char *const tok[4] = { "home", "files", "heat", "tools" };
+    static const int ic[4] = { I_HOME, I_PRINT, I_HEAT, I_TOOLS };
+    fill(s, 0, 712, s->w, 88, U_SURF);
+    fill(s, 0, 712, s->w, 1, U_LINE);
+    for (int i = 0; i < 4; i++) {
+        int x = i * 120, off = lock && i;
+        unsigned c = i == act ? U_ACC : U_MUT;
+        if (off) g_op = 82;
+        if (i == act) fill(s, x + 28, 712, 64, 3, U_ACC);
+        icon(s, ic[i], x + 45, 731, 30, c);
+        u_text(s, x + 60, 779, UF(1, 15, 0), lab[i], c, 1);
+        g_op = 256;
+        if (!i && dot) { rr(s, x + 69, 727, 16, 16, 8, U_SURF); rr(s, x + 72, 730, 10, 10, 5, dot); }
+        if (!off) ui_reg(x, 712, 120, 88, lab[i], tok[i], 0, 0);
+    }
+}
+
+static void ui_bar(const surf *s, int x, int y, int w, double f, unsigned c) {
+    rr(s, x, y, w, 14, 7, U_SURF2);
+    int fw = (int)(w * (f < 0 ? 0 : f > 1 ? 1 : f) + .5);
+    if (fw > 0) rr(s, x, y, fw, 14, 7, c);
+}
+
+static void ui_thumb(const surf *s, int x, int y, int sz, const kimg *im, int ic) {
+    rr(s, x, y, sz, sz, 10, U_SURF2);
+    if (im && im->px) k_img(s, x + 4, y + 4, sz - 8, im, U_SURF2);
+    else icon(s, ic, x + sz / 4, y + sz / 4, sz / 2, U_DIM);
+}
+
+/* alternating muted and bold runs: "Done at ", "14:20", " · layer ", "3 / 90" */
+static int ui_meta(const surf *s, int x, int y, int n, const char *const *p) {
+    for (int i = 0; i < n; i++)
+        x = u_text(s, x, y, i & 1 ? UF(1, 16, 0) : UF(0, 16, 0), p[i], i & 1 ? U_FG : U_MUT, 0);
+    return x;
+}
+
+static void ui_seg(const surf *s, int x, int y, int w, int n, const char *const *lab,
+                   const char *const *tok, int on) {
+    rr(s, x, y, w, 60, 12, x > 16 ? U_SURF2 : U_SURF);
+    int bw = (w - 8 - (n - 1) * 4) / n;
+    for (int i = 0; i < n; i++) {
+        int bx = x + 4 + i * (bw + 4);
+        if (i == on) {
+            rr(s, bx, y + 4, bw, 52, 9, x > 16 ? U_LINE : U_SURF2);
+            fill(s, bx + 9, y + 54, bw - 18, 2, U_ACC);
+        }
+        u_text(s, bx + bw / 2, y + 36, UF(1, 18, 0), lab[i], i == on ? U_FG : U_MUT, 1);
+        ui_reg(bx, y + 4, bw, 52, lab[i], tok[i], 0, i);
+    }
+}
+
+static int ui_kv(const surf *s, int y, const char *const *kv, int n) {
+    const int h = 50;
+    ufont K = UF(0, 17, 0), V = UF(1, 17, 0);
+    rr(s, 16, y, 448, n * h, 14, U_SURF);
+    for (int i = 0; i < n; i++) {
+        int ry = y + i * h, kw = u_tw(K, kv[2 * i]);
+        if (i) fill(s, 16, ry, 448, 1, U_LINE);
+        u_text(s, 32, ry + 31, K, kv[2 * i], U_MUT, 0);
+        u_text(s, 448, ry + 31, V, u_fit(V, kv[2 * i + 1], 448 - 32 - kw - 16), U_FG, 2);
+    }
+    return y + n * h;
+}
+
+static void ui_tile(const surf *s, int x, int y, int ic, const char *b, const char *sub,
+                    const char *tok, int fl) {
+    const int w = 218, h = 148;
+    int off = fl & B_OFF, armed = !off && ui_armed();
+    if (off) g_op = 82;
+    rr(s, x, y, w, h, 14, armed ? 0xffffffu : U_SURF);
+    icon(s, ic, x + 16, y + 16, 36, armed ? 0x111111u : U_ACC);
+    u_text(s, x + 16, y + h - 46, UF(1, 22, 0), armed ? "Tap again" : u_fit(UF(1, 22, 0), b, w - 32),
+           armed ? 0x111111u : U_FG, 0);
+    u_text(s, x + 16, y + h - 18, UF(0, 15, 0), u_fit(UF(0, 15, 0), sub, w - 32),
+           armed ? 0x444444u : U_MUT, 0);
+    g_op = 256;
+    if (!off) ui_reg(x, y, w, h, b, tok, fl & B_DNG, 0);
+}
+
+/* a list row: thumbnail (or icon), name, then status and details */
+static void ui_li(const surf *s, int y, const kimg *im, int ic, const char *name, unsigned nc,
+                  const char *st, unsigned stc, const char *meta, const char *tok, int fl, int arg) {
+    const int x = 16, w = 448, h = 88, tx = x + 88, tw = w - 88 - 14 - 22 - 10;
+    int armed = ui_armed();
+    ufont N = UF(2, 21, 0), M = UF(0, 16, 0);
+    rr(s, x, y, w, h, 12, armed ? 0xffffffu : U_SURF);
+    ui_thumb(s, x + 10, y + 12, 64, im, ic);
+    u_text(s, tx, y + 38, N, u_fit(N, name, tw), armed ? 0x111111u : nc, 0);
+    if (armed) u_text(s, tx, y + 66, UF(1, 16, 0), "Tap again to copy and print", 0x111111u, 0);
+    else {
+        int mx = tx;
+        if (st) mx = u_text(s, tx, y + 66, UF(1, 13, 10), st, stc, 0) + 10;
+        u_text(s, mx, y + 66, M, u_fit(M, meta, tx + tw - mx), U_MUT, 0);
+    }
+    icon(s, I_CHEV, x + w - 36, y + 33, 22, U_DIM);
+    ui_reg(x, y, w, h, name, tok, fl & B_DNG, arg);
+}
+
+static void ui_pager(const surf *s, int page, int n) {
+    int np = (n + K_ROWS - 1) / K_ROWS;
+    char t[32];
+    if (np <= 1) return;
+    ui_btn(s, 16, 632, 88, 64, "", "prev", V_NORM, I_BACK, page > 0 ? 0 : B_OFF, 0);
+    ui_btn(s, 376, 632, 88, 64, "", "next", V_NORM, I_CHEV, page + 1 < np ? 0 : B_OFF, 0);
+    snprintf(t, sizeof t, "Page %d of %d", page + 1, np);
+    u_text(s, 240, 670, UF(1, 17, 0), t, U_MUT, 1);
+}
+
+static void ui_empty(const surf *s, int y, int ic, const char *b, const char *t) {
+    icon(s, ic, 208, y, 64, U_DIM);
+    u_text(s, 240, y + 100, UF(1, 22, 0), b, U_FG, 1);
+    if (t) u_wrap(s, 240, y + 130, UF(0, 17, 0), t, U_MUT, 380, 23, 8, 1);
+}
+
+static void ui_tmini(const surf *s, int y, const kstat *k) {
+    for (int i = 0; i < 2; i++) {
+        int x = 16 + i * 230;
+        double t = i ? k->bt : k->et, g = i ? k->btt : k->ett;
+        char v[16], tg[16];
+        rr(s, x, y, 218, 60, 12, U_SURF);
+        int e = u_text(s, x + 14, y + 40, UF(0, 16, 0), i ? "Bed" : "Nozzle", U_MUT, 0);
+        snprintf(v, sizeof v, "%.0f°", t);
+        e = u_text(s, e + 10, y + 40, UF(1, 34, 0), v, U_FG, 0);
+        if (g > 0) snprintf(tg, sizeof tg, "/ %.0f", g);
+        else snprintf(tg, sizeof tg, "off");
+        u_text(s, e + 8, y + 40, UF(0, 16, 0), tg, g > 0 ? U_HEAT : U_MUT, 0);
+    }
+}
+
+static void ui_toast(const surf *s, const char *t) {
+    ufont F = UF(1, 18, 0);
+    rr(s, 16, 648, 448, 52, 12, 0xf2f5f7u);
+    u_text(s, 34, 680, F, u_fit(F, t, 412), 0x111111u, 0);
+}
+
+/* ---- state */
+static unsigned k_pill(const kstat *k, const char **label) {
+    if (!k->online) { *label = "OFFLINE"; return U_STOP; }
+    if (!strcmp(k->kstate, "startup")) { *label = "STARTING"; return U_WARN; }
+    if (strcmp(k->kstate, "ready")) { *label = "NOT READY"; return U_STOP; }
+    if (!strcmp(k->pstate, "printing")) { *label = "PRINTING"; return U_ACC; }
+    if (!strcmp(k->pstate, "paused")) { *label = "PAUSED"; return U_WARN; }
+    *label = "READY";
+    return U_GO;
+}
+
+/* "dir/name.gcode" -> "name" */
+static const char *k_base(const char *path) {
+    static char b[4][128];
+    static int bi;
+    const char *f = strrchr(path, '/');
+    char *o = b[bi++ & 3];
+    snprintf(o, 128, "%s", f ? f + 1 : path);
+    int l = (int)strlen(o);
+    if (l > 6 && !strcmp(o + l - 6, ".gcode")) o[l - 6] = 0;
+    return o;
+}
+
+static const char *k_hstat(const char *st, unsigned *c) {
+    if (!strcmp(st, "completed")) { *c = U_GO; return "DONE"; }
+    if (!strcmp(st, "cancelled")) { *c = U_STOP; return "CANCELLED"; }
+    if (!strcmp(st, "in_progress")) { *c = U_ACC; return "PRINTING"; }
+    *c = U_STOP;
+    return "FAILED";
+}
+
+static void k_when(double t, char *o, int n) {
+    time_t te = (time_t)t;
+    struct tm tm;
+    o[0] = 0;
+    if (te <= 1700000000) return;
+    localtime_r(&te, &tm);
+    strftime(o, n, "%b %d %H:%M", &tm);
+    if (!tm.tm_gmtoff) { size_t l = strlen(o); snprintf(o + l, n - l, " UTC"); }
+}
+
+static void k_size(double sz, char *o, int n) {
+    if (sz >= 1e6) snprintf(o, n, "%.1f MB", sz / 1e6);
+    else snprintf(o, n, "%.0f KB", sz / 1e3);
+}
+
+static int k_modei(const kstat *k) {
+    int i = 0;
+    while (i < 5 && strcmp(k->smode, k_mname[i])) i++;
+    return i < 5 ? i : 0;
+}
+
+/* LOAD_FILAMENT / UNLOAD_FILAMENT are macros in printer.cfg. During a pause
+ * they run at the job's own nozzle target (no TEMP=), so RESUME prints at
+ * the temperature the slicer set. A load or unload is running while dir is
+ * set and the nozzle has a target: every stop (heater off, shutdown,
+ * restart) leaves no target. */
+static int k_filrun(const kstat *k) {
+    return k->fdir && k->ett > 0;
+}
+
+/* The filament tip between the extruder gears and the nozzle, from the
+ * extruder's live position: fills on a load, drains on an unload, in mm. */
+static void k_filbar(const surf *s, const kstat *k, int y) {
+    int load = k->fdir > 0;
+    double moved = load ? k->fe - k->fe0 : k->fe0 - k->fe;
+    if (moved < 0) moved = 0;
+    if (moved > k->flen) moved = k->flen;
+    double in = load ? moved : k->flen - moved;
+    unsigned col = load ? U_GO : U_WARN;
+    char big[16], sub[32], st[48];
+    rr(s, 16, y, 448, 170, 14, U_SURF);
+    ui_lab(s, 32, y + 30, !load ? "UNLOADING" : k->flen <= 50 ? "PURGING" : "LOADING", col, 0);
+    snprintf(big, sizeof big, "%.0f", in);
+    snprintf(sub, sizeof sub, " / %.0f mm", k->flen);
+    u_text(s, u_text(s, 32, y + 80, UF(1, 44, 0), big, U_FG, 0), y + 80, UF(1, 22, 0), sub, U_MUT, 0);
+    ui_bar(s, 32, y + 94, 416, k->flen > 0 ? in / k->flen : 0, col);
+    u_text(s, 32, y + 126, UF(1, 12, 12), "GEARS", U_MUT, 0);
+    u_text(s, 448, y + 126, UF(1, 12, 12), "NOZZLE", U_MUT, 2);
+    if (moved < 0.5 && k->et < k->ett - 2)
+        snprintf(st, sizeof st, "Heating %.0f / %.0f °C", k->et, k->ett);
+    else if (load)
+        snprintf(st, sizeof st, moved < k->flen - 120 ? "Down the tube" : "Through the hot end");
+    else
+        snprintf(st, sizeof st, moved < 95 ? "Out of the hot end" : "Back up the tube");
+    u_text(s, 32, y + 154, UF(1, 18, 0), st, U_FG, 0);
+}
+
+/* ---- screens */
+static void k_hero(const surf *s, const kstat *k) {
+    for (int i = 0; i < 2; i++) {
+        int x = i ? 256 : 16;
+        double t = i ? k->bt : k->et, g = i ? k->btt : k->ett;
+        char v[16], tg[32];
+        icon(s, i ? I_SPOOL : I_HEAT, x, 82, 18, U_MUT);
+        ui_lab(s, x + 24, 97, i ? "BED" : "NOZZLE", U_MUT, 0);
+        snprintf(v, sizeof v, "%.0f", t);
+        u_text(s, u_text(s, x - 3, 172, UF(1, 76, -10), v, U_FG, 0) + 4, 172, UF(1, 34, 0), "°C", U_MUT, 0);
+        if (g > 0) snprintf(tg, sizeof tg, "%s %.0f °C", fabs(t - g) < 1.5 ? "holding" : "heating to", g);
+        else snprintf(tg, sizeof tg, "off");
+        u_text(s, x, 204, UF(0, 18, 0), tg, g > 0 ? U_HEAT : U_MUT, 0);
+    }
+    fill(s, 240, 86, 1, 120, U_LINE);
+}
+
+/* J8: result, real time against the estimate, filament and cost */
+static int k_endcard(const surf *s, const kstat *k, const kmenu *m, int y) {
+    const kmeta *t = &m->jmeta;
+    int ok = !strcmp(k->pstate, "complete"), cx = !strcmp(k->pstate, "cancelled");
+    const int tx = 142, tw = 306;
+    ufont N = UF(2, 24, 0);
+    char a[24], b[24], l2[96], pct[16];
+    int nl = u_wrap(NULL, tx, 0, N, k_base(k->file), U_FG, tw, 26, 2, 0);
+    int h = 16 + 28 + 8 + nl * 26 + 8 + 44 + 14 + 64 + 16;
+    rr(s, 16, y, 448, h, 14, U_SURF);
+    ui_thumb(s, 32, y + 16, 96, &m->jimg, I_PRINT);
+    ui_pill(s, tx, y + 16, ok ? "DONE" : cx ? "CANCELLED" : "FAILED", ok ? U_GO : U_STOP, U_SURF);
+    u_wrap(s, tx, y + 16 + 28 + 26, N, k_base(k->file), U_FG, tw, 26, 2, 0);
+    int ly = y + 16 + 28 + 8 + nl * 26 + 18;
+    if (!ok && !cx)
+        u_wrap(s, tx, ly, UF(0, 16, 0), k->pmsg[0] ? k->pmsg : "Klipper stopped the job.", U_MUT, tw, 22, 2, 0);
+    else {
+        k_hm(k->dur, a, sizeof a);
+        if (cx) {
+            snprintf(pct, sizeof pct, "%.0f %%", k->prog * 100);
+            const char *p[4] = { "Stopped at ", pct, " after ", a };
+            ui_meta(s, tx, ly, 4, p);
+        } else if (t->est > 0) {
+            int d = (int)((k->dur - t->est) * 100 / t->est + (k->dur > t->est ? 0.5 : -0.5));
+            snprintf(b, sizeof b, " · estimate %+d %%", d);
+            const char *p[3] = { "Printed ", a, b };
+            ui_meta(s, tx, ly, 3, p);
+        } else {
+            const char *p[2] = { "Printed ", a };
+            ui_meta(s, tx, ly, 2, p);
+        }
+        /* grams: the slicer's figure scaled to what was used, else from density */
+        double dens = m->rate[1] > 0 ? m->rate[1] : 1.24;
+        double g = t->grams > 0 && t->fil > 0 ? t->grams * k->fused / t->fil : k->fused * 2.405e-3 * dens;
+        int n = snprintf(l2, sizeof l2, "%.2f m · %.0f g", k->fused / 1000, g);
+        if (m->rate[0] > 0) {
+            double mat = g / 1000 * m->rate[0];
+            snprintf(l2 + n, sizeof l2 - n, m->rate[2] > 0 ? " · $%.2f (fil $%.2f)" : " · $%.2f",
+                     mat + k->tot / 3600 * m->rate[2], mat);
+        }
+        u_text(s, tx, ly + 22, UF(0, 16, 0), u_fit(UF(0, 16, 0), l2, tw), U_MUT, 0);
+    }
+    int by = y + h - 16 - 64;
+    ui_btn(s, 32, by, 202, 64, "Dismiss", "ack", V_GHOST, -1, 0, 0);
+    ui_btn(s, 246, by, 202, 64, "Print again", "again", V_GO, I_PLAY, B_DNG, 0);
+    return y + h;
+}
+
+static void k_homeidle(const surf *s, const kstat *k, const kmenu *m) {
+    static const char *const lcmd[3] = { K_GS "SET_PIN%20PIN%3Dlight%20VALUE%3D1",
+                                         K_GS "SET_PIN%20PIN%3Dlight%20VALUE%3D0.3",
+                                         K_GS "SET_PIN%20PIN%3Dlight%20VALUE%3D0" };
+    char lt[16], ms[48];
+    int ended = k_ended(k) && !m->ack, heating = k->ett > 0 || k->btt > 0;
+    k_hero(s, k);
+    if (ended) k_endcard(s, k, m, 222);
+    else if (m->nlast) {
+        unsigned c;
+        char st[32];
+        const kjob *j = &m->last;
+        int armed = ui_armed();
+        snprintf(st, sizeof st, "LAST · %s", k_hstat(j->status, &c));
+        rr(s, 16, 222, 448, 88, 12, armed ? 0xffffffu : U_SURF);
+        ui_thumb(s, 26, 234, 64, &m->limg, I_PRINT);
+        u_text(s, 104, 256, UF(1, 13, 10), st, c, 0);
+        u_text(s, 104, 286, UF(2, 21, 0), u_fit(UF(2, 21, 0), k_base(j->name), 324),
+               j->exists ? U_FG : U_MUT, 0);
+        icon(s, I_CHEV, 428, 255, 22, U_DIM);
+        ui_reg(16, 222, 448, 88, "Last job", "hlast", 0, 0);
+    }
+    int ty = heating && !ended ? 472 : 548;
+    if (k->light >= 0) {
+        int li = k->light <= 0 ? 0 : k->light >= 1 ? 1 : 2;
+        if (li == 2) snprintf(lt, sizeof lt, "%.0f %%", k->light * 100);
+        else snprintf(lt, sizeof lt, li ? "On" : "Off");
+        ui_tile(s, 16, ty, I_LIGHT, "Light", lt, lcmd[li], 0);
+    } else
+        ui_tile(s, 16, ty, I_FAN, "Fans", k->pfan > 0 || k->cfan > 0 ? "running" : "both off", "fans", 0);
+    int mi = k_modei(k);
+    snprintf(ms, sizeof ms, "speed mode · %d mm/s", k->mode[mi][0]);
+    ui_tile(s, 246, ty, I_GAUGE, k_mname[mi], ms, "mode", 0);
+    if (heating && !ended)
+        ui_btn(s, 16, 632, 448, 64, "Cool down", K_GS "TURN_OFF_HEATERS", V_GHOST, I_X, 0, 0);
+}
+
+/* name, thumbnail, time left, finish clock, layer, progress, filament, tune */
+static void k_printing(const surf *s, const kstat *k, const kmenu *m) {
+    const kmeta *t = &m->jmeta;
+    char big[16], r[32], ly[32], v[48];
+    const char *suf = " min left";
+    rr(s, 16, 80, 448, 236, 14, U_SURF);
+    ui_thumb(s, 32, 96, 108, &m->jimg, I_PRINT);
+    int nl = u_wrap(s, 154, 116, UF(2, 24, 0), k_base(k->file), U_FG, 294, 26, 2, 0);
+    /* klipper_estimator's time excludes PRINT_START, as print_duration does;
+     * until the first extrusion the job is still heating and homing */
+    int heat = k->fused <= 0 && !strcmp(k->pstate, "printing");
+    double left = k_left(k, t);
+    int mn = (int)(left / 60 + 0.5);
+    if (left < 0) { snprintf(big, sizeof big, "--"); suf = " left"; }
+    else if (mn >= 60) { snprintf(big, sizeof big, "%d:%02d", mn / 60, mn % 60); suf = " h left"; }
+    else if (mn > 0) snprintf(big, sizeof big, "%d", mn);
+    else snprintf(big, sizeof big, "< 1");
+    int by = nl > 1 ? 186 : 166;
+    u_text(s, u_text(s, 154, by, UF(1, 44, 0), big, U_FG, 0) + 4, by, UF(1, 22, 0), suf, U_MUT, 0);
+    time_t now = time(NULL) + g_wall;
+    struct tm tm;
+    /* g_wall comes from Moonraker's Date header; no header, no clock */
+    if (left < 0 || now < 1700000000) snprintf(r, sizeof r, "--");
+    else {
+        now += (time_t)left;
+        localtime_r(&now, &tm);
+        strftime(r, sizeof r, left > 20 * 3600 ? "%a %H:%M" : "%H:%M", &tm);
+        if (!tm.tm_gmtoff) { size_t l = strlen(r); snprintf(r + l, sizeof r - l, " UTC"); }
+    }
+    if (k->nlayer > 0) snprintf(ly, sizeof ly, "%d / %d", k->layer, k->nlayer);
+    else if (t->layers > 0) snprintf(ly, sizeof ly, "? / %.0f", t->layers);
+    else snprintf(ly, sizeof ly, "--");
+    const char *p[4] = { heat ? "Heating, done " : "Done at ", r, " · layer ", ly };
+    ui_meta(s, 154, by + 24, 4, p);
+    ui_bar(s, 32, 220, 416, k->prog, U_ACC);
+    snprintf(v, sizeof v, "%.0f %%", k->prog * 100);
+    u_text(s, 32, 256, UF(1, 16, 0), v, U_MUT, 0);
+    if (t->fil > 0) snprintf(v, sizeof v, "%.2f / %.2f m", k->fused / 1000, t->fil / 1000);
+    else snprintf(v, sizeof v, "%.2f m", k->fused / 1000);
+    u_text(s, 448, 256, UF(1, 16, 0), v, U_MUT, 2);
+    char cv[3][24];
+    snprintf(cv[0], 24, "%.0f %%", k->speed * 100);
+    snprintf(cv[1], 24, "%.0f %%", k->pfan * 100);
+    snprintf(cv[2], 24, "%s", k_mname[k_modei(k)]);
+    static const char *const cl[3] = { "Speed ", "Fan ", "Mode " };
+    ufont C = UF(1, 14, 0);
+    for (int i = 0, x = 32; i < 3; i++) {
+        int w = u_tw(C, cl[i]) + u_tw(C, cv[i]) + 20;
+        rr(s, x, 268, w, 32, 8, U_SURF2);
+        u_text(s, u_text(s, x + 10, 289, C, cl[i], U_MUT, 0), 289, C, cv[i], U_FG, 0);
+        x += w + 8;
+    }
+    ui_tmini(s, 328, k);
+    ui_btn(s, 16, 604, 141, 92, "Pause", "/printer/print/pause", V_WARN, I_PAUSE, B_STACK, 0);
+    ui_btn(s, 169, 604, 142, 92, "Tune", "tune", V_NORM, I_TUNE, B_STACK, 0);
+    ui_btn(s, 323, 604, 141, 92, "Cancel", "/printer/print/cancel", V_STOP, I_X, B_STACK | B_DNG, 0);
+}
+
+/* B2: a plate stop (PLATE_NEXT_OBJECT, PLATE_PAUSE_LAYER) or a plain pause;
+ * printer.cfg's PAUSE has lifted clear and brought the bed forward */
+static void k_paused(const surf *s, const kstat *k) {
+    const char *why = k->dmsg[0] ? k->dmsg : "Paused";
+    const char *nt = k->dmsg[0] ? "Set up, then tap Ready." : "The head is parked and the bed forward. Tap Resume to carry on.";
+    ufont W = UF(1, 30, 0), N = UF(0, 16, 0);
+    int n1 = u_wrap(NULL, 32, 0, W, why, U_FG, 416, 34, 2, 0), n2 = u_wrap(NULL, 32, 0, N, nt, U_MUT, 416, 21, 3, 0);
+    int h = 16 + 18 + 16 + n1 * 34 + 6 + n2 * 21 + 14;
+    rr(s, 16, 80, 448, h, 14, U_SURF);
+    icon(s, I_PAUSE, 32, 96, 18, U_WARN);
+    ui_lab(s, 56, 111, k->dmsg[0] ? "WAITING FOR YOU" : "PAUSED", U_WARN, 0);
+    u_wrap(s, 32, 154, W, why, U_FG, 416, 34, 2, 0);
+    u_wrap(s, 32, 154 + (n1 - 1) * 34 + 30, N, nt, U_MUT, 416, 21, 3, 0);
+    ui_tmini(s, 80 + h + 12, k);
+    ui_btn(s, 16, 528, 448, 92, k->dmsg[0] ? "Ready" : "Resume", "/printer/print/resume", V_GO, I_PLAY, 0, 0);
+    /* REDO = printer.cfg's PLATE_REDO (B4) */
+    ui_btn(s, 16, 632, 103, 64, "Filament", "heat", V_NORM, I_SPOOL, B_STACK, 0);
+    ui_btn(s, 131, 632, 103, 64, "Redo", K_GS "PLATE_REDO", V_NORM, I_REDO, B_STACK | B_DNG, 0);
+    ui_btn(s, 246, 632, 103, 64, "Tune", "tune", V_NORM, I_TUNE, B_STACK, 0);
+    ui_btn(s, 361, 632, 103, 64, "Cancel", "/printer/print/cancel", V_STOP, I_X, B_STACK | B_DNG, 0);
+}
+
+static void k_notready(const surf *s, const kstat *k) {
+    char msg[200];
+    if (!k->online) {
+        ui_empty(s, 200, I_POWER, "Klipper host not answering", "Waiting for it.");
+        return;
+    }
+    if (!strcmp(k->kstate, "startup")) {
+        ui_empty(s, 200, I_INFO, "Klipper is starting", "One moment.");
+        return;
+    }
+    snprintf(msg, sizeof msg, "%s", k->kmsg[0] ? k->kmsg : k->kstate);
+    for (char *q = msg; *q; q++) if (*q == '\n') *q = ' ';
+    ui_empty(s, 140, I_INFO, "Klipper isn't ready", msg);
+    ui_btn(s, 16, 604, 448, 92, "Firmware restart", "/printer/firmware_restart", V_ACC, I_REDO, 0, 0);
+}
+
+static void k_print(const surf *s, const kmenu *m) {
+    static const char *const lab[3] = { "Files", "History", "USB" }, *const tok[3] = { "files", "hist", "usb" };
+    char meta[96], hm[24], sz[24], when[32];
+    ui_seg(s, 16, 80, 448, 3, lab, tok, m->scr == K_FILES ? 0 : m->scr == K_HIST ? 1 : 2);
+    if (m->scr == K_FILES) {
+        if (m->nfiles <= 0) {
+            ui_empty(s, 240, I_PRINT, m->nfiles < 0 ? "Can't read the file list" : "No files yet",
+                     m->nfiles < 0 ? "Moonraker did not answer." : "Send one from the slicer or Mainsail.");
+            return;
+        }
+        for (int i = 0; i < K_ROWS && m->page * K_ROWS + i < nkf; i++) {
+            int f = m->page * K_ROWS + i;
+            const kmeta *t = &m->rmeta[i];
+            /* time and grams from the slicer; the size when the file has neither */
+            if (t->est > 0) {
+                k_hm(t->est, hm, sizeof hm);
+                if (t->grams > 0) snprintf(meta, sizeof meta, "%s · %.0f g", hm, t->grams);
+                else snprintf(meta, sizeof meta, "%s", hm);
+            } else
+                k_size(kf[f].size, meta, sizeof meta);
+            ui_li(s, 152 + i * 96, &m->rimg[i], I_PRINT, k_base(kf[f].name), U_FG, NULL, 0, meta, "file", 0, f);
+        }
+        ui_pager(s, m->page, nkf);
+    } else if (m->scr == K_USB) {
+        if (m->nusb <= 0) {
+            ui_empty(s, 240, I_USB, m->nusb == -1 ? "No stick found" : m->nusb == -2 ? "Can't read the stick"
+                     : "No G-code files",
+                     m->nusb == -1 ? "Stick in the printer · FAT32 · read only"
+                     : m->nusb == -2 ? "It has to be FAT32." : "Only the top folder of the stick is read.");
+            return;
+        }
+        /* two taps on a file copy it to the printer and print it */
+        for (int i = 0; i < K_ROWS && m->page * K_ROWS + i < nku; i++) {
+            int f = m->page * K_ROWS + i;
+            char nm[128];
+            const char *x = strrchr(ku[f].name, '.');
+            snprintf(nm, sizeof nm, "%.*s", x ? (int)(x - ku[f].name) : (int)strlen(ku[f].name), ku[f].name);
+            k_size(ku[f].size, sz, sizeof sz);
+            k_when(ku[f].mod, when, sizeof when);
+            snprintf(meta, sizeof meta, when[0] ? "%s · %s" : "%s", sz, when);
+            ui_li(s, 152 + i * 96, NULL, I_USB, nm, U_FG, NULL, 0, meta, "ufile", B_DNG, f);
+        }
+        if (nku > K_ROWS) ui_pager(s, m->page, nku);
+        else u_text(s, 240, 670, UF(0, 16, 0), "Tap a file twice to copy and print", U_MUT, 1);
+    } else {
+        if (m->nhist <= 0) {
+            ui_empty(s, 240, I_PRINT, m->nhist < 0 ? "Can't read the job history" : "No jobs yet", NULL);
+            return;
+        }
+        for (int i = 0; i < m->nhist; i++) {
+            const kjob *j = &kh[i];
+            unsigned c;
+            const char *st = k_hstat(j->status, &c);
+            k_hm(j->dur, hm, sizeof hm);
+            k_when(j->end, when, sizeof when);
+            snprintf(meta, sizeof meta, "%s%s%s%s", hm, when[0] ? " · " : "", when, j->exists ? "" : " · deleted");
+            ui_li(s, 152 + i * 96, &m->rimg[i], I_PRINT, k_base(j->name), j->exists ? U_FG : U_MUT,
+                  st, c, meta, "hview", 0, i);
+        }
+    }
+}
+
+static void k_filescr(const surf *s, const kstat *k, const kmenu *m) {
+    const kfile *f = &kf[m->sel];
+    const kmeta *t = &m->meta;
+    char v[6][64], hm[24];
+    const char *kv[12];
     int n = 0;
-    for (int i = 0; i < K_NTUNE; i++)
+    rr(s, 16, 80, 448, 182, 14, U_SURF);
+    ui_thumb(s, 32, 96, 150, &m->img, I_PRINT);
+    int nl = u_wrap(s, 196, 126, UF(2, 28, 0), k_base(f->name), U_FG, 252, 30, 3, 0);
+    if (t->est > 0) {
+        k_hm(t->est, hm, sizeof hm);
+        u_text(s, 196, 126 + (nl - 1) * 30 + 50, UF(1, 36, 0), hm, U_FG, 0);
+    }
+    /* slicers fill in different subsets; show what this one gave */
+    if (t->fil > 0) {
+        snprintf(v[n], 64, "%s%s%.2f m · %.0f g", t->type, t->type[0] ? " · " : "", t->fil / 1000, t->grams);
+        kv[2 * n] = "Filament"; kv[2 * n + 1] = v[n]; n++;
+    }
+    if (t->ext > 0) {
+        snprintf(v[n], 64, "%.0f / %.0f °C", t->ext, t->bed);
+        kv[2 * n] = "Temperatures"; kv[2 * n + 1] = v[n]; n++;
+    }
+    if (t->layers > 0) {
+        snprintf(v[n], 64, "%.0f × %.2f mm", t->layers, t->lh);
+        kv[2 * n] = "Layers"; kv[2 * n + 1] = v[n]; n++;
+    }
+    if (t->height > 0) {
+        snprintf(v[n], 64, "%.1f mm", t->height);
+        kv[2 * n] = "Height"; kv[2 * n + 1] = v[n]; n++;
+    }
+    snprintf(v[n], 64, "%s · %d mm/s", k_mname[k_modei(k)], k->mode[k_modei(k)][0]);
+    kv[2 * n] = "Speed mode"; kv[2 * n + 1] = v[n]; n++;
+    k_size(f->size, v[n], 64);
+    kv[2 * n] = "Size"; kv[2 * n + 1] = v[n]; n++;
+    ui_kv(s, 274, kv, n);
+    ui_btn(s, 16, 604, 448, 92, "Print", "print", V_GO, I_PLAY, B_DNG | (k_busy(k) ? B_OFF : 0), 0);
+}
+
+static void k_hjobscr(const surf *s, const kstat *k, const kmenu *m) {
+    const kjob *j = m->hsrc ? &m->last : &kh[m->hjob];
+    const kmeta *t = m->hsrc ? &m->lmeta : &m->rmeta[m->hjob];
+    char v[4][64];
+    const char *kv[8];
+    int n = 0;
+    unsigned c;
+    rr(s, 16, 80, 448, 182, 14, U_SURF);
+    ui_thumb(s, 32, 96, 150, m->hsrc ? &m->limg : &m->rimg[m->hjob], I_PRINT);
+    const char *st = k_hstat(j->status, &c);
+    ui_pill(s, 196, 96, st, c, U_SURF);
+    u_wrap(s, 196, 160, UF(2, 28, 0), k_base(j->name), j->exists ? U_FG : U_MUT, 252, 30, 3, 0);
+    k_when(j->end, v[n], 64);
+    if (v[n][0]) { kv[2 * n] = "Finished"; kv[2 * n + 1] = v[n]; n++; }
+    k_hm(j->dur, v[n], 64);
+    kv[2 * n] = "Printed for"; kv[2 * n + 1] = v[n]; n++;
+    double g = t->grams > 0 && t->fil > 0 ? t->grams * j->fused / t->fil : 0;
+    if (g > 0) snprintf(v[n], 64, "%.2f m · %.0f g", j->fused / 1000, g);
+    else snprintf(v[n], 64, "%.2f m", j->fused / 1000);
+    kv[2 * n] = "Filament"; kv[2 * n + 1] = v[n]; n++;
+    if (t->layers > 0) {
+        snprintf(v[n], 64, "%.0f × %.2f mm", t->layers, t->lh);
+        kv[2 * n] = "Layers"; kv[2 * n + 1] = v[n]; n++;
+    }
+    int y = ui_kv(s, 274, kv, n);
+    if (!j->exists) u_text(s, 32, y + 34, UF(0, 16, 0), "The file is gone from the printer.", U_WARN, 0);
+    ui_btn(s, 16, 604, 448, 92, "Print again", "hjob", V_GO, I_PLAY,
+           B_DNG | (k_busy(k) || !j->exists ? B_OFF : 0), m->hjob);
+}
+
+static void k_heat(const surf *s, const kstat *k) {
+    static const char *const pn[4] = { "PLA", "PETG", "ABS", "TPU" };
+    static const int pe[4] = { 210, 240, 245, 225 }, pb[4] = { 60, 70, 100, 50 };
+    static const char *const pc[4] = { K_GS "M104%20S210%0AM140%20S60", K_GS "M104%20S240%0AM140%20S70",
+                                       K_GS "M104%20S245%0AM140%20S100", K_GS "M104%20S225%0AM140%20S50" };
+    static char adj[2][2][48], ld[96], ul[96], pu[96];
+    int printing = !strcmp(k->pstate, "printing"), busy = k_busy(k);
+    char v[16];
+    for (int i = 0; i < 2; i++) {
+        int y = 80 + i * 108, lo = i ? 40 : 180, hi = i ? 110 : 260;
+        double t = i ? k->bt : k->et, g = i ? k->btt : k->ett;
+        int gv = (int)(g + 0.5);
+        int dn = gv <= 0 ? -1 : gv <= lo ? 0 : gv - 5, up = gv <= 0 ? lo : gv + 5 > hi ? -1 : gv + 5;
+        snprintf(adj[i][0], 48, K_GS "%s%%20S%d", i ? "M140" : "M104", dn);
+        snprintf(adj[i][1], 48, K_GS "%s%%20S%d", i ? "M140" : "M104", up);
+        rr(s, 16, y, 448, 96, 14, U_SURF);
+        ui_lab(s, 28, y + 30, i ? "BED" : "NOZZLE", U_MUT, 0);
+        snprintf(v, sizeof v, "%.0f°", t);
+        u_text(s, 26, y + 78, UF(1, 46, 0), v, U_FG, 0);
+        ui_btn(s, 180, y + 12, 72, 72, "−", adj[i][0], V_NORM, -1, printing || dn < 0 ? B_OFF : 0, 0);
+        u_text(s, 316, y + 38, UF(1, 12, 12), "TARGET", U_MUT, 1);
+        if (g > 0) snprintf(v, sizeof v, "%.0f°", g);
+        else snprintf(v, sizeof v, "off");
+        u_text(s, 316, y + 74, UF(1, 30, 0), v, g > 0 ? U_HEAT : U_MUT, 1);
+        ui_btn(s, 380, y + 12, 72, 72, "+", adj[i][1], V_NORM, -1, printing || up < 0 ? B_OFF : 0, 0);
+    }
+    ui_lab(s, 16, 314, "PREHEAT", U_MUT, 0);
+    for (int p = 0; p < 4; p++) {
+        int x = 16 + p % 3 * 153, y = 326 + p / 3 * 72;
+        int on = (int)(k->ett + 0.5) == pe[p] && (int)(k->btt + 0.5) == pb[p];
+        char sub[16];
+        if (busy) g_op = 82;
+        rr(s, x, y, 141, 64, 12, U_SURF2);
+        if (on) rring(s, x, y, 141, 64, 12, 4, U_HEAT);
+        u_text(s, x + 70, y + 30, UF(1, 18, 0), pn[p], U_FG, 1);
+        snprintf(sub, sizeof sub, "%d / %d", pe[p], pb[p]);
+        g_op = busy ? 62 : 192;
+        u_text(s, x + 70, y + 52, UF(0, 15, 0), sub, U_FG, 1);
+        g_op = 256;
+        if (!busy) ui_reg(x, y, 141, 64, pn[p], pc[p], 0, 0);
+    }
+    ui_btn(s, 169, 398, 141, 64, "Off", K_GS "TURN_OFF_HEATERS", V_GHOST, I_X,
+           busy || (k->ett <= 0 && k->btt <= 0) ? B_OFF : 0, 0);
+    if (printing)
+        u_text(s, 16, 494, UF(0, 16, 0), "Change temperatures during a print in Home › Tune.", U_MUT, 0);
+    if (k_filrun(k)) { k_filbar(s, k, 526); return; }
+    int ft = k->ett > 0 ? (int)(k->ett + 0.5) : 220;
+    if (busy) {
+        snprintf(ld, sizeof ld, K_GS "LOAD_FILAMENT");
+        snprintf(ul, sizeof ul, K_GS "UNLOAD_FILAMENT");
+        snprintf(pu, sizeof pu, K_GS "LOAD_FILAMENT%%20LENGTH%%3D20");
+    } else {
+        snprintf(ld, sizeof ld, K_GS "LOAD_FILAMENT%%20TEMP%%3D%d", ft);
+        snprintf(ul, sizeof ul, K_GS "UNLOAD_FILAMENT%%20TEMP%%3D%d", ft);
+        snprintf(pu, sizeof pu, K_GS "LOAD_FILAMENT%%20TEMP%%3D%d%%20LENGTH%%3D20", ft);
+    }
+    ui_lab(s, 16, 620, !busy && k->ett <= 0 ? "FILAMENT · HEATS TO 220 °C FIRST" : "FILAMENT", U_MUT, 0);
+    ui_btn(s, 16, 632, 141, 64, "Load", ld, V_GO, I_SPOOL, B_STACK | (printing ? B_OFF : 0), 0);
+    ui_btn(s, 169, 632, 142, 64, "Unload", ul, V_NORM, I_SPOOL, B_STACK | (printing ? B_OFF : 0), 0);
+    ui_btn(s, 323, 632, 141, 64, "Purge 20", pu, V_NORM, I_HEAT, B_STACK | (printing ? B_OFF : 0), 0);
+}
+
+static void k_tools(const surf *s, const kstat *k) {
+    static const char *const lcmd[3] = { K_GS "SET_PIN%20PIN%3Dlight%20VALUE%3D1",
+                                         K_GS "SET_PIN%20PIN%3Dlight%20VALUE%3D0.3",
+                                         K_GS "SET_PIN%20PIN%3Dlight%20VALUE%3D0" };
+    char fan[48], lt[16];
+    int busy = k_busy(k), li = k->light <= 0 ? 0 : k->light >= 1 ? 1 : 2;
+    if (k->pfan > 0 || k->cfan > 0)
+        snprintf(fan, sizeof fan, "part %.0f %% · chamber %.0f %%", k->pfan * 100, k->cfan * 100);
+    else snprintf(fan, sizeof fan, "both off");
+    if (k->light < 0) snprintf(lt, sizeof lt, "not fitted");
+    else if (li == 2) snprintf(lt, sizeof lt, "%.0f %%", k->light * 100);
+    else snprintf(lt, sizeof lt, li ? "On" : "Off");
+    ui_tile(s, 16, 80, I_MOVE, "Move", busy ? "not while printing" : strlen(k->homed) == 3 ? "homed" : "not homed",
+            "move", busy ? B_OFF : 0);
+    ui_tile(s, 246, 80, I_FAN, "Fans", fan, "fans", 0);
+    ui_tile(s, 16, 240, I_LIGHT, "Light", lt, lcmd[li], k->light < 0 ? B_OFF : 0);
+    ui_tile(s, 246, 240, I_GAUGE, "Speed mode", k_mname[k_modei(k)], "mode", 0);
+    ui_tile(s, 16, 400, I_POWER, "Motors off", busy ? "not while printing" : "frees the axes", K_GS "M84",
+            B_DNG | (busy ? B_OFF : 0));
+    ui_tile(s, 246, 400, I_INFO, "System", "network · versions · restart", "about", 0);
+}
+
+static void k_fans(const surf *s, const kstat *k) {
+    static const char *const lab[4] = { "Off", "30 %", "50 %", "100 %" };
+    static const char *const cmd[2][4] = {
+        { K_GS "M107", K_GS "M106%20S77", K_GS "M106%20S128", K_GS "M106%20S255" },
+        { K_GS "SET_FAN_SPEED%20FAN%3Dchamber_fan%20SPEED%3D0", K_GS "SET_FAN_SPEED%20FAN%3Dchamber_fan%20SPEED%3D0.3",
+          K_GS "SET_FAN_SPEED%20FAN%3Dchamber_fan%20SPEED%3D0.5", K_GS "SET_FAN_SPEED%20FAN%3Dchamber_fan%20SPEED%3D1" } };
+    static const char *const nt[2] = { "The slicer sets this during prints.",
+                                       "Prints set it from the material: PLA 100 %, PETG 50 %, ABS off." };
+    int y = 80;
+    for (int i = 0; i < 2; i++) {
+        int v = (int)((i ? k->cfan : k->pfan) * 100 + 0.5);
+        int on = !v ? 0 : abs(v - 30) <= 2 ? 1 : abs(v - 50) <= 2 ? 2 : v >= 98 ? 3 : -1;
+        int nl = u_wrap(NULL, 32, 0, UF(0, 16, 0), nt[i], U_MUT, 416, 21, 2, 0);
+        int h = 16 + 30 + 12 + 60 + 12 + nl * 21 + 12;
+        char val[16];
+        rr(s, 16, y, 448, h, 14, U_SURF);
+        ui_lab(s, 32, y + 40, i ? "CHAMBER FAN" : "PART FAN", U_MUT, 0);
+        if (v) snprintf(val, sizeof val, "%d %%", v);
+        else snprintf(val, sizeof val, "Off");
+        u_text(s, 448, y + 42, UF(1, 30, 0), val, U_FG, 2);
+        ui_seg(s, 32, y + 58, 416, 4, lab, cmd[i], on);
+        u_wrap(s, 32, y + 58 + 60 + 28, UF(0, 16, 0), nt[i], U_MUT, 416, 21, 2, 0);
+        y += h + 12;
+    }
+}
+
+static void k_move(const surf *s, const kstat *k, const kmenu *m) {
+    /* relative jogs inside a saved gcode state; XY 50 mm/s, Z 5 mm/s */
+    static const char *const lab[6] = { "X−", "X+", "Y−", "Y+", "Z−", "Z+" };
+    static const int jx[6] = { 16, 228, 122, 122, 368, 368 }, jy[6] = { 282, 282, 388, 176, 388, 176 };
+    static const char *const sl[4] = { "0.1 mm", "1 mm", "10 mm", "50 mm" };
+    static const char *const st[4] = { "step", "step", "step", "step" };
+    static char jog[6][160];
+    double d = k_step[m->step];
+    char v[16];
+    rr(s, 16, 80, 448, 56, 12, U_SURF);
+    for (int i = 0; i < 3; i++) {
+        static const char *const ax[3] = { "X", "Y", "Z" };
+        snprintf(v, sizeof v, "%.1f", k->pos[i]);
+        u_text(s, u_text(s, 34 + i * 149, 117, UF(0, 24, 0), ax[i], U_MUT, 0) + 10, 117, UF(1, 24, 0), v, U_FG, 0);
+    }
+    int homed = strlen(k->homed) == 3;
+    u_text(s, 16, 166, UF(0, 16, 0), homed ? "Y moves the bed; X and Z move the head." : "Not homed. Tap Home first.",
+           homed ? U_MUT : U_WARN, 0);
+    for (int i = 0; i < 6; i++) {
+        char a = "XXYYZZ"[i];
+        snprintf(jog[i], sizeof jog[i], K_GS "SAVE_GCODE_STATE%%20NAME%%3Djog%%0AG91%%0A"
+                 "G1%%20%c%s%g%%20F%d%%0ARESTORE_GCODE_STATE%%20NAME%%3Djog",
+                 a, i % 2 ? "" : "-", d, i < 4 ? 3000 : 300);
+        ui_btn(s, jx[i], jy[i], 96, 96, lab[i], jog[i], V_NORM, -1, strchr(k->homed, a | 32) ? 0 : B_OFF, 0);
+    }
+    ui_btn(s, 122, 282, 96, 96, "Home", K_GS "HOME_XYZ", V_ACC, I_HOMEAX, B_STACK, 0);
+    u_text(s, 416, 335, UF(1, 15, 10), "Z", U_MUT, 1);
+    ui_lab(s, 16, 624, "STEP", U_MUT, 0);
+    ui_seg(s, 16, 636, 448, 4, sl, st, m->step);
+}
+
+static void k_tune(const surf *s, const kstat *k) {
+    static const char *const lab[5] = { "SPEED", "FLOW", "Z OFFSET", "NOZZLE", "PART FAN" };
+    static const double step[5] = { 10, 2, 0.02, 5, 10 };
+    static const double lo[5] = { 20, 80, -1, 180, 0 }, hi[5] = { 800, 200, 1, 260, 100 };
+    static const double def[5] = { 100, 100, 0, -1, -1 };
+    static char cmd[5][2][96];
+    double val[5] = { k->speed * 100, k->flow * 100, k->zoff, k->ett, k->pfan * 100 };
+    for (int i = 0; i < 5; i++) {
+        int y = 80 + i * 86;
         for (int d = 0; d < 2; d++) {
-            double cur = k_tval(k, i), v = cur + (d ? step[i] : -step[i]);
-            v = (long)(v / step[i] + (v < 0 ? -0.5 : 0.5)) * step[i];   /* no libm */
+            double v = val[i] + (d ? step[i] : -step[i]);
+            v = (long)(v / step[i] + (v < 0 ? -0.5 : 0.5)) * step[i];
             int ok = v >= lo[i] - 1e-6 && v <= hi[i] + 1e-6;
             switch (i) {
             case 0: snprintf(cmd[i][d], 96, K_GS "M220%%20S%.0f", v); break;
@@ -1947,753 +3200,214 @@ static int k_tune(const kstat *k, btn *b) {
             case 4: snprintf(cmd[i][d], 96, K_GS "M106%%20S%.0f", v * 2.55); break;
             }
             if (i == 3 && k->ett <= 0) ok = 0;   /* not re-heating a nozzle that is off */
-            b[n++] = (btn){ d ? 346 : 24, 108 + i * 96, 110, 88, d ? "+" : "-",
-                            ok ? cmd[i][d] : "none", ok ? C_ACC : K_G2, ok ? C_ACCD : K_G2, 4, 0, 0 };
+            ui_btn(s, d ? 384 : 16, y, 80, 76, d ? "+" : "−", cmd[i][d], V_NORM, -1, ok ? 0 : B_OFF, 0);
         }
-    b[n++] = KB(24, 136, "BACK", "back", K_G1, K_G2, 0);
-    b[n++] = KB(172, 136, "SPEED\nMODE", "mode", C_ACC, C_ACCD, 0);
-    b[n++] = KB(320, 136, "OBJECTS", "objs", C_ACC, C_ACCD, 0);
-    for (int i = n - 3; i < n; i++) b[i].sc = 2;
-    return n;
+        char t[24];
+        if (i == 2) snprintf(t, sizeof t, "%+.2f mm", val[i]);
+        else if (i == 3) snprintf(t, sizeof t, val[i] > 0 ? "%.0f °C" : "off", val[i]);
+        else snprintf(t, sizeof t, "%.0f %%", val[i]);
+        double dv = val[i] - def[i];
+        rr(s, 106, y, 268, 76, 12, U_SURF);
+        u_text(s, 240, y + 26, UF(1, 13, 13), lab[i], U_MUT, 1);
+        u_text(s, 240, y + 62, UF(1, 30, 0), t, def[i] >= -0.5 && (dv > 0.001 || dv < -0.001) ? U_WARN : U_FG, 1);
+    }
+    ui_btn(s, 16, 632, 218, 64, "Speed mode", "mode", V_NORM, I_GAUGE, 0, 0);
+    ui_btn(s, 246, 632, 218, 64, "Objects", "objs", V_NORM, I_OBJS, 0, 0);
 }
 
-/* SPEED MODE: a tile per mode of printer.cfg's SPEED_MODE, saved for the
- * next job and applied at once during one. BRACE sits behind the gamepad. */
-static int k_mode(const kstat *k, btn *b) {
-    static char lab[4][24], cmd[4][64];
-    int n = 0;
-    for (int i = 0; i < 4; i++) {
-        int on = !strcmp(k->smode, k_mname[i]) || (!k->smode[0] && i == 0);
-        if (k->mode[i][0] > 0) snprintf(lab[i], sizeof lab[i], "%s\n%d mm/s", k_mname[i], k->mode[i][0]);
-        else snprintf(lab[i], sizeof lab[i], "%s", k_mname[i]);
-        snprintf(cmd[i], sizeof cmd[i], K_GS "SPEED_MODE%%20NAME%%3D%s", k_mname[i]);
-        b[n++] = KT(24 + i % 2 * 224, 216 + i / 2 * 146, 208, lab[i], cmd[i],
-                    on ? C_OK : C_ACC, on ? 0x1f8a60u : C_ACCD);
+static void k_objsscr(const surf *s, const kmenu *m) {
+    static char cmd[K_MAXO][240];
+    const int x0 = 130, y0 = 92;
+    rr(s, 16, 80, 448, 224, 14, U_SURF);
+    rr(s, x0, y0, 220, 200, 8, U_SURF2);
+    if (m->nobj <= 0) {
+        u_wrap(s, 240, 180, UF(0, 16, 0), m->nobj < 0 ? "Could not read the objects."
+               : "No object labels in this file. Turn on label objects in the slicer.", U_MUT, 196, 21, 4, 1);
+        return;
     }
-    b[n++] = (btn){ 24, 508, 432, 76, "BRACE YOURSELF", "pad", C_ERRD, 0x6d2530u, 3, 0, 0 };
-    b[n++] = KB(24, 432, "BACK", "back", K_G1, K_G2, 0);
-    return n;
+    for (int i = 0; i < m->nobj; i++) {
+        const kobj *o = &ko[i];
+        float p[K_MAXP][2];
+        for (int j = 0; j < o->np; j++) { p[j][0] = x0 + (float)o->p[j][0]; p[j][1] = y0 + 200 - (float)o->p[j][1]; }
+        if (!o->excl && o->np > 2) poly_fill(s, p, o->np, o->cur ? U_ACC : U_MUT, o->cur ? 90 : 64);
+        for (int j = 0; j < o->np; j++) {
+            const float *A = p[j], *B = p[(j + 1) % o->np];
+            if (!o->excl) { aa_line(s, A[0], A[1], B[0], B[1], 1, o->cur ? U_ACC : U_DIM); continue; }
+            float dx = B[0] - A[0], dy = B[1] - A[1], L = sqrtf(dx * dx + dy * dy);
+            for (float d = 0; d < L; d += 9) {
+                float e = d + 5 < L ? d + 5 : L;
+                aa_line(s, A[0] + dx * d / L, A[1] + dy * d / L, A[0] + dx * e / L, A[1] + dy * e / L, 1, U_DIM);
+            }
+        }
+        char nb[4];
+        snprintf(nb, sizeof nb, "%d", i + 1);
+        u_text(s, x0 + (int)o->cx, y0 + 200 - (int)o->cy + 6, UF(1, 17, 0), nb, o->excl ? U_DIM : U_FG, 1);
+    }
+    for (int i = 0; i < m->nobj; i++) {
+        const kobj *o = &ko[i];
+        int y = 316 + i * 62;
+        char nm[64], nb[4], en[160];
+        k_oname(o->name, nm, sizeof nm);
+        snprintf(nb, sizeof nb, "%d", i + 1);
+        rr(s, 16, y, 448, 56, 12, U_SURF);
+        u_text(s, 32, y + 25, UF(1, 18, 0), nb, U_FG, 0);
+        u_text(s, 58, y + 25, UF(0, 18, 0), u_fit(UF(0, 18, 0), nm, 260), o->excl ? U_MUT : U_FG, 0);
+        u_text(s, 58, y + 46, UF(1, 13, 10), o->excl ? "SKIPPED" : o->cur ? "PRINTING NOW" : "WAITING",
+               o->excl ? U_STOP : o->cur ? U_ACC : U_MUT, 0);
+        urlenc(o->name, en, sizeof en);
+        snprintf(cmd[i], sizeof cmd[i], K_GS "EXCLUDE_OBJECT%%20NAME%%3D%s", en);
+        if (!o->excl && m->nobj > 1)   /* never the last one: that is CANCEL */
+            ui_btn(s, 340, y + 6, 112, 44, "Skip", cmd[i], V_STOP, -1, B_DNG, 0);
+    }
+}
+
+/* SPEED MODE: a row per mode of printer.cfg's SPEED_MODE, saved for the
+ * next job and applied at once during one. BRACE sits behind the gamepad. */
+static void k_modescr(const surf *s, const kstat *k) {
+    static char cmd[4][64];
+    char sub[64], num[16];
+    ufont U = UF(0, 15, 0);
+    int wu = u_tw(U, " mm/s");
+    for (int i = 0; i < 5; i++) {
+        const int *v = k->mode[i];
+        int y = 80 + i * 84, on = !strcmp(k->smode, k_mname[i]) || (!k->smode[0] && i == 0);
+        unsigned c = i == 4 ? U_STOP : U_ACC;
+        rr(s, 16, y, 448, 76, 12, i == 4 ? mix(U_SCR, U_STOP, 31) : U_SURF);
+        if (on) rring(s, 16, y, 448, 76, 12, 4, c);
+        u_text(s, 32, y + 33, UF(2, 22, 10), i == 4 ? "BRACE YOURSELF" : k_mname[i], i == 4 ? U_STOP : on ? U_ACC : U_FG, 0);
+        int sx = 32;
+        if (i == 4) { icon(s, I_LOCK, 32, y + 46, 15, U_MUT); sx = 52; }
+        if (v[2] > 0) snprintf(sub, sizeof sub, "%saccel %d · %d °C · flow %d %%", i == 4 ? "locked · " : "", v[1], v[2], v[3]);
+        else snprintf(sub, sizeof sub, "accel %d · slicer temp · flow %d %%", v[1], v[3]);
+        u_text(s, sx, y + 59, U, sub, U_MUT, 0);
+        snprintf(num, sizeof num, v[0] > 0 ? "%d" : "--", v[0]);
+        u_text(s, 448 - wu, y + 49, UF(1, 30, 0), num, U_FG, 2);
+        u_text(s, 448 - wu, y + 49, U, " mm/s", U_MUT, 0);
+        if (i == 4) { ui_reg(16, y, 448, 76, "BRACE", "pad", 0, 0); break; }
+        snprintf(cmd[i], sizeof cmd[i], K_GS "SPEED_MODE%%20NAME%%3D%s", k_mname[i]);
+        ui_reg(16, y, 448, 76, k_mname[i], cmd[i], 0, 0);
+    }
+    char nt[96];
+    snprintf(nt, sizeof nt, "%s Saved until you change it.",
+             !strcmp(k->pstate, "printing") ? "Applies now." : !strcmp(k->pstate, "paused")
+             ? "Applies when you tap Ready." : "Applies to the next print.");
+    u_text(s, 16, 680, UF(0, 16, 0), nt, U_MUT, 0);
 }
 
 /* the gamepad that unlocks BRACE: the Konami code, checked in k_nav */
-static int k_pad(btn *b) {
-    b[0] = (btn){ 104, 292, 72, 72, "", "padU", K_G1, K_G2, 4, 0, 0 };
-    b[1] = (btn){ 104, 436, 72, 72, "", "padD", K_G1, K_G2, 4, 0, 0 };
-    b[2] = (btn){ 32, 364, 72, 72, "", "padL", K_G1, K_G2, 4, 0, 0 };
-    b[3] = (btn){ 176, 364, 72, 72, "", "padR", K_G1, K_G2, 4, 0, 0 };
-    b[4] = (btn){ 256, 400, 84, 84, "B", "padB", C_ERR, C_ERRD, 4, 0, 0 };
-    b[5] = (btn){ 356, 336, 84, 84, "A", "padA", C_ERR, C_ERRD, 4, 0, 0 };
-    b[6] = KB(24, 432, "BACK", "back", K_G1, K_G2, 0);
-    return 7;
-}
-
-static int k_brace(btn *b) {
-    b[0] = KB(24, 208, "BACK", "back", K_G1, K_G2, 0);
-    b[1] = KB(248, 208, "PROCEED", K_GS "SPEED_MODE%20NAME%3DBRACE%20CODE%3DUUDDLRLRBA",
-              C_ERR, C_ERRD, 1);
-    return 2;
-}
-
-/* OBJECTS: two columns of the job's objects; a tap (and a confirm) skips one */
-static int k_objbtn(const kmenu *m, btn *b) {
-    static char lab[K_MAXO][32], cmd[K_MAXO][240];
-    int n = 0;
-    for (int i = 0; i < m->nobj; i++) {
-        char nm[16], en[160];
-        k_oname(ko[i].name, nm, sizeof nm);
-        if (ko[i].excl) snprintf(lab[i], sizeof lab[i], "%d skipped", i + 1);
-        else snprintf(lab[i], sizeof lab[i], "%d %s", i + 1, nm);
-        urlenc(ko[i].name, en, sizeof en);
-        snprintf(cmd[i], sizeof cmd[i], K_GS "EXCLUDE_OBJECT%%20NAME%%3D%s", en);
-        int on = !ko[i].excl && m->nobj > 1;   /* never the last one: that is CANCEL */
-        b[n++] = (btn){ 24 + i % 2 * 224, 372 + i / 2 * 76, 208, 68, lab[i], on ? cmd[i] : "none",
-                        ko[i].excl ? K_G2 : ko[i].cur ? C_ACC : K_G1,
-                        ko[i].excl ? K_G2 : ko[i].cur ? C_ACCD : K_G2, 2, on, 0 };
+static void k_padscr(const surf *s, const kmenu *m) {
+    static const char *const tok[4] = { "padU", "padL", "padR", "padD" };
+    static const int dx[4] = { 108, 36, 180, 108 }, dy[4] = { 224, 296, 296, 368 }, ai[4] = { I_AU, I_AL, I_AR, I_AD };
+    int n = (int)strlen(m->pad);
+    ui_lab(s, 240, 112, "ENTER THE CODE", U_MUT, 1);
+    for (int i = 0; i < 10; i++)
+        rr(s, 115 + i * 26, 128, 16, 16, 8, m->padbad ? U_STOP : i < n ? U_ACC : U_SURF2);
+    rr(s, 16, 200, 448, 260, 22, U_SURF);
+    rr(s, 108, 296, 68, 68, 10, U_SURF2);
+    for (int i = 0; i < 4; i++) {
+        rr(s, dx[i], dy[i], 68, 68, 10, U_SURF2);
+        icon(s, ai[i], dx[i] + 18, dy[i] + 18, 32, U_FG);
+        ui_reg(dx[i], dy[i], 68, 68, "", tok[i], 0, 0);
     }
-    b[n++] = KB(24, 432, "BACK", "back", K_G1, K_G2, 0);
-    return n;
-}
-
-/* LOAD_FILAMENT / UNLOAD_FILAMENT are macros in printer.cfg. During a pause
- * they run at the job's own nozzle target (no TEMP=), so RESUME prints at
- * the temperature the slicer set, and there is no COOLDOWN. */
-/* A load or unload is running. A macro stopped by an error leaves dir set,
- * but every such stop (heater off, shutdown, restart) leaves no target. */
-static int k_filrun(const kstat *k) {
-    return k->fdir && k->ett > 0;
-}
-
-static int k_fil(const kstat *k, const kmenu *m, btn *b) {
-    static char ld[96], ul[96], pu[96], tl[16];
-    int n = 0, job = k_busy(k);
-    int ft = k_ftemp[m->ft];
-    if (k_filrun(k)) {
-        b[n++] = KB(24, 432, "BACK", "back", K_G1, K_G2, 0);
-        return n;
+    for (int i = 0; i < 2; i++) {
+        int cx = i ? 400 : 304, cy = i ? 296 : 364;
+        rr(s, cx - 42, cy - 42, 84, 84, 42, U_STOP);
+        u_text(s, cx, cy + 10, UF(1, 28, 0), i ? "A" : "B", 0xffffffu, 1);
+        ui_reg(cx - 42, cy - 42, 84, 84, "", i ? "padA" : "padB", 0, 0);
     }
-    if (job) {
-        snprintf(ld, sizeof ld, K_GS "LOAD_FILAMENT");
-        snprintf(ul, sizeof ul, K_GS "UNLOAD_FILAMENT");
-        snprintf(pu, sizeof pu, K_GS "LOAD_FILAMENT%%20LENGTH%%3D20");
-    } else {
-        snprintf(ld, sizeof ld, K_GS "LOAD_FILAMENT%%20TEMP%%3D%d", ft);
-        snprintf(ul, sizeof ul, K_GS "UNLOAD_FILAMENT%%20TEMP%%3D%d", ft);
-        snprintf(pu, sizeof pu, K_GS "LOAD_FILAMENT%%20TEMP%%3D%d%%20LENGTH%%3D20", ft);
-    }
-    snprintf(tl, sizeof tl, "TEMP\n%d C", ft);
-    b[n++] = KT(24, 290, 208, "LOAD", ld, C_OK, 0x1f8a60u);
-    b[n++] = KT(248, 290, 208, "UNLOAD", ul, C_WARN, 0xa86f22u);
-    b[n++] = KT(24, 436, 208, "PURGE\n20 mm", pu, C_ACC, C_ACCD);
-    if (!job) b[n++] = KT(248, 436, 208, tl, "ftemp", K_G1, K_G2);
-    b[n++] = KB(24, 208, "BACK", "back", K_G1, K_G2, 0);
-    if (!job) b[n++] = KB(248, 208, "COOLDOWN", K_GS "TURN_OFF_HEATERS", K_G1, K_G2, 0);
-    return n;
+    if (m->padbad) u_text(s, 240, 506, UF(1, 18, 0), "Wrong. Start over.", U_STOP, 1);
 }
 
-static int k_buttons(const kstat *k, const kmenu *m, btn *b) {
-    static char pf[32], cf[32], lf[32];
-    int n = 0;
-    if (!k->online || !strcmp(k->kstate, "startup")) return 0;
-    if (strcmp(k->kstate, "ready")) {
-        b[0] = KB(24, 432, "FIRMWARE RESTART", "/printer/firmware_restart", C_ACC, C_ACCD, 0);
-        return 1;
-    }
-    if (m->scr == K_MODE) return k_mode(k, b);
-    if (m->scr == K_PAD) return k_pad(b);
-    if (m->scr == K_BRACE) return k_brace(b);
-    if (k_busy(k)) {
-        if (m->scr == K_TUNE) return k_tune(k, b);
-        if (m->scr == K_OBJS) return k_objbtn(m, b);
-        int paused = !strcmp(k->pstate, "paused");
-        if (m->scr == K_FIL && paused) return k_fil(k, m, b);
-        if (!paused)
-            b[0] = KB(24, 136, "PAUSE", "/printer/print/pause", C_WARN, 0xa86f22u, 0);
-        else
-            b[0] = KB(24, 136, k->dmsg[0] ? "READY" : "RESUME", "/printer/print/resume", C_OK, 0x1f8a60u, 0);
-        b[1] = KB(172, 136, "TUNE", "tune", C_ACC, C_ACCD, 0);
-        b[2] = KB(320, 136, "CANCEL", "/printer/print/cancel", C_ERRD, 0x6d2530u, 1);
-        for (int i = 0; i < 3; i++) b[i].sc = 2;   /* three across: CANCEL fits at 2 */
-        if (!paused) return 3;
-        /* inside the stop card (k_stop); REDO = printer.cfg's PLATE_REDO (B4) */
-        b[3] = (btn){ 204, 426, 140, 60, "FILAMENT", "fil", C_ACC, C_ACCD, 2, 0, 0 };
-        b[4] = (btn){ 352, 426, 84, 60, "REDO", K_GS "PLATE_REDO", C_WARN, 0xa86f22u, 2, 1, 0 };
-        return 5;
-    }
-    switch (m->scr) {
-    case K_HOME:
-        if (k_ended(k) && !m->ack) {
-            b[n++] = KB(24, 208, "OK", "ack", K_G1, K_G2, 0);
-            b[n++] = KB(248, 208, "REPRINT", "again", C_OK, 0x1f8a60u, 1);
-            break;
-        }
-        b[n++] = (btn){ 24, 290, 284, 130, "PRINT", "files", C_OK, 0x1f8a60u, 4, 0, 0 };
-        b[n++] = (btn){ 320, 290, 136, 130, "HISTORY", "hist", C_ACC, C_ACCD, 2, 0, 0 };
-        b[n++] = KT(24, 436, 208, "PREHEAT", "heat", C_WARN, 0xa86f22u);
-        b[n++] = KT(248, 436, 208, "FILAMENT", "fil", C_ACC, C_ACCD);
-        b[n++] = KB(24, 208, "TOOLS", "tools", C_ACC, C_ACCD, 0);
-        b[n++] = KB(248, 208, "COOLDOWN", K_GS "TURN_OFF_HEATERS", K_G1, K_G2, 0);
-        break;
-    case K_FILES:
-        for (int i = 0; i < K_ROWS && m->page * K_ROWS + i < nkf; i++) {
-            int f = m->page * K_ROWS + i;
-            b[n++] = (btn){ 24, 108 + i * 80, 432, 72, kf[f].name, "file", 0, 0, 0, 0, f };
-        }
-        if (k_usbdev()) {
-            /* a stick is in: four across */
-            b[n++] = (btn){ 24, 600, 102, 120, "BACK", "back", K_G1, K_G2, 2, 0, 0 };
-            b[n++] = (btn){ 134, 600, 102, 120, "USB", "usb", C_OK, 0x1f8a60u, 2, 0, 0 };
-            if (m->page > 0) b[n++] = (btn){ 244, 600, 102, 120, "PREV", "prev", C_ACC, C_ACCD, 2, 0, 0 };
-            if ((m->page + 1) * K_ROWS < nkf)
-                b[n++] = (btn){ 354, 600, 102, 120, "NEXT", "next", C_ACC, C_ACCD, 2, 0, 0 };
-            break;
-        }
-        b[n++] = KB(24, 136, "BACK", "back", K_G1, K_G2, 0);
-        if (m->page > 0) b[n++] = KB(172, 136, "PREV", "prev", C_ACC, C_ACCD, 0);
-        if ((m->page + 1) * K_ROWS < nkf) b[n++] = KB(320, 136, "NEXT", "next", C_ACC, C_ACCD, 0);
-        break;
-    case K_USB:
-        /* two taps on a file copy it to the printer and print it */
-        for (int i = 0; i < K_ROWS && m->page * K_ROWS + i < nku; i++) {
-            int f = m->page * K_ROWS + i;
-            b[n++] = (btn){ 24, 108 + i * 80, 432, 72, ku[f].name, "ufile", 0, 0, 0, 1, f };
-        }
-        b[n++] = KB(24, 136, "BACK", "back", K_G1, K_G2, 0);
-        if (m->page > 0) b[n++] = KB(172, 136, "PREV", "prev", C_ACC, C_ACCD, 0);
-        if ((m->page + 1) * K_ROWS < nku) b[n++] = KB(320, 136, "NEXT", "next", C_ACC, C_ACCD, 0);
-        break;
-    case K_FILE:
-        b[n++] = KB(24, 208, "BACK", "back", K_G1, K_G2, 0);
-        b[n++] = KB(248, 208, "PRINT", "print", C_OK, 0x1f8a60u, 1);
-        break;
-    case K_HIST:
-        /* two taps on a job print it again; a deleted file cannot */
-        for (int i = 0; i < m->nhist; i++)
-            b[n++] = (btn){ 24, 108 + i * 80, 432, 72, kh[i].name, kh[i].exists ? "hjob" : "hgone",
-                            0, 0, 0, kh[i].exists, i };
-        b[n++] = KB(24, 432, "BACK", "back", K_G1, K_G2, 0);
-        break;
-    case K_HEAT:
-        b[n++] = KT(24, 290, 208, "PLA\n210/60", K_GS "M104%20S210%0AM140%20S60", C_WARN, 0xa86f22u);
-        b[n++] = KT(248, 290, 208, "PETG\n240/70", K_GS "M104%20S240%0AM140%20S70", C_WARN, 0xa86f22u);
-        b[n++] = KT(24, 436, 208, "ABS\n245/100", K_GS "M104%20S245%0AM140%20S100", C_WARN, 0xa86f22u);
-        b[n++] = KT(248, 436, 208, "TPU\n225/50", K_GS "M104%20S225%0AM140%20S50", C_WARN, 0xa86f22u);
-        b[n++] = KB(24, 208, "BACK", "back", K_G1, K_G2, 0);
-        b[n++] = KB(248, 208, "COOLDOWN", K_GS "TURN_OFF_HEATERS", K_G1, K_G2, 0);
-        break;
-    case K_TOOLS:
-        if (k->pfan > 0) snprintf(pf, sizeof pf, "PART FAN\n%.0f%%", k->pfan * 100);
-        else snprintf(pf, sizeof pf, "PART FAN\noff");
-        snprintf(cf, sizeof cf, "CHAMBER\nFAN %s", k->cfan > 0 ? "on" : "off");
-        b[n++] = KT(24, 290, 208, pf, k->pfan > 0 ? K_GS "M107" : K_GS "M106%20S255",
-                    k->pfan > 0 ? C_ACC : K_G1, k->pfan > 0 ? C_ACCD : K_G2);
-        b[n++] = KT(248, 290, 208, cf, k->cfan > 0
-                        ? K_GS "SET_FAN_SPEED%20FAN%3Dchamber_fan%20SPEED%3D0"
-                        : K_GS "SET_FAN_SPEED%20FAN%3Dchamber_fan%20SPEED%3D1",
-                    k->cfan > 0 ? C_ACC : K_G1, k->cfan > 0 ? C_ACCD : K_G2);
-        b[n++] = KT(24, 436, 208, "MOVE", "move", C_ACC, C_ACCD);
-        b[n++] = KT(248, 436, 208, "MOTORS\nOFF", K_GS "M84", K_G1, K_G2);
-        if (k->light < 0) {
-            b[n++] = KB(24, 136, "BACK", "back", K_G1, K_G2, 0);
-            b[n++] = KB(172, 136, "SPEED\nMODE", "mode", C_ACC, C_ACCD, 0);
-            b[n++] = KB(320, 136, "ABOUT", "about", K_G1, K_G2, 0);
-            b[n - 2].sc = 2;
-            break;
-        }
-        /* LIGHT cycles off -> on -> 30 % -> off */
-        if (k->light <= 0) snprintf(lf, sizeof lf, "LIGHT\noff");
-        else if (k->light >= 1) snprintf(lf, sizeof lf, "LIGHT\non");
-        else snprintf(lf, sizeof lf, "LIGHT\n%.0f%%", k->light * 100);
-        /* four across */
-        b[n++] = (btn){ 24, 600, 102, 120, "BACK", "back", K_G1, K_G2, 2, 0, 0 };
-        b[n++] = (btn){ 134, 600, 102, 120, "SPEED\nMODE", "mode", C_ACC, C_ACCD, 2, 0, 0 };
-        b[n++] = (btn){ 244, 600, 102, 120, lf,
-                        k->light <= 0 ? K_GS "SET_PIN%20PIN%3Dlight%20VALUE%3D1"
-                        : k->light >= 1 ? K_GS "SET_PIN%20PIN%3Dlight%20VALUE%3D0.3"
-                        : K_GS "SET_PIN%20PIN%3Dlight%20VALUE%3D0",
-                        k->light > 0 ? C_WARN : K_G1, k->light > 0 ? 0xa86f22u : K_G2, 2, 0, 0 };
-        b[n++] = (btn){ 354, 600, 102, 120, "ABOUT", "about", K_G1, K_G2, 2, 0, 0 };
-        break;
-    case K_ABOUT:
-        b[n++] = KB(24, 208, "BACK", "back", K_G1, K_G2, 0);
-        b[n++] = KB(248, 208, "FIRMWARE\nRESTART", "/printer/firmware_restart", C_ACC, C_ACCD, 1);
-        break;
-    case K_FIL:
-        n = k_fil(k, m, b);
-        break;
-    case K_MOVE: {
-        /* relative jogs inside a saved gcode state; XY 50 mm/s, Z 5 mm/s */
-        static const char *const lab[6] = { "X-", "X+", "Y-", "Y+", "Z-", "Z+" };
-        static const int gx[6] = { 0, 2, 1, 1, 3, 3 }, gy[6] = { 1, 1, 2, 0, 2, 0 };
-        static char jog[6][160], st[24];
-        double d = k_step[m->step];
-        for (int i = 0; i < 6; i++) {
-            snprintf(jog[i], sizeof jog[i], K_GS "SAVE_GCODE_STATE%%20NAME%%3Djog%%0AG91%%0A"
-                     "G1%%20%c%s%g%%20F%d%%0ARESTORE_GCODE_STATE%%20NAME%%3Djog",
-                     lab[i][0], lab[i][1] == '-' ? "-" : "", d, i < 4 ? 3000 : 300);
-            b[n++] = (btn){ 24 + gx[i] * 110, 180 + gy[i] * 112, 102, 104, lab[i], jog[i],
-                            C_CARD2, C_CARD, 3, 0, 0 };
-        }
-        snprintf(st, sizeof st, "STEP\n%g mm", d);
-        b[n++] = (btn){ 134, 292, 102, 104, "HOME", K_GS "HOME_XYZ", C_ACC, C_ACCD, 3, 0, 0 };
-        b[n++] = (btn){ 354, 292, 102, 104, st, "step", K_G1, K_G2, 2, 0, 0 };
-        b[n++] = KB(24, 432, "BACK", "back", K_G1, K_G2, 0);
-        break;
-    }
-    }
-    return n;
+static void k_bracescr(const surf *s, const kstat *k) {
+    static const char *const p1 = "The machine's limit, for fast prints that need neither looks nor strength. Stay at the printer.";
+    static const char *const p2 = "It locks again when the job ends; the next one runs MCQUEEN.";
+    const int *v = k->mode[4];
+    ufont P = UF(0, 17, 0);
+    char sp[80];
+    int n1 = u_wrap(NULL, 36, 0, P, p1, U_FG, 408, 23, 5, 0), n2 = u_wrap(NULL, 36, 0, P, p2, U_FG, 408, 23, 4, 0);
+    int h = 20 + 30 + 16 + 20 + 16 + n1 * 23 + 10 + n2 * 23 + 12;
+    rr(s, 16, 80, 448, h, 14, mix(U_SCR, U_STOP, 36));
+    rring(s, 16, 80, 448, h, 14, 3, mix(U_SCR, U_STOP, 128));
+    u_text(s, 36, 128, UF(2, 32, 10), "BRACE YOURSELF", U_STOP, 0);
+    snprintf(sp, sizeof sp, "%d mm/s · accel %d · %d °C · flow %d %%", v[0], v[1], v[2], v[3]);
+    u_text(s, 36, 164, UF(1, 18, 0), u_fit(UF(1, 18, 0), sp, 408), U_FG, 0);
+    u_wrap(s, 36, 198, P, p1, U_FG, 408, 23, 5, 0);
+    u_wrap(s, 36, 198 + n1 * 23 + 10, P, p2, U_FG, 408, 23, 4, 0);
+    ui_btn(s, 16, 604, 448, 92, "Proceed", K_GS "SPEED_MODE%20NAME%3DBRACE%20CODE%3DUUDDLRLRBA", V_STOP, -1, B_DNG, 0);
 }
 
-static void k_temp(const surf *s, int x, int y, const char *label,
-                   double cur, double tgt) {
-    char v[16], t[32];
-    rrect(s, x, y, 208, 150, 18, C_CARD, C_CARD2);
-    text(s, x + 16, y + 14, label, 2, C_DIM);
-    snprintf(v, sizeof v, "%.0f", cur);
-    text(s, x + 16, y + 44, v, 6, C_TXT);
-    text(s, x + 16 + tw(v, 6) + 6, y + 44, "C", 2, C_DIM);
-    if (tgt > 0) snprintf(t, sizeof t, "target %.0f", tgt);
-    else snprintf(t, sizeof t, "off");
-    text(s, x + 16, y + 114, t, 2, tgt > 0 ? C_WARN : C_DIM);
+static void k_about(const surf *s, const kstat *k, const char *eth, const char *wifi, const char *hostport) {
+    char e[48];
+    snprintf(e, sizeof e, "eth0 %s", eth);
+    const char *kv[10] = { "Printer link", e, "Wi-Fi", wifi, "Moonraker", hostport,
+                           "Klipper", k->ver[0] ? k->ver : "?", "Source", "github.com/Mcsketch/ad4-klipper" };
+    ui_kv(s, 80, kv, 5);
+    int off = k_busy(k) ? B_OFF : 0;
+    ui_btn(s, 16, 632, 218, 64, "Restart Klipper", "/printer/restart", V_NORM, -1, B_DNG | off, 0);
+    ui_btn(s, 246, 632, 218, 64, "Firmware restart", "/printer/firmware_restart", V_NORM, -1, B_DNG | off, 0);
 }
 
-/* The filament tip between the extruder gears and the nozzle, from the
- * extruder's live position: fills on a load, drains on an unload, in mm. */
-static void k_filbar(const surf *s, const kstat *k) {
-    int load = k->fdir > 0;
-    double moved = load ? k->fe - k->fe0 : k->fe0 - k->fe;
-    if (moved < 0) moved = 0;
-    if (moved > k->flen) moved = k->flen;
-    double in = load ? moved : k->flen - moved;
-    double f = k->flen > 0 ? in / k->flen : 0;
-    unsigned col = load ? C_OK : C_WARN;
-    char big[16], sub[32], st[48];
-    rrect(s, 24, 290, 432, 276, 18, C_CARD, C_CARD2);
-    text(s, 44, 308, !load ? "UNLOADING" : k->flen <= 50 ? "PURGING" : "LOADING", 2, col);
-    snprintf(big, sizeof big, "%.0f", in);
-    text(s, 44, 340, big, 6, C_TXT);
-    snprintf(sub, sizeof sub, "/ %.0f mm", k->flen);
-    text(s, 44 + tw(big, 6) + 10, 372, sub, 2, C_DIM);
-    rrect(s, 44, 420, 392, 40, 10, C_BG1, C_BG1);
-    int w = (int)(392 * f + 0.5);
-    if (w >= 20) rrect(s, 44, 420, w, 40, 10, col, col);
-    else if (w > 0) fill(s, 44, 420, w, 40, col);
-    text(s, 44, 470, "GEARS", 1, C_DIM);
-    text(s, 436 - tw("NOZZLE", 1), 470, "NOZZLE", 1, C_DIM);
-    if (moved < 0.5 && k->et < k->ett - 2)
-        snprintf(st, sizeof st, "Heating %.0f / %.0f C", k->et, k->ett);
-    else if (load)
-        snprintf(st, sizeof st, moved < k->flen - 120 ? "Down the tube" : "Through the hot end");
-    else
-        snprintf(st, sizeof st, moved < 95 ? "Out of the hot end" : "Back up the tube");
-    text(s, 44, 500, st, 2, C_TXT);
+static int k_tab(int scr) {
+    return scr == K_HOME || scr == K_TUNE || scr == K_OBJS ? 0
+         : scr == K_FILES || scr == K_FILE || scr == K_HIST || scr == K_USB || scr == K_HJOB ? 1
+         : scr == K_HEAT ? 2 : 3;
 }
 
-static void k_size(double sz, char *o, int n) {
-    if (sz >= 1e6) snprintf(o, n, "%.1f MB", sz / 1e6);
-    else snprintf(o, n, "%.0f KB", sz / 1e3);
-}
-
-static void k_file_row(const surf *s, const btn *b, const kmenu *m) {
-    char nm[32], ln[48], hm[16];
-    const kfile *f = &kf[b->arg];
-    const kmeta *t = &m->rmeta[b->arg % K_ROWS];
-    int l = (int)strlen(f->name);
-    if (l > 6 && !strcmp(f->name + l - 6, ".gcode")) l -= 6;
-    if (l > 21) snprintf(nm, sizeof nm, "%.19s..", f->name);
-    else snprintf(nm, sizeof nm, "%.*s", l, f->name);
-    rrect(s, b->x, b->y, b->w, b->h, 14, C_CARD, C_CARD2);
-    rrect(s, b->x + 8, b->y + 8, 56, 56, 8, C_BG1, C_BG1);
-    if (m->rimg[b->arg % K_ROWS].px) k_img(s, b->x + 8, b->y + 8, 56, &m->rimg[b->arg % K_ROWS], C_BG1);
-    text(s, b->x + 76, b->y + 14, nm, 2, C_TXT);
-    /* time and grams from the slicer; the size when the file has neither */
-    if (t->est > 0) {
-        k_hm(t->est, hm, sizeof hm);
-        if (t->grams > 0) snprintf(ln, sizeof ln, "%s  %.0f g", hm, t->grams);
-        else snprintf(ln, sizeof ln, "%s", hm);
-    } else
-        k_size(f->size, ln, sizeof ln);
-    text(s, b->x + 76, b->y + 44, ln, 2, C_DIM);
-}
-
-/* name; size and the file's date on the stick */
-static void k_usb_row(const surf *s, const btn *b, int armed) {
-    const kufile *f = &ku[b->arg];
-    char nm[32], sz[24], ln[64], when[24] = "";
-    int l = (int)strlen(f->name);
-    const char *x = strrchr(f->name, '.');
-    if (x) l = (int)(x - f->name);
-    if (l > 25) snprintf(nm, sizeof nm, "%.23s..", f->name);
-    else snprintf(nm, sizeof nm, "%.*s", l, f->name);
-    rrect(s, b->x, b->y, b->w, b->h, 14, armed ? C_ERRD : C_CARD, armed ? C_ERRD : C_CARD2);
-    text(s, b->x + 16, b->y + 14, nm, 2, C_TXT);
-    k_size(f->size, sz, sizeof sz);
-    time_t te = (time_t)f->mod;
-    struct tm tm;
-    if (te > 1700000000) {
-        localtime_r(&te, &tm);
-        strftime(when, sizeof when, "%b %d %H:%M", &tm);
-    }
-    snprintf(ln, sizeof ln, "%s   %s", sz, when);
-    text(s, b->x + 16, b->y + 44, ln, 2, C_DIM);
-}
-
-/* name; result and printed time; when, filament, grams */
-static void k_hist_row(const surf *s, const btn *b, const kmenu *m, int armed) {
-    const kjob *j = &kh[b->arg];
-    const kmeta *t = &m->rmeta[b->arg];
-    char nm[32], hm[16], ln[64], when[24] = "";
-    const char *f = strrchr(j->name, '/');
-    f = f ? f + 1 : j->name;
-    int l = (int)strlen(f);
-    if (l > 6 && !strcmp(f + l - 6, ".gcode")) l -= 6;
-    if (l > 21) snprintf(nm, sizeof nm, "%.19s..", f);
-    else snprintf(nm, sizeof nm, "%.*s", l, f);
-    rrect(s, b->x, b->y, b->w, b->h, 14, armed ? C_ERRD : C_CARD, armed ? C_ERRD : C_CARD2);
-    rrect(s, b->x + 8, b->y + 8, 56, 56, 8, C_BG1, C_BG1);
-    if (m->rimg[b->arg].px) k_img(s, b->x + 8, b->y + 8, 56, &m->rimg[b->arg], C_BG1);
-    text(s, b->x + 76, b->y + 8, nm, 2, j->exists ? C_TXT : C_DIM);
-    const char *st = j->status;
-    unsigned c = C_ERR;
-    if (!strcmp(st, "completed")) { st = "DONE"; c = C_OK; }
-    else if (!strcmp(st, "cancelled")) { st = "CANCELLED"; c = C_WARN; }
-    else if (!strcmp(st, "in_progress")) { st = "PRINTING"; c = C_ACC; }
-    else st = "FAILED";
-    text(s, b->x + 76, b->y + 32, st, 2, c);
-    k_hm(j->dur, hm, sizeof hm);
-    text(s, b->x + 76 + tw(st, 2) + 16, b->y + 32, hm, 2, C_DIM);
-    time_t te = (time_t)j->end;
-    struct tm tm;
-    if (te > 1700000000) {
-        localtime_r(&te, &tm);
-        strftime(when, sizeof when, "%b %d %H:%M", &tm);
-        if (!tm.tm_gmtoff) strcat(when, " UTC");
-    }
-    double g = t->grams > 0 && t->fil > 0 ? t->grams * j->fused / t->fil : 0;
-    if (g > 0) snprintf(ln, sizeof ln, "%s   %.2f m  %.0f g", when, j->fused / 1000, g);
-    else snprintf(ln, sizeof ln, "%s   %.2f m", when, j->fused / 1000);
-    if (!j->exists) strcat(ln, "   file deleted");
-    text(s, b->x + 76, b->y + 56, ln, 1, C_DIM);
-}
-
-static void k_file_card(const surf *s, const kmenu *m) {
-    const kfile *f = &kf[m->sel];
-    const kmeta *t = &m->meta;
-    char l[8][48], sz[24];
-    int n = 0, y;
-    rrect(s, 24, 108, 432, 470, 18, C_CARD, C_CARD2);
-    if (m->img.px) {
-        rrect(s, 308, 124, 128, 128, 12, C_BG1, C_BG1);
-        k_img(s, 308, 124, 128, &m->img, C_BG1);
-        y = text_wrap(s, 44, 128, f->name, 2, C_TXT, 252) + 16;
-        if (y < 268) y = 268;
-    } else
-        y = text_wrap(s, 44, 128, f->name, 2, C_TXT, 392) + 16;
-    /* slicers fill in different subsets; show what this one gave */
-    int mn = (int)(t->est / 60 + 0.5);
-    if (mn >= 60) snprintf(l[n++], 48, "time      %d h %02d min", mn / 60, mn % 60);
-    else if (mn > 0) snprintf(l[n++], 48, "time      %d min", mn);
-    if (t->fil > 0) snprintf(l[n++], 48, "filament  %.2f m  %.0f g", t->fil / 1000, t->grams);
-    if (t->type[0]) snprintf(l[n++], 48, "material  %s", t->type);
-    if (t->ext > 0) snprintf(l[n++], 48, "nozzle    %.0f C", t->ext);
-    if (t->bed > 0) snprintf(l[n++], 48, "bed       %.0f C", t->bed);
-    if (t->layers > 0) snprintf(l[n++], 48, "layers    %.0f x %.2f mm", t->layers, t->lh);
-    if (t->height > 0) snprintf(l[n++], 48, "height    %.1f mm", t->height);
-    k_size(f->size, sz, sizeof sz);
-    snprintf(l[n++], 48, "size      %s", sz);
-    for (int i = 0; i < n; i++, y += 32) text(s, 44, y, l[i], 2, C_DIM);
-}
-
-/* name, thumbnail, time left, finish clock, layer, progress, elapsed, fan, filament */
-static void k_job(const surf *s, const kstat *k, const kmenu *m, unsigned col) {
-    const kmeta *t = &m->jmeta;
-    char nm[32], v[32], r[32];
-    const char *f = strrchr(k->file, '/');
-    f = f ? f + 1 : k->file;
-    int l = (int)strlen(f);
-    if (l > 6 && !strcmp(f + l - 6, ".gcode")) l -= 6;
-    if (l > 24) snprintf(nm, sizeof nm, "%.22s..", f);
-    else snprintf(nm, sizeof nm, "%.*s", l, f);
-    if (!strcmp(k->pstate, "paused")) {
-        /* B2: a plate stop (PLATE_NEXT_OBJECT, PLATE_PAUSE_LAYER) or a plain pause;
-         * printer.cfg's PAUSE has lifted clear and brought the bed forward */
-        const char *why = k->dmsg[0] ? k->dmsg : "Paused";
-        text_wrap(s, 44, 298, why, tw(why, 3) <= 392 ? 3 : 2, C_WARN, 392);
-        rrect(s, 44, 346, 140, 140, 12, C_BG1, C_BG1);
-        if (m->jimg.px) k_img(s, 44, 346, 140, &m->jimg, C_BG1);
-        text(s, 204, 348, nm, 1, C_DIM);
-        text_wrap(s, 204, 366, "Set up, then tap READY.", 2, C_TXT, 232);
-    } else {
-        text(s, 44, 298, nm, 2, C_TXT);
-
-        rrect(s, 44, 326, 160, 160, 12, C_BG1, C_BG1);
-        if (m->jimg.px) k_img(s, 44, 326, 160, &m->jimg, C_BG1);
-        else { textc(s, 124, 390, "NO", 2, C_DIM); textc(s, 124, 412, "PREVIEW", 2, C_DIM); }
-
-        /* klipper_estimator's time excludes PRINT_START, as print_duration does;
-         * until the first extrusion the job is still heating and homing */
-        int heat = k->fused <= 0 && !strcmp(k->pstate, "printing");
-        double left = k_left(k, t);
-        const char *lab[3] = { heat ? "HEATING, THEN" : "TIME LEFT", "DONE AT", "LAYER" };
-        if (left < 0) snprintf(v, sizeof v, "--");
-        else k_hm(left, v, sizeof v);
-        time_t now = time(NULL) + g_wall;
-        struct tm tm;
-        /* g_wall comes from Moonraker's Date header; no header, no clock */
-        if (left < 0 || now < 1700000000) snprintf(r, sizeof r, "--");
-        else {
-            now += (time_t)left;
-            localtime_r(&now, &tm);
-            strftime(r, sizeof r, left > 20 * 3600 ? "%a %H:%M" : "%H:%M", &tm);
-            if (!tm.tm_gmtoff) strcat(r, " UTC");
-        }
-        char ly[32];
-        if (k->nlayer > 0) snprintf(ly, sizeof ly, "%d / %d", k->layer, k->nlayer);
-        else if (t->layers > 0) snprintf(ly, sizeof ly, "? / %.0f", t->layers);
-        else snprintf(ly, sizeof ly, "--");
-        const char *val[3] = { v, r, ly };
-        for (int i = 0; i < 3; i++) {
-            int y = 326 + i * 56;
-            text(s, 224, y, lab[i], 2, i == 0 && heat ? C_WARN : C_DIM);
-            text(s, 224, y + 20, val[i], tw(val[i], 3) <= 212 ? 3 : 2, C_TXT);
-        }
-    }
-
-    progress(s, 514, (int)(k->prog * 100 + 0.5), col);
-    int sec = (int)k->tot;
-    snprintf(v, sizeof v, "elapsed %d:%02d:%02d", sec / 3600, sec / 60 % 60, sec % 60);
-    text(s, 24, 550, v, 2, C_DIM);
-    snprintf(v, sizeof v, "fan %.0f%%", k->pfan * 100);
-    text(s, 456 - tw(v, 2), 550, v, 2, C_DIM);
-    if (t->fil > 0) snprintf(v, sizeof v, "filament %.2f / %.2f m", k->fused / 1000, t->fil / 1000);
-    else snprintf(v, sizeof v, "filament %.2f m", k->fused / 1000);
-    text(s, 24, 574, v, 2, C_DIM);
-}
-
-/* J8: result, real time against the estimate, filament and cost */
-static void k_end(const surf *s, const kstat *k, const kmenu *m) {
-    const kmeta *t = &m->jmeta;
-    char nm[32], l[6][48], a[16], c[16];
-    int n = 0, ok = !strcmp(k->pstate, "complete"), cx = !strcmp(k->pstate, "cancelled");
-    const char *f = strrchr(k->file, '/');
-    f = f ? f + 1 : k->file;
-    int ln = (int)strlen(f);
-    if (ln > 6 && !strcmp(f + ln - 6, ".gcode")) ln -= 6;
-    rrect(s, 24, 282, 432, 306, 18, C_CARD, C_CARD2);
-    rrect(s, 44, 298, 112, 112, 12, C_BG1, C_BG1);
-    if (m->jimg.px) k_img(s, 44, 298, 112, &m->jimg, C_BG1);
-    text(s, 172, 302, ok ? "DONE" : cx ? "CANCELLED" : "FAILED", 3, ok ? C_OK : cx ? C_WARN : C_ERR);
-    if (ln > 17) snprintf(nm, sizeof nm, "%.15s..", f);
-    else snprintf(nm, sizeof nm, "%.*s", ln, f);
-    text(s, 172, 342, nm, 2, C_TXT);
-    if (!ok && !cx) {
-        text_wrap(s, 44, 426, k->pmsg[0] ? k->pmsg : "Klipper stopped the job.", 2, C_TXT, 392);
-        return;
-    }
-    if (cx) snprintf(l[n++], 48, "stopped at %.0f %%", k->prog * 100);
-    k_hm(k->dur, a, sizeof a);
-    snprintf(l[n++], 48, "printed  %s", a);
-    if (ok && t->est > 0) {
-        k_hm(t->est, a, sizeof a);
-        int d = (int)((k->dur - t->est) * 100 / t->est + (k->dur > t->est ? 0.5 : -0.5));
-        snprintf(l[n++], 48, "estimate %s %+d %%", a, d);
-    }
-    k_hm(k->tot, a, sizeof a);
-    snprintf(l[n++], 48, "with heat-up %s", a);
-    /* grams: the slicer's figure scaled to what was used, else from density */
-    double dens = m->rate[1] > 0 ? m->rate[1] : 1.24;
-    double g = t->grams > 0 && t->fil > 0 ? t->grams * k->fused / t->fil
-             : k->fused * 2.405e-3 * dens;
-    snprintf(l[n++], 48, "filament %.2f m %.0f g", k->fused / 1000, g);
-    if (m->rate[0] > 0) {
-        double mat = g / 1000 * m->rate[0];
-        snprintf(a, sizeof a, "%.2f", mat + k->tot / 3600 * m->rate[2]);
-        snprintf(c, sizeof c, "%.2f", mat);
-        snprintf(l[n++], 48, m->rate[2] > 0 ? "cost $%s (fil $%s)" : "cost $%s", a, c);
-    }
-    for (int i = 0; i < n; i++) text(s, 44, 426 + i * 28, l[i], 2, i == 0 && cx ? C_WARN : C_DIM);
-}
-
-/* a gamepad key: A and B round, the D-pad's arms with an arrow */
-static void k_padbtn(const surf *s, const btn *b) {
-    int d = b->token[3], cx = b->x + b->w / 2, cy = b->y + b->h / 2;
-    if (d == 'A' || d == 'B') {
-        rrect(s, b->x, b->y, b->w, b->h, b->w / 2, b->top, b->bot);
-        textc(s, cx, cy - 16, b->label, 4, 0xffffffu);
-        return;
-    }
-    rrect(s, b->x, b->y, b->w, b->h, 10, b->top, b->bot);
-    for (int i = 0; i < 18; i++)          /* apex first */
-        switch (d) {
-        case 'U': fill(s, cx - i, cy - 9 + i, 2 * i + 1, 1, 0xffffffu); break;
-        case 'D': fill(s, cx - i, cy + 9 - i, 2 * i + 1, 1, 0xffffffu); break;
-        case 'L': fill(s, cx - 9 + i, cy - i, 1, 2 * i + 1, 0xffffffu); break;
-        case 'R': fill(s, cx + 9 - i, cy - i, 1, 2 * i + 1, 0xffffffu); break;
-        }
-}
-
-static void k_paint(const surf *s, const kstat *k, const kmenu *m, const btn *b,
-                    int nb, int armed, const char *eth, const char *wifi,
+static void k_paint(const surf *s, const kstat *k, const kmenu *m, const char *eth, const char *wifi,
                     const char *note, const char *hostport) {
     static const char *const title[] = {
-        "ADVENTURER 4", "PRINT", "PRINT", "PREHEAT", "TOOLS", "ABOUT", "FILAMENT", "MOVE", "TUNE", "OBJECTS",
-        "HISTORY", "USB STICK", "SPEED MODE", "UNLOCK", "BRACE YOURSELF" };
-    const char *lab, *foot = "";
-    char pg[32];
-    unsigned col = k_chip(k, &lab);
-    background(s);
-    header(s, title[m->scr], lab, col);
+        [K_HOME] = "Adventurer 4", [K_FILES] = "Print", [K_FILE] = "Print file", [K_HEAT] = "Heat & filament",
+        [K_TOOLS] = "Tools", [K_ABOUT] = "System", [K_MOVE] = "Move", [K_TUNE] = "Tune", [K_OBJS] = "Objects",
+        [K_HIST] = "Print", [K_USB] = "Print", [K_MODE] = "Speed mode", [K_PAD] = "Unlock",
+        [K_BRACE] = "Brace yourself", [K_FANS] = "Fans", [K_HJOB] = "Past job" };
+    const char *lab, *t = title[m->scr];
+    unsigned pc = k_pill(k, &lab);
+    int ok = k->online && !strcmp(k->kstate, "ready"), busy = ok && k_busy(k);
+    int paused = busy && !strcmp(k->pstate, "paused");
+    int root = m->scr == K_HOME || m->scr == K_FILES || m->scr == K_HIST || m->scr == K_USB ||
+               m->scr == K_HEAT || m->scr == K_TOOLS;
+    if (m->scr == K_HOME && busy) t = paused ? (k->dmsg[0] ? "Plate stop" : "Paused") : "Printing";
+    g_nb = 0;
+    fill(s, 0, 0, s->w, s->h, U_SCR);
+    ui_header(s, t, !root, lab, pc);
     switch (m->scr) {
     case K_HOME:
-    case K_HEAT:
-    case K_TOOLS:
-    case K_FIL:
-        k_temp(s, 24, 118, "NOZZLE", k->et, k->ett);
-        k_temp(s, 248, 118, "BED", k->bt, k->btt);
-        if (m->scr == K_FIL && k_filrun(k)) { k_filbar(s, k); break; }
-        if (m->scr == K_FIL && k_busy(k)) {
-            char jt[16];
-            snprintf(jt, sizeof jt, "%.0f C", k->ett);
-            rrect(s, 248, 436, 208, 130, 18, C_CARD, C_CARD2);
-            textc(s, 352, 470, "JOB TEMP", 2, C_DIM);
-            textc(s, 352, 498, jt, 3, C_TXT);
-        }
-        if (m->scr == K_HOME && k_ended(k) && !m->ack) { k_end(s, k, m); break; }
-        if (m->scr != K_HOME || k_idle(k)) break;
-        rrect(s, 24, 282, 432, k_busy(k) && k->online && !strcmp(k->kstate, "ready") ? 220 : 306,
-              18, C_CARD, C_CARD2);
-        if (!k->online) {
-            text_wrap(s, 44, 302, "Klipper host not answering. Waiting for it.",
-                      2, C_TXT, 392);
-        } else if (strcmp(k->kstate, "ready")) {
-            text_wrap(s, 44, 302, k->kmsg[0] ? k->kmsg : k->kstate, 2, C_TXT, 392);
-        } else
-            k_job(s, k, m, col);
+        if (!ok) k_notready(s, k);
+        else if (paused) k_paused(s, k);
+        else if (busy) k_printing(s, k, m);
+        else k_homeidle(s, k, m);
         break;
-    case K_FILES:
-        if (m->nfiles <= 0) {
-            rrect(s, 24, 108, 432, 160, 18, C_CARD, C_CARD2);
-            text_wrap(s, 44, 128, m->nfiles < 0 ? "Could not read the file list."
-                      : "No files yet. Send one from Elegoo Slicer or Mainsail.",
-                      2, C_DIM, 392);
-        }
-        if (nkf > K_ROWS) {
-            snprintf(pg, sizeof pg, "page %d / %d", m->page + 1, (nkf + K_ROWS - 1) / K_ROWS);
-            foot = pg;
-        }
-        break;
-    case K_FILE:
-        k_file_card(s, m);
-        break;
-    case K_USB:
-        if (m->nusb <= 0) {
-            rrect(s, 24, 108, 432, 160, 18, C_CARD, C_CARD2);
-            text_wrap(s, 44, 128, m->nusb == -1 ? "No stick found. Put it in and tap PRINT again."
-                      : m->nusb == -2 ? "Could not read the stick. It has to be FAT32."
-                      : "No G-code files at the top of the stick.",
-                      2, C_DIM, 392);
-        } else if (nku > K_ROWS) {
-            snprintf(pg, sizeof pg, "page %d / %d", m->page + 1, (nku + K_ROWS - 1) / K_ROWS);
-            foot = pg;
-        } else
-            foot = "tap a file twice to print";
-        break;
-    case K_HIST:
-        if (m->nhist <= 0) {
-            rrect(s, 24, 108, 432, 160, 18, C_CARD, C_CARD2);
-            text_wrap(s, 44, 128, m->nhist < 0 ? "Could not read the job history." : "No jobs yet.",
-                      2, C_DIM, 392);
-        } else
-            foot = "tap a job twice to reprint";
-        break;
-    case K_MOVE: {
-        char ps[64];
-        snprintf(ps, sizeof ps, "X %.1f  Y %.1f  Z %.1f", k->pos[0], k->pos[1], k->pos[2]);
-        text(s, 24, 112, ps, 2, C_TXT);
-        if (strlen(k->homed) == 3) text(s, 24, 140, "homed", 2, C_OK);
-        else text(s, 24, 140, "not homed: tap HOME first", 2, C_WARN);
-        break;
+    case K_FILES: case K_HIST: case K_USB: k_print(s, m); break;
+    case K_FILE: k_filescr(s, k, m); break;
+    case K_HJOB: k_hjobscr(s, k, m); break;
+    case K_HEAT: k_heat(s, k); break;
+    case K_TOOLS: k_tools(s, k); break;
+    case K_FANS: k_fans(s, k); break;
+    case K_MOVE: k_move(s, k, m); break;
+    case K_TUNE: k_tune(s, k); break;
+    case K_OBJS: k_objsscr(s, m); break;
+    case K_MODE: k_modescr(s, k); break;
+    case K_PAD: k_padscr(s, m); break;
+    case K_BRACE: k_bracescr(s, k); break;
+    case K_ABOUT: k_about(s, k, eth, wifi, hostport); break;
     }
-    case K_TUNE:
-        /* a value off its default is drawn amber */
-        for (int i = 0; i < K_NTUNE; i++) {
-            static const double def[K_NTUNE] = { 100, 100, 0, -1, -1 };
-            double v = k_tval(k, i);
-            char t[24];
-            int y = 108 + i * 96;
-            if (i == 2) snprintf(t, sizeof t, "%+.2f mm", v);
-            else if (i == 3) snprintf(t, sizeof t, v > 0 ? "%.0f C" : "off", v);
-            else snprintf(t, sizeof t, "%.0f%%", v);
-            rrect(s, 142, y, 196, 88, 14, C_CARD, C_CARD2);
-            textc(s, 240, y + 12, k_tlab[i], 2, C_DIM);
-            double dv = v - def[i];
-            textc(s, 240, y + 40, t, 3, def[i] >= -0.5 && (dv > 0.001 || dv < -0.001) ? C_WARN : C_TXT);
-        }
-        if (!strcmp(k->pstate, "paused")) foot = "paused";
-        else if (k->smode[0]) { snprintf(pg, sizeof pg, "speed mode %s", k->smode); foot = pg; }
-        break;
-    case K_MODE: {
-        int i = 0;
-        while (i < 4 && strcmp(k->smode, k_mname[i])) i++;
-        if (!k->smode[0]) i = 0;
-        const int *v = k->mode[i];
-        char ln[4][24];
-        rrect(s, 24, 108, 432, 96, 18, i == 4 ? C_ERRD : C_CARD, i == 4 ? 0x6d2530u : C_CARD2);
-        text(s, 44, 122, "NOW", 2, i == 4 ? C_TXT : C_DIM);
-        text(s, 44, 150, i < 5 ? k_mname[i] : k->smode, 3, i == 4 ? 0xffffffu : C_OK);
-        snprintf(ln[0], 24, "%d mm/s", v[0]);
-        snprintf(ln[1], 24, "accel %d", v[1]);
-        if (v[2] > 0) snprintf(ln[2], 24, "nozzle %d C", v[2]);
-        else snprintf(ln[2], 24, "slicer temp");
-        snprintf(ln[3], 24, "flow %d %%", v[3]);
-        if (i < 5 && v[0] > 0)
-            for (int j = 0; j < 4; j++) text(s, 248, 116 + j * 21, ln[j], 2, C_TXT);
-        foot = k_busy(k) ? "a change applies now" : "applies to the next print";
-        break;
-    }
-    case K_PAD: {
-        int n = (int)strlen(m->pad);
-        textc(s, 240, 116, "ENTER THE CODE", 2, C_DIM);
-        for (int i = 0; i < 10; i++)
-            rrect(s, 46 + i * 40, 148, 28, 28, 14, i < n ? C_ERR : C_CARD2, i < n ? C_ERRD : C_CARD2);
-        if (m->padbad) textc(s, 240, 196, "WRONG. START OVER.", 2, C_ERR);
-        rrect(s, 24, 252, 432, 296, 48, C_CARD, C_CARD2);
-        rrect(s, 104, 364, 72, 72, 0, K_G2, K_G2);
-        break;
-    }
-    case K_BRACE: {
-        const int *v = k->mode[4];
-        char ln[2][40];
-        snprintf(ln[0], sizeof ln[0], "%d mm/s  accel %d", v[0], v[1]);
-        snprintf(ln[1], sizeof ln[1], "nozzle %d C  flow %d %%", v[2], v[3]);
-        rrect(s, 24, 108, 432, 476, 18, C_ERRD, 0x6d2530u);
-        textc(s, 240, 136, "BRACE YOURSELF", 3, 0xffffffu);
-        textc(s, 240, 192, ln[0], 2, 0xffffffu);
-        textc(s, 240, 220, ln[1], 2, 0xffffffu);
-        int y = text_wrap(s, 48, 276, "The machine's limit, for fast prints that need neither "
-                          "looks nor strength.", 2, 0xffffffu, 384) + 22;
-        y = text_wrap(s, 48, y, "Proceed with extreme caution and stay at the printer.",
-                      2, 0xffffffu, 384) + 22;
-        text_wrap(s, 48, y, "It locks again when the job ends: the next one runs MCQUEEN.",
-                  2, 0xffd0d4u, 384);
-        break;
-    }
-    case K_OBJS: {
-        rrect(s, K_BX - 4, K_BY - 4, 272, 248, 10, C_BG1, C_BG1);
-        if (m->nobj <= 0) {
-            textc_wrap(s, 240, 180, m->nobj < 0 ? "Could not read the objects."
-                       : "No object labels in this file. Turn on label objects in the slicer.",
-                       2, C_DIM, 240);
-            break;
-        }
-        for (int i = 0; i < m->nobj; i++) {
-            const kobj *o = &ko[i];
-            unsigned c = o->excl ? C_CARD2 : o->cur ? C_ACC : C_TXT;
-            for (int j = 0; j < o->np; j++) {
-                int a = (j + 1) % o->np;
-                k_line(s, K_BMX(o->p[j][0]), K_BMY(o->p[j][1]), K_BMX(o->p[a][0]), K_BMY(o->p[a][1]), c);
-            }
-            char nb[4];
-            snprintf(nb, sizeof nb, "%d", i + 1);
-            textc(s, K_BMX(o->cx), K_BMY(o->cy) - 8, nb, 2, o->excl ? C_DIM : c);
-        }
-        break;
-    }
-    case K_ABOUT: {
-        const char *kv[] = {
-            "PRINTER ETH0", eth, "PRINTER WIFI", wifi, "MOONRAKER", hostport,
-            "KLIPPER", k->ver[0] ? k->ver : "?",
-            "SOURCE", "github.com/Mcsketch/ad4-klipper" };
-        int y = 118;
-        for (int i = 0; i < 10; i += 2) {
-            text(s, 24, y, kv[i], 2, C_DIM);
-            y = text_wrap(s, 40, y + 26, kv[i + 1], 2, C_TXT, 416) + 18;
-        }
-        break;
-    }
-    }
-
-    for (int i = 0; i < nb; i++) {
-        if (!strcmp(b[i].token, "file")) { k_file_row(s, &b[i], m); continue; }
-        if (!strcmp(b[i].token, "ufile")) { k_usb_row(s, &b[i], i == armed); continue; }
-        if (!strncmp(b[i].token, "pad", 3) && b[i].token[3]) { k_padbtn(s, &b[i]); continue; }
-        if (!strcmp(b[i].token, "hjob") || !strcmp(b[i].token, "hgone")) {
-            k_hist_row(s, &b[i], m, i == armed);
-            continue;
-        }
-        btn t = b[i];
-        if (i == armed) { t.top = C_ERR; t.bot = C_ERRD; }
-        draw_btn(s, &t);
-    }
-    if (armed >= 0) textc(s, s->w / 2, 724, "tap again to confirm", 2, C_ERR);
-    else if (note[0]) textc(s, s->w / 2, 724, note, 2, C_WARN);
-    else if (foot[0]) textc(s, s->w / 2, 724, foot, 2, C_DIM);
-    /* the printer's own addresses, so a new install can be found from the panel */
-    char f[64];
-    snprintf(f, sizeof f, "eth0 %s", eth);
-    textc(s, s->w / 2, 754, f, 2, C_DIM);
-    snprintf(f, sizeof f, "wifi %s", wifi);
-    textc(s, s->w / 2, 778, f, 2, C_DIM);
+    int tab = k_tab(m->scr == K_MODE || m->scr == K_PAD || m->scr == K_BRACE ? m->mback : m->scr);
+    ui_tabs(s, tab, busy ? (paused ? U_WARN : U_ACC) : 0, !ok);
+    if (note[0]) ui_toast(s, note);
 }
+
+/* home's last job, from the history: refreshed while home is idle */
+static void k_last(const char *host, int port, kmenu *m) {
+    static kmeta hm[K_ROWS];
+    int n = k_hist(host, port, hm);
+    if (n <= 0) { m->nlast = 0; return; }
+    int same = m->nlast && !strcmp(m->last.name, kh[0].name) && m->limg.px;
+    m->last = kh[0];
+    m->lmeta = hm[0];
+    m->nlast = 1;
+    if (!same) k_thumb(host, port, kh[0].name, &m->lmeta, &m->limg);
+}
+
 
 static void if_ip(const char *ifn, char *out, int n) {
     struct ifreq r;
@@ -2734,14 +3448,23 @@ static void k_rates(const char *host, int port, kmenu *m) {
 
 static void k_nav(const char *host, int port, kmenu *m, const btn *b) {
     const char *t = b->token;
-    if (!strcmp(t, "files")) { m->scr = K_FILES; m->page = 0; m->nfiles = k_files(host, port); k_rows(host, port, m); }
-    else if (!strcmp(t, "ack")) m->ack = 1;
+    if (!strcmp(t, "home")) m->scr = K_HOME;
+    else if (!strcmp(t, "files")) { m->scr = K_FILES; m->page = 0; m->nfiles = k_files(host, port); k_rows(host, port, m); }
+    else if (!strcmp(t, "ack")) { m->ack = 1; m->lt = 0; }
     else if (!strcmp(t, "usb")) { m->scr = K_USB; m->page = 0; m->nusb = k_usb(); }
     else if (!strcmp(t, "hist")) {
         m->scr = K_HIST;
         m->nhist = k_hist(host, port, m->rmeta);
         for (int i = 0; i < K_ROWS; i++)
             k_thumb(host, port, i < m->nhist ? kh[i].name : "", &m->rmeta[i], &m->rimg[i]);
+    }
+    else if (!strcmp(t, "hview") || !strcmp(t, "hlast")) {
+        m->hsrc = t[1] == 'l';
+        if (!m->hsrc && b->arg >= m->nhist) return;
+        if (m->hsrc && !m->nlast) return;
+        m->hjob = b->arg;
+        m->hback = m->scr;
+        m->scr = K_HJOB;
     }
     else if (!strcmp(t, "file")) {
         m->sel = b->arg;
@@ -2752,7 +3475,7 @@ static void k_nav(const char *host, int port, kmenu *m, const btn *b) {
     else if (!strcmp(t, "heat")) m->scr = K_HEAT;
     else if (!strcmp(t, "tools")) m->scr = K_TOOLS;
     else if (!strcmp(t, "about")) m->scr = K_ABOUT;
-    else if (!strcmp(t, "fil")) m->scr = K_FIL;
+    else if (!strcmp(t, "fans")) m->scr = K_FANS;
     else if (!strcmp(t, "move")) m->scr = K_MOVE;
     else if (!strcmp(t, "tune")) m->scr = K_TUNE;
     else if (!strcmp(t, "mode")) { m->mback = m->scr; m->scr = K_MODE; }
@@ -2767,16 +3490,13 @@ static void k_nav(const char *host, int port, kmenu *m, const btn *b) {
         if (!strcmp(m->pad, code)) { m->scr = K_BRACE; m->pad[0] = 0; }
     }
     else if (!strcmp(t, "objs")) { m->scr = K_OBJS; m->nobj = k_objs(host, port); }
-    else if (!strcmp(t, "ftemp")) m->ft = (m->ft + 1) % 4;
-    else if (!strcmp(t, "step")) m->step = (m->step + 1) % 3;
+    else if (!strcmp(t, "step")) m->step = b->arg;
     else if (!strcmp(t, "prev")) { m->page--; if (m->scr == K_FILES) k_rows(host, port, m); }
     else if (!strcmp(t, "next")) { m->page++; if (m->scr == K_FILES) k_rows(host, port, m); }
-    else if (!strcmp(t, "back") && m->scr == K_USB) {
-        m->scr = K_FILES; m->page = 0; m->nfiles = k_files(host, port); k_rows(host, port, m);
-    }
     else if (!strcmp(t, "back"))
         m->scr = m->scr == K_FILE ? K_FILES
-               : m->scr == K_ABOUT || m->scr == K_MOVE ? K_TOOLS
+               : m->scr == K_HJOB ? m->hback
+               : m->scr == K_ABOUT || m->scr == K_MOVE || m->scr == K_FANS ? K_TOOLS
                : m->scr == K_OBJS ? K_TUNE
                : m->scr == K_PAD || m->scr == K_BRACE ? K_MODE
                : m->scr == K_MODE ? m->mback : K_HOME;
@@ -2788,16 +3508,18 @@ typedef struct { surf *s, *fb; size_t len; const char *name; } kcopy;
 static void k_copyprog(void *v, double done, double size) {
     kcopy *c = v;
     char ln[64], a[24], b[24];
-    background(c->s);
-    header(c->s, "USB STICK", "COPYING", C_ACC);
-    rrect(c->s, 24, 108, 432, 140, 18, C_CARD, C_CARD2);
-    int y = text_wrap(c->s, 44, 128, c->name, 2, C_TXT, 392) + 16;
+    fill(c->s, 0, 0, c->s->w, c->s->h, U_SCR);
+    g_nb = 0;
+    ui_header(c->s, "Copying from USB", 0, "COPYING", U_ACC);
+    rr(c->s, 16, 80, 448, 200, 14, U_SURF);
+    icon(c->s, I_USB, 32, 96, 36, U_ACC);
+    int n = u_wrap(c->s, 32, 170, UF(2, 24, 0), c->name, U_FG, 416, 26, 2, 0);
     k_size(done, a, sizeof a);
     k_size(size, b, sizeof b);
     snprintf(ln, sizeof ln, "%s of %s", a, b);
-    text(c->s, 44, y, ln, 2, C_DIM);
-    progress(c->s, 272, size > 0 ? (int)(done * 100 / size) : 0, C_ACC);
-    textc(c->s, c->s->w / 2, 724, "leave the stick in", 2, C_DIM);
+    u_text(c->s, 32, 170 + n * 26 + 8, UF(0, 17, 0), ln, U_MUT, 0);
+    ui_bar(c->s, 32, 250, 416, size > 0 ? done / size : 0, U_ACC);
+    u_text(c->s, 240, 340, UF(0, 17, 0), "Leave the stick in.", U_MUT, 1);
     if (c->fb) memcpy(c->fb->mem, c->s->mem, c->len);
 }
 
@@ -2840,10 +3562,14 @@ static int cmd_klipper(const char *dump, const char *hostport, const char *scree
         btn nav = { 0 };
         nav.token = !strcmp(screen, "file") ? "files" : screen;
         k_nav(host, port, &m, &nav);
-        if (!strcmp(screen, "file") && nkf > 0) { nav.token = "file"; k_nav(host, port, &m, &nav); }
+        if (!strcmp(screen, "hjob")) { nav.token = "hist"; k_nav(host, port, &m, &nav); nav.token = "hview"; }
+        else if (!strcmp(screen, "file") && nkf > 0) nav.token = "file";
+        else nav.token = NULL;
+        if (nav.token) k_nav(host, port, &m, &nav);
         if (!strcmp(screen, "brace")) m.scr = K_BRACE;
     }
-    btn b[16];
+    m.step = 2;
+    btn *b = g_b;
     int nb = 0, armed = -1, pressed = 0, was = 0;
     long next = 0, armed_t = 0, note_t = 0, rst_t = -60000, touch_t = now_ms();
     char eth[32] = "", wifi[32] = "", note[48] = "";
@@ -2873,32 +3599,37 @@ static int cmd_klipper(const char *dump, const char *hostport, const char *scree
                 m.jt = t;
             }
             /* a job just ended: show its card, and the riff when it finished */
+            int started = k_busy(&k) && !was;
             if (k_busy(&k)) m.ack = 0;
             else if (was && k_ended(&k)) {
                 k_rates(host, port, &m);
+                m.lt = 0;
 #ifndef AD4_DUMP
                 if (!strcmp(k.pstate, "complete") && fork() == 0) _exit(buzz_cue(AD4_RIFF) ? 1 : 0);
                 if (!strcmp(k.pstate, "error") && fork() == 0) _exit(buzz_cue(AD4_FAIL) ? 1 : 0);
 #endif
             }
             was = k_busy(&k);
-            /* a job started elsewhere, a fault, or two idle minutes: back home;
-             * TUNE and OBJECTS are the screens that live during a job, SPEED
-             * MODE and its gamepad live either way */
+            /* a job starting, a fault, or two idle minutes: back home; TUNE
+             * and OBJECTS live only during a job, MOVE only outside one */
             int ok = k.online && !strcmp(k.kstate, "ready");
-            int stay = m.scr == K_TUNE || m.scr == K_OBJS ? k_busy(&k) && ok
-                     : m.scr == K_FIL && k_busy(&k) ? ok && !strcmp(k.pstate, "paused")
-                     : m.scr == K_MODE || m.scr == K_PAD || m.scr == K_BRACE ? ok
-                     : k_idle(&k);
+            int stay = !ok ? 0 : m.scr == K_TUNE || m.scr == K_OBJS ? k_busy(&k) : m.scr == K_MOVE ? !k_busy(&k) : 1;
+            if (started && !dump) stay = 0;
             if (m.scr == K_OBJS && stay) m.nobj = k_objs(host, port);
             if (m.scr != K_HOME && (!stay || (!dump && t - touch_t > 120000))) {
                 m.scr = K_HOME;
                 armed = -1;
             }
             if (m.scr != K_USB) k_usbumount();
-            nb = k_buttons(&k, &m, b);
+            /* home's last job: once a minute while idle */
+            if (m.scr == K_HOME && k_idle(&k) && !k_ended(&k) && (!m.lt || t - m.lt > 60000)) {
+                k_last(host, port, &m);
+                m.lt = t ? t : 1;
+            }
+            g_armed = armed;
+            k_paint(&s, &k, &m, eth, wifi, note, hp);
+            nb = g_nb;
             if (armed >= nb) armed = -1;
-            k_paint(&s, &k, &m, b, nb, armed, eth, wifi, note, hp);
 #ifdef AD4_DUMP
             if (dump) { dump_ppm(&s, dump); return 0; }
 #endif
@@ -2917,6 +3648,7 @@ static int cmd_klipper(const char *dump, const char *hostport, const char *scree
             if (pressed) continue;
             pressed = 1;
             touch_t = now_ms();
+            note[0] = 0;
             int hit = -1;
             for (int i = 0; i < nb; i++)
                 if (x >= b[i].x && x < b[i].x + b[i].w &&
@@ -2960,8 +3692,8 @@ static int cmd_klipper(const char *dump, const char *hostport, const char *scree
                 continue;
             }
             if (!strcmp(tok, "print") || !strcmp(tok, "again") || !strcmp(tok, "hjob")) {
-                urlenc(tok[0] == 'p' ? kf[m.sel].name : tok[0] == 'h' ? kh[b[hit].arg].name : k.file,
-                       en, sizeof en);
+                urlenc(tok[0] == 'p' ? kf[m.sel].name : tok[0] != 'h' ? k.file
+                       : m.hsrc ? m.last.name : kh[b[hit].arg].name, en, sizeof en);
                 snprintf(path, sizeof path, "/printer/print/start?filename=%s", en);
                 tok = path;
             } else if (tok[0] != '/') {
@@ -3002,8 +3734,8 @@ static void usage(void) {
         "       ad4-screen confirm TITLE BODY [GO_LABEL] [SECS]\n"
         "       ad4-screen touch [SECS]\n"
         "       ad4-screen calib [SECS]\n"
-        "       ad4-screen klipper [HOST[:PORT]] [--dump FILE.ppm [files|file|hist|usb|heat|tools|about|fil|move|\n"
-        "                tune|mode|pad|brace]]\n"
+        "       ad4-screen klipper [HOST[:PORT]] [--dump FILE.ppm [files|file|hist|hjob|usb|heat|\n"
+        "                tools|about|fans|move|tune|objs|mode|pad|brace]]\n"
         "env: AD4_MCU AD4_IP AD4_PORT AD4_INSTALLED AD4_STICK AD4_ROT AD4_CAL\n");
 }
 

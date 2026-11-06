@@ -1374,6 +1374,7 @@ typedef struct {
     double speed, flow, zoff;         /* gcode_move: M220, M221, SET_GCODE_OFFSET */
     int layer, nlayer;                /* SET_PRINT_STATS_INFO, 0 = not sent */
     int fdir;                         /* _FIL_STATE: 1 load, -1 unload, 0 none */
+    int swap, fed;                    /* PAUSE: filament change 1, ran out 2; new filament loaded */
     double fe0, flen, fe;             /* its start and length, live extruder position */
     char smode[12];                   /* SPEED_MODE's saved choice, "" = never set */
     int mode[5][4];                   /* its modes: mm/s, accel, nozzle C, flow % */
@@ -1401,7 +1402,7 @@ static void k_poll(const char *host, int port, kstat *k) {
                  "&extruder=temperature,target&heater_bed=temperature,target"
                  "&display_status=progress,message&fan=speed&fan_generic%20chamber_fan=speed&output_pin%20light=value"
                  "&toolhead=position,homed_axes&gcode_move=speed_factor,extrude_factor,homing_origin"
-                 "&motion_report=live_position&gcode_macro%20_FIL_STATE=dir,e0,len"
+                 "&motion_report=live_position&gcode_macro%20_FIL_STATE=dir,e0,len&gcode_macro%20PAUSE=swap,fed"
                  "&save_variables=variables&gcode_macro%20SPEED_MODE=modes",
                  buf, sizeof buf) != 200)
         return;
@@ -1453,6 +1454,10 @@ static void k_poll(const char *host, int port, kstat *k) {
         k->fdir = (int)jnum(b, e, "dir");
         k->fe0 = jnum(b, e, "e0");
         k->flen = jnum(b, e, "len");
+    }
+    if ((b = jobj(buf, "gcode_macro PAUSE", &e))) {
+        k->swap = (int)jnum(b, e, "swap");
+        k->fed = (int)jnum(b, e, "fed");
     }
     if ((b = jobj(buf, "motion_report", &e))) {
         const char *v = jval(b, e, "live_position");
@@ -2869,20 +2874,43 @@ static void k_printing(const surf *s, const kstat *k, const kmenu *m) {
     ui_btn(s, 323, 604, 141, 92, "Cancel", "/printer/print/cancel", V_STOP, I_X, B_STACK | B_DNG, 0);
 }
 
-/* B2: a plate stop (PLATE_NEXT_OBJECT, PLATE_PAUSE_LAYER) or a plain pause;
- * printer.cfg's PAUSE has lifted clear and brought the bed forward */
-static void k_paused(const surf *s, const kstat *k) {
-    const char *why = k->dmsg[0] ? k->dmsg : "Paused";
-    const char *nt = k->dmsg[0] ? "Set up, then tap Ready." : "The head is parked and the bed forward. Tap Resume to carry on.";
+/* the card at the top of a stop, then the temperatures */
+static void k_stopcard(const surf *s, const kstat *k, int ic, const char *lab, const char *why, const char *nt) {
     ufont W = UF(1, 30, 0), N = UF(0, 16, 0);
     int n1 = u_wrap(NULL, 32, 0, W, why, U_FG, 416, 34, 2, 0), n2 = u_wrap(NULL, 32, 0, N, nt, U_MUT, 416, 21, 3, 0);
     int h = 16 + 18 + 16 + n1 * 34 + 6 + n2 * 21 + 14;
     rr(s, 16, 80, 448, h, 14, U_SURF);
-    icon(s, I_PAUSE, 32, 96, 18, U_WARN);
-    ui_lab(s, 56, 111, k->dmsg[0] ? "WAITING FOR YOU" : "PAUSED", U_WARN, 0);
+    icon(s, ic, 32, 96, 18, U_WARN);
+    ui_lab(s, 56, 111, lab, U_WARN, 0);
     u_wrap(s, 32, 154, W, why, U_FG, 416, 34, 2, 0);
     u_wrap(s, 32, 154 + (n1 - 1) * 34 + 30, N, nt, U_MUT, 416, 21, 3, 0);
     ui_tmini(s, 80 + h + 12, k);
+}
+
+/* M1, Q6: FILAMENT_SWAP stopped the job and unloads. Resume appears once the
+ * new filament is loaded. */
+static void k_swap(const surf *s, const kstat *k) {
+    int run = k_filrun(k);
+    k_stopcard(s, k, I_SPOOL, k->swap == 2 ? "OUT OF FILAMENT" : "FILAMENT CHANGE", k->dmsg,
+               run ? "Wait for the filament to stop moving."
+                   : k->fed ? "Purge until the new colour runs clean, then tap Resume."
+                            : "Pull the old filament out, feed the new one into the gears, then tap Load.");
+    if (run) { k_filbar(s, k, 526); return; }
+    if (k->fed) ui_btn(s, 16, 528, 448, 92, "Resume", "/printer/print/resume", V_GO, I_PLAY, 0, 0);
+    else ui_btn(s, 16, 528, 448, 92, "Load", K_GS "LOAD_FILAMENT", V_GO, I_SPOOL, 0, 0);
+    ui_btn(s, 16, 632, 103, 64, "Unload", K_GS "UNLOAD_FILAMENT", V_NORM, I_SPOOL, B_STACK, 0);
+    ui_btn(s, 131, 632, 103, 64, "Purge 20", K_GS "LOAD_FILAMENT%20LENGTH%3D20", V_NORM, I_HEAT,
+           B_STACK | (k->fed ? 0 : B_OFF), 0);
+    ui_btn(s, 246, 632, 103, 64, "Tune", "tune", V_NORM, I_TUNE, B_STACK, 0);
+    ui_btn(s, 361, 632, 103, 64, "Cancel", "/printer/print/cancel", V_STOP, I_X, B_STACK | B_DNG, 0);
+}
+
+/* B2: a plate stop (PLATE_NEXT_OBJECT, PLATE_PAUSE_LAYER) or a plain pause;
+ * printer.cfg's PAUSE has lifted clear and brought the bed forward */
+static void k_paused(const surf *s, const kstat *k) {
+    if (k->swap) { k_swap(s, k); return; }
+    k_stopcard(s, k, I_PAUSE, k->dmsg[0] ? "WAITING FOR YOU" : "PAUSED", k->dmsg[0] ? k->dmsg : "Paused",
+               k->dmsg[0] ? "Set up, then tap Ready." : "The head is parked and the bed forward. Tap Resume to carry on.");
     ui_btn(s, 16, 528, 448, 92, k->dmsg[0] ? "Ready" : "Resume", "/printer/print/resume", V_GO, I_PLAY, 0, 0);
     /* REDO = printer.cfg's PLATE_REDO (B4) */
     ui_btn(s, 16, 632, 103, 64, "Filament", "heat", V_NORM, I_SPOOL, B_STACK, 0);
@@ -3366,7 +3394,7 @@ static void k_paint(const surf *s, const kstat *k, const kmenu *m, const char *e
     int paused = busy && !strcmp(k->pstate, "paused");
     int root = m->scr == K_HOME || m->scr == K_FILES || m->scr == K_HIST || m->scr == K_USB ||
                m->scr == K_HEAT || m->scr == K_TOOLS;
-    if (m->scr == K_HOME && busy) t = paused ? (k->dmsg[0] ? "Plate stop" : "Paused") : "Printing";
+    if (m->scr == K_HOME && busy) t = paused ? (k->swap ? "Filament" : k->dmsg[0] ? "Plate stop" : "Paused") : "Printing";
     g_nb = 0;
     fill(s, 0, 0, s->w, s->h, U_SCR);
     ui_header(s, t, !root, lab, pc);
@@ -3610,6 +3638,11 @@ static int cmd_klipper(const char *dump, const char *hostport, const char *scree
 #endif
             }
             was = k_busy(&k);
+#ifndef AD4_DUMP
+            static int swapped;
+            if (k.swap && !swapped && fork() == 0) _exit(buzz_cue(AD4_FAIL) ? 1 : 0);
+            swapped = k.swap;
+#endif
             /* a job starting, a fault, or two idle minutes: back home; TUNE
              * and OBJECTS live only during a job, MOVE only outside one */
             int ok = k.online && !strcmp(k.kstate, "ready");

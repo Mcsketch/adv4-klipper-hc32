@@ -1375,6 +1375,7 @@ typedef struct {
     int layer, nlayer;                /* SET_PRINT_STATS_INFO, 0 = not sent */
     int fdir;                         /* _FIL_STATE: 1 load, -1 unload, 0 none */
     int swap, fed;                    /* PAUSE: filament change 1, ran out 2; new filament loaded */
+    int cstep, cpass, cpasses;        /* CLEAR_CLOG: step, 0 = not running */
     double fe0, flen, fe;             /* its start and length, live extruder position */
     char smode[12];                   /* SPEED_MODE's saved choice, "" = never set */
     int mode[5][4];                   /* its modes: mm/s, accel, nozzle C, flow % */
@@ -1402,7 +1403,7 @@ static void k_poll(const char *host, int port, kstat *k) {
                  "&extruder=temperature,target&heater_bed=temperature,target"
                  "&display_status=progress,message&fan=speed&fan_generic%20chamber_fan=speed&output_pin%20light=value"
                  "&toolhead=position,homed_axes&gcode_move=speed_factor,extrude_factor,homing_origin"
-                 "&motion_report=live_position&gcode_macro%20_FIL_STATE=dir,e0,len&gcode_macro%20PAUSE=swap,fed"
+                 "&motion_report=live_position&gcode_macro%20_FIL_STATE=dir,e0,len&gcode_macro%20PAUSE=swap,fed&gcode_macro%20CLEAR_CLOG=step,pass,passes"
                  "&save_variables=variables&gcode_macro%20SPEED_MODE=modes",
                  buf, sizeof buf) != 200)
         return;
@@ -1458,6 +1459,11 @@ static void k_poll(const char *host, int port, kstat *k) {
     if ((b = jobj(buf, "gcode_macro PAUSE", &e))) {
         k->swap = (int)jnum(b, e, "swap");
         k->fed = (int)jnum(b, e, "fed");
+    }
+    if ((b = jobj(buf, "gcode_macro CLEAR_CLOG", &e))) {
+        k->cstep = (int)jnum(b, e, "step");
+        k->cpass = (int)jnum(b, e, "pass");
+        k->cpasses = (int)jnum(b, e, "passes");
     }
     if ((b = jobj(buf, "motion_report", &e))) {
         const char *v = jval(b, e, "live_position");
@@ -2919,6 +2925,28 @@ static void k_paused(const surf *s, const kstat *k) {
     ui_btn(s, 361, 632, 103, 64, "Cancel", "/printer/print/cancel", V_STOP, I_X, B_STACK | B_DNG, 0);
 }
 
+/* Q8: printer.cfg's CLEAR_CLOG holds Klipper for its whole run, so Stop has to
+ * be the emergency stop; the panel's shutdown recovery restarts Klipper. */
+static void k_clog(const surf *s, const kstat *k) {
+    static const char *const st[6] = { "Heating up.", "Working the filament up and down.", "Cooling the nozzle.",
+                                       "Pulling the plug out cold.", "Test purge." };
+    char why[32], nt[96];
+    if (k->cstep >= 6) {
+        k_stopcard(s, k, I_HEAT, "CLOG RUN FINISHED", "Did plastic come out?",
+                   "A steady strand from the nozzle means it is clear. No strand: run it again.");
+        if (k_filrun(k)) { k_filbar(s, k, 526); return; }
+        ui_btn(s, 16, 528, 448, 92, "Done", K_GS "CLEAR_CLOG_DONE", V_GO, I_PLAY, 0, 0);
+        ui_btn(s, 16, 632, 218, 64, "Run again", K_GS "CLEAR_CLOG", V_NORM, I_REDO, B_STACK | B_DNG, 0);
+        ui_btn(s, 246, 632, 218, 64, "Purge 20", K_GS "LOAD_FILAMENT%20LENGTH%3D20", V_NORM, I_HEAT, B_STACK, 0);
+        return;
+    }
+    if (k->cstep == 5) snprintf(why, sizeof why, "Last step");
+    else snprintf(why, sizeof why, "Pass %d of %d", k->cpass, k->cpasses);
+    snprintf(nt, sizeof nt, "%s Each pass takes several minutes, nothing to do here.", st[k->cstep - 1]);
+    k_stopcard(s, k, I_HEAT, "CLEARING CLOG", why, nt);
+    ui_btn(s, 16, 632, 448, 64, "Emergency stop", "/printer/emergency_stop", V_STOP, I_X, B_DNG, 0);
+}
+
 static void k_notready(const surf *s, const kstat *k) {
     char msg[200];
     if (!k->online) {
@@ -3147,6 +3175,7 @@ static void k_tools(const surf *s, const kstat *k) {
     ui_tile(s, 16, 400, I_POWER, "Motors off", busy ? "not while printing" : "frees the axes", K_GS "M84",
             B_DNG | (busy ? B_OFF : 0));
     ui_tile(s, 246, 400, I_INFO, "System", "network · versions · restart", "about", 0);
+    ui_btn(s, 16, 560, 448, 80, "Clear clog", K_GS "CLEAR_CLOG", V_NORM, I_HEAT, B_DNG | (busy ? B_OFF : 0), 0);
 }
 
 static void k_fans(const surf *s, const kstat *k) {
@@ -3394,6 +3423,7 @@ static void k_paint(const surf *s, const kstat *k, const kmenu *m, const char *e
     int paused = busy && !strcmp(k->pstate, "paused");
     int root = m->scr == K_HOME || m->scr == K_FILES || m->scr == K_HIST || m->scr == K_USB ||
                m->scr == K_HEAT || m->scr == K_TOOLS;
+    if (m->scr == K_HOME && k->cstep) t = "Clear clog";
     if (m->scr == K_HOME && busy) t = paused ? (k->swap ? "Filament" : k->dmsg[0] ? "Plate stop" : "Paused") : "Printing";
     g_nb = 0;
     fill(s, 0, 0, s->w, s->h, U_SCR);
@@ -3403,6 +3433,7 @@ static void k_paint(const surf *s, const kstat *k, const kmenu *m, const char *e
         if (!ok) k_notready(s, k);
         else if (paused) k_paused(s, k);
         else if (busy) k_printing(s, k, m);
+        else if (k->cstep) k_clog(s, k);
         else k_homeidle(s, k, m);
         break;
     case K_FILES: case K_HIST: case K_USB: k_print(s, m); break;
@@ -3642,12 +3673,15 @@ static int cmd_klipper(const char *dump, const char *hostport, const char *scree
             static int swapped;
             if (k.swap && !swapped && fork() == 0) _exit(buzz_cue(AD4_FAIL) ? 1 : 0);
             swapped = k.swap;
+            static int cleared;
+            if (k.cstep == 6 && cleared != 6 && fork() == 0) _exit(buzz_cue(AD4_FAIL) ? 1 : 0);
+            cleared = k.cstep;
 #endif
             /* a job starting, a fault, or two idle minutes: back home; TUNE
              * and OBJECTS live only during a job, MOVE only outside one */
             int ok = k.online && !strcmp(k.kstate, "ready");
             int stay = !ok ? 0 : m.scr == K_TUNE || m.scr == K_OBJS ? k_busy(&k) : m.scr == K_MOVE ? !k_busy(&k) : 1;
-            if (started && !dump) stay = 0;
+            if ((started && !dump) || k.cstep) stay = 0;
             if (m.scr == K_OBJS && stay) m.nobj = k_objs(host, port);
             if (m.scr != K_HOME && (!stay || (!dump && t - touch_t > 120000))) {
                 m.scr = K_HOME;

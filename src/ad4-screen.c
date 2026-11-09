@@ -3175,7 +3175,8 @@ static void k_tools(const surf *s, const kstat *k) {
     ui_tile(s, 16, 400, I_POWER, "Motors off", busy ? "not while printing" : "frees the axes", K_GS "M84",
             B_DNG | (busy ? B_OFF : 0));
     ui_tile(s, 246, 400, I_INFO, "System", "network · versions · restart", "about", 0);
-    ui_btn(s, 16, 560, 448, 80, "Clear clog", K_GS "CLEAR_CLOG", V_NORM, I_HEAT, B_DNG | (busy ? B_OFF : 0), 0);
+    ui_btn(s, 16, 560, 216, 80, "Clear clog", K_GS "CLEAR_CLOG", V_NORM, I_HEAT, B_DNG | (busy ? B_OFF : 0), 0);
+    ui_btn(s, 248, 560, 216, 80, access(AD4_MUTE_FILE, F_OK) ? "Sound on" : "Sound off", "mute", V_NORM, -1, 0, 0);
 }
 
 static void k_fans(const surf *s, const kstat *k) {
@@ -3547,6 +3548,10 @@ static void k_nav(const char *host, int port, kmenu *m, const btn *b) {
         if (m->padbad) m->pad[0] = 0;
         else { m->pad[n] = t[3]; m->pad[n + 1] = 0; }
         if (!strcmp(m->pad, code)) { m->scr = K_BRACE; m->pad[0] = 0; }
+    }
+    else if (!strcmp(t, "mute")) {
+        if (access(AD4_MUTE_FILE, F_OK) == 0) unlink(AD4_MUTE_FILE);
+        else close(open(AD4_MUTE_FILE, O_WRONLY | O_CREAT | O_CLOEXEC, 0644));
     }
     else if (!strcmp(t, "objs")) { m->scr = K_OBJS; m->nobj = k_objs(host, port); }
     else if (!strcmp(t, "step")) m->step = b->arg;

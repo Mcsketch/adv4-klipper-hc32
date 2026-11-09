@@ -53,6 +53,10 @@ static const ad4_note AD4_FAIL[]  = { { 784, 220 }, { 0, 120 }, { 523, 420 } };
 
 #define buzz_cue(t) buzz_play(t, sizeof(t) / sizeof((t)[0]))
 
+/* Sound off while this file exists (panel: TOOLS > Sound). Outside
+ * /opt/ad4-klipper, which an update replaces, so the choice survives one. */
+#define AD4_MUTE_FILE "/opt/ad4-mute"
+
 #ifdef __linux__
 
 #include <fcntl.h>
@@ -85,6 +89,7 @@ static void buzz_freq(int fd, unsigned hz) {
 /* Plays and always leaves the piezo silent and the device closed: a PWM left
  * started would keep screaming after this process is gone. */
 static int buzz_play(const ad4_note *notes, unsigned n) {
+    if (access(AD4_MUTE_FILE, F_OK) == 0) return 0;
     int fd = open("/dev/pwm", O_RDWR | O_CLOEXEC);
     if (fd < 0) return -1;
     ioctl(fd, PWM_IOC_INIT, 0);   /* EBUSY is normal; the notes still go through */

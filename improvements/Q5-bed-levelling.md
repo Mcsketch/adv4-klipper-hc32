@@ -66,3 +66,20 @@ table.
 
 A real probe can come later, if a manual mesh drifts too often. It would
 need a free MCU input and a mount.
+
+## Result, 2026-11-14
+
+Manual mesh with Caleb (cold nozzle, bed 55), normalised to 0 at X110 Y100,
+saved as `[bed_mesh default]` in the live config. `PRINT_START` loads it after
+`G28` when a `default` profile exists; `zero_reference_position: 110, 100`
+normalises future runs.
+
+| Y \\ X | 10 | 110 | 210 |
+|---|---|---|---|
+| 190 | -0.153 | +0.101 | +0.199 |
+| 100 | -0.203 | 0.000 | +0.098 |
+| 10 | -0.156 | +0.051 | +0.152 |
+
+Left edge low as in the stock table (-0.21 to -0.26), right side 0.1-0.2
+higher than stock: the bed tilts about 0.35 mm across X. Left: the 9-square
+first-layer plate, once the new nozzle (Q9) extrudes cleanly.

@@ -74,7 +74,7 @@ saved as `[bed_mesh default]` in the live config. `PRINT_START` loads it after
 `G28` when a `default` profile exists; `zero_reference_position: 110, 100`
 normalises future runs.
 
-| Y \\ X | 10 | 110 | 210 |
+| Y, X | 10 | 110 | 210 |
 |---|---|---|---|
 | 190 | -0.153 | +0.101 | +0.199 |
 | 100 | -0.203 | 0.000 | +0.098 |

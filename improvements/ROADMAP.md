@@ -1,24 +1,24 @@
 # Roadmap
 
-Brainstorm, 2026-11-03. Order inside each area is the suggested build order.
+Brainstorm, 2026-11-03; status reviewed 2026-11-14. Order inside each area is the suggested build order.
 "Have" lists what the printer already does, so nothing gets built twice.
 
 ## Where it stands
 
-Have: Klipper on the MCU, Moonraker 0.11 (job queue, history, object
-processing on), Mainsail, `exclude_object`, `pause_resume`, `respond`,
-`firmware_retraction`, the panel with Print / Preheat / Filament / Tools
-menus, `HOME_XYZ`, `PRINT_START` / `PRINT_END`, `LOAD_FILAMENT` /
-`UNLOAD_FILAMENT`.
+Have: Klipper on the MCU, Moonraker 0.11, Mainsail, the panel (job screen,
+tune, cancel object, history, USB files, light, sound), camera and timelapse,
+phone pushes, Home Assistant, `M600` swap, plate stops and redo, pressure
+advance 0.04, speed modes, clog clearing, Orca profiles in git.
 
-Missing that matters: no `M600`, no bed mesh in use (manual only, Q5),
-no recorded slicer choice, no pressure advance or input shaper calibration.
+Missing that matters: a trusted nozzle (Q9), a measured bed mesh (Q5),
+filament runout (Q6, hardware), input shaper (Q2). Several features are
+live but have never run in a real job (J6-J8, C4, Q7, B4, M1); see Plan.
 
 Known limits that cap everything below:
 
 | Limit | Value | Effect |
 |---|---|---|
-| Hot end flow | slips near 4.8 mm³/s | 0.2 x 0.45 mm lines top out near 53 mm/s |
+| Hot end flow | unknown until the new nozzle (Q9); was ~4.8 mm³/s | the old nozzle only printed clean near 0.6 mm³/s |
 | Speed cap (Caleb) | per speed mode: CRUSH 60, WOODY 100, BUZZ 120, MCQUEEN 150 mm/s; BRACE 280 (locked) | Q4 |
 | Z | 5 mm/s (10 stalls up), whines | known issue, HARDWARE.md |
 | SoC | V3S, ~55 MB RAM, busybox | printer-side code must be tiny C |
@@ -79,7 +79,7 @@ Decision (S1, 2026-11-03): OrcaSlicer for the AD4 and the CC2.
 |---|---|---|---|
 | B1 | Sequential (one object after another) | Used by B2. Slicer "print sequence: by object" with the AD4's real clearances: radius 60 mm measured 2026-11-04 (nozzle 30 mm from the head's left, 50 from its back); height to rod 24.93 (Orca's, below the measured ~30), both written into the preset 2026-11-05 with height to lid 250 so a profile update can't change them. CLI check: a part 24 mm tall beside a 40 mm one is placed, 26 mm is refused. Printed 2026-11-05 (B2's 3-cube plate). | done |
 | B2 | Plate stops | [B2-plate-stops.md](B2-plate-stops.md). Several parts on one plate, by object; the printer stops between them (and at chosen layers) for a filament swap or magnets, READY on the panel carries on, no plate clearing. Macros, Orca hooks, panel and notification in place 2026-11-04 (panel md5 c2ee17e3). Clearance in the preset 2026-11-04. Tested 2026-11-05 with Caleb (3 cubes: a stop with a filament swap, a layer pause, clean returns over the parts). | done |
-| B3 | Cancel one object | J7. | |
+| B3 | Cancel one object | J7. | see J7 |
 | B4 | Redo a failed part | While stopped (any pause, a plate stop, a layer pause), REDO on the stop card (two taps) runs `PLATE_REDO`: purge 20 mm, rewind the file to where the current part starts (at a between-objects stop: the part just finished), and on READY reprint it from its first layer. `PRINT_START` and `PLATE_NEXT_OBJECT` note each part's start; the replay skips the heating/homing or the stop. Clear the failed part (on the first part also the skirt) before READY. Written 2026-11-05 after a part printed with no filament; done by hand on that job (`M26`), which reprinted cube 2 fine. Live 2026-11-05 (panel md5 f3a07511). Left: test REDO on a print, mid-part and at a between-objects stop. | wip |
 
 ## 5. Multicolour without an AMS
@@ -97,19 +97,20 @@ Decision (S1, 2026-11-03): OrcaSlicer for the AD4 and the CC2.
 |---|---|---|---|
 | Q1 | Pressure advance | [Q1-pressure-advance.md](Q1-pressure-advance.md). Tuning tower job `ad4_cal_pa_tower.gcode` on Moonraker (PA 0 to 0.25 over 50 mm, 1 h 12 min); `PRINT_START` now resets PA, accel, speed and flow to printer.cfg. Printed 2026-11-04: no visible difference over the range at this printer's speeds; set 0.04 (typical direct drive). | done |
 | Q2 | Input shaper | Ringing tower, read the frequencies by eye, `[input_shaper]`. Lets accelerations go up without ringing. Low value for now: the 3 mm³/s flow cap holds walls near 36 mm/s, where ringing is small. Do after Q1 if the tower or a real print shows ringing. | ready |
-| Q3 | Max flow | The slicer's max volumetric speed test per filament; the hot end slips near 4.8 mm³/s with PLA. Above that, speed only buys you skipped extrusion. | ready |
+| Q3 | Max flow | The slicer's max volumetric speed test per filament; the hot end slips near 4.8 mm³/s with PLA. Above that, speed only buys you skipped extrusion. Superseded by Q9 `ad4_speed_ramp.gcode` on the new nozzle. | after Q9 |
 | Q4 | Lift the 60 mm/s cap | Caleb, 2026-11-05: test speeds above 60 if the printer can take them. `TEST_SPEED SPEED= ACCEL=` (printer.cfg) homes X and Y, runs diagonals, a box and a small square, re-homes; `tools/ad4-speedtest.py SPEED ACCEL` runs it through Moonraker and compares step counts (more than 1 full step = skipped). Motion passed every step to 300 mm/s at accel 5000 (0-1 microstep), so melt is the limit: 20 mm cubes in Rapid PLA+ print clean to 150 mm/s at 255 C, M221 135, accel 3000; a cube at 280 mm/s, accel 5000, 260 C needed M221 170 (180 skipped the extruder), heater at most 50 %, rough but whole. Result, 2026-11-05: `SPEED_MODE` in printer.cfg, saved across restarts: CRUSH 60 (stock), WOODY 100, BUZZ 120, MCQUEEN 150; each caps the velocity, scales the slicer's ~40 mm/s lines with M220, raises flow and nozzle, and above CRUSH replaces the slicer's accel. The first layer stays at 50 mm/s. BRACE (280 mm/s, 5000, 260 C, 170 %) is for fast prints that need neither looks nor strength: locked, it takes the Konami code on the panel's gamepad (SPEED MODE > BRACE YOURSELF) and relocks to MCQUEEN when the job ends. Panel: SPEED MODE from TOOLS or TUNE. `max_velocity` 300. Flow at 125-170 % suggests the extruder under-delivers: calibrate rotation_distance next. | done |
 | Q5 | Bed levelling | [Q5-bed-levelling.md](Q5-bed-levelling.md). The stock "auto calibration" was a manual paper test at 9 points: no sensor, nothing to buy. Klipper's `BED_MESH_CALIBRATE METHOD=manual` does the same; the unit's stock values are in the live config as `[bed_mesh stock]` (left edge ~0.25 mm low). Left: manual mesh and a first-layer test with Caleb. | wip |
 | Q6 | Filament runout | Not working. Tested 2026-11-06 on `^PB7` (live, calling `FILAMENT_SWAP KIND=2` during a job only, 5 s debounce): the pin read low under pull-up and pull-down with filament loaded and stayed low through a full unload and with the filament pulled completely out. So PB7 alone does not sense filament, although the stock firmware reads it (input, pull-down, flagged after 5000 ticks low): it may be the wrong pin, or a sensor that needs something switched on first. Nothing detects a runout today; M1 works without it. Needs another look at the stock firmware to go further. | blocked |
 | Q7 | Chamber by material | 2026-11-05: Orca passes `PRINT_START MATERIAL=[filament_type]`; the chamber fan (PB9) runs full for PLA and anything unlisted, half for PETG/PET, off for ABS, ASA, PC, PA and HIPS. `PRINT_END` and `CANCEL_PRINT` turn it off. | done, untested on a print |
-| Q8 | Clog clearing | Caleb, 2026-11-06: clear a clog without touching the printer. `CLEAR_CLOG PASSES=3 HOT=250 COLD=90` (PLA, idle only) homes if needed, parks at Z 60 or higher, then each pass heats, soaks 30 s, works the filament 8 mm up and down five times, fills the melt zone, cools with the part fan and pulls 30 mm cold with `FORCE_MOVE` (below `min_extrude_temp`). It ends by feeding back and purging 30 mm slowly. Panel: TOOLS > Clear clog, a live step screen with an emergency stop (the macro holds Klipper, nothing else can interrupt it), then a result screen: Done, Run again, Purge 20. Limits: no sensor sees flow, so you judge the strand; the plug stays on the filament's end and goes back in, so a hard clog still needs the end cut or the nozzle changed. First real run, 2026-11-06: all 3 passes finished in 16 min with no errors (cooling 250 to 90 takes about 2:35), but no plastic came out of the 60 mm purge. Cause unknown: the filament's end was not inspected, so stripped filament or a hard plug are both open. Second run, 2026-11-08, after Caleb cleared the nozzle by hand: all 3 passes finished in 13.5 min with no errors, and the final purge gave a good steady strand. Caleb is printing a flow test square to confirm. | worked on 2nd run |
+| Q8 | Clog clearing | Caleb, 2026-11-06: clear a clog without touching the printer. `CLEAR_CLOG PASSES=3 HOT=250 COLD=90` (PLA, idle only) homes if needed, parks at Z 60 or higher, then each pass heats, soaks 30 s, works the filament 8 mm up and down five times, fills the melt zone, cools with the part fan and pulls 30 mm cold with `FORCE_MOVE` (below `min_extrude_temp`). It ends by feeding back and purging 30 mm slowly. Panel: TOOLS > Clear clog, a live step screen with an emergency stop (the macro holds Klipper, nothing else can interrupt it), then a result screen: Done, Run again, Purge 20. Limits: no sensor sees flow, so you judge the strand; the plug stays on the filament's end and goes back in, so a hard clog still needs the end cut or the nozzle changed. First real run, 2026-11-06: all 3 passes finished in 16 min with no errors (cooling 250 to 90 takes about 2:35), but no plastic came out of the 60 mm purge. Cause unknown: the filament's end was not inspected, so stripped filament or a hard plug are both open. Second run, 2026-11-08, after Caleb cleared the nozzle by hand: all 3 passes finished in 13.5 min with no errors, and the final purge gave a good steady strand. The flow square then showed the nozzle fault in Q9. | done |
+| Q9 | Nozzle and real flow ceiling | 2026-11-08: choppy, stringy, low flow. Ruled out: temperature 225-255, PA, flow up to 250 %, Z (paper test right, -0.10 best), the first nozzle swap. Only 240 C at 5 mm/s (~0.6 mm³/s) printed clean. A 240 nozzle test aborted (power loss); the 260 nozzle is back on. Caleb is buying a new nozzle. Then run `ad4_speed_ramp.gcode` (220 C, 5/10/15/20/30 mm/s patches, offset -0.10): the first bad patch is the flow ceiling. Check that the heatsink fan spins and the extruder does not click. | waiting on nozzle |
 
 ## 7. Panel and menus
 
 | ID | Item | Approach | Status |
 |---|---|---|---|
-| P1 | Job screen and tune | J5, J6, J7. | |
-| P2 | Swap screen | M1. | |
+| P1 | Job screen and tune | J5, J6, J7. | see J5-J7 |
+| P2 | Swap screen | M1. | see M1 |
 | P3 | Queue and history | On the panel 2026-11-05 (md5 1d92edcf): HISTORY beside PRINT on the home screen lists the last 5 jobs (since P7, History under the Print tab) from Moonraker's history: thumbnail, name, DONE / CANCELLED / FAILED, printed time, when, filament m and g. Two taps on a job print it again; a deleted file is shown dim and cannot. Left: a queue (Moonraker's job queue) if ever wanted. | done |
 | P4 | Light toggle | Installed 2026-11-03: TOOLS has a LIGHT button between BACK and ABOUT that cycles off, on, 30 % (`SET_PIN PIN=light`) and shows the current value; it is hidden if printer.cfg has no `[output_pin light]`. The camera needs no toggle: `ad4-cam` only opens it while someone watches. Caleb confirmed it on the printer 2026-11-03. | done |
 | P5 | Settings | Network (IP, link, Tailscale name of the host), screen brightness and sleep, buzzer volume, units. Sound on/off done 2026-11-08: TOOLS > Sound toggles `/opt/ad4-mute` (outside the update-replaced dir), which every cue (taps, jingle, boot, alerts) checks. | idea |
@@ -123,11 +124,24 @@ Decision (S1, 2026-11-03): OrcaSlicer for the AD4 and the CC2.
 | X1 | Home Assistant | Moonraker integration: state, progress, camera, light, notifications. On Caleb's hub 2026-11-03 (homeserver repo, not this one): an HA REST sensor polls Moonraker for state, progress, temps, file and time left; `ad4-notify.service` pushes job events to the phone. 2026-11-04: `camera.ad4_camera` (MJPEG integration on ad4-cam's `/stream` and `/snapshot`) and `light.ad4_light` (template light; `rest_command` runs `SET_PIN PIN=light`, value clamped 0-1). | done |
 | X2 | Spoolman | Filament inventory; ties to the MaterialCost rates in FreeCAD so job cost and remaining spool stay right. | idea |
 
-## Suggested first steps
+## Plan (2026-11-14)
 
-1. S1 done (OrcaSlicer). S2: the Orca profile bundle (everything in J and M builds on its output).
-2. J1-J5: job info on the panel. J2, J3, J5 done on a real print (time 1.2 % off); J4 left: thumbnails in the Print list rows.
-3. C1-C3, C5, P4 done: camera, light, panel light button.
-4. M4 done: phone pushes for start, pause, done, failure.
-5. J6, J7: tune and cancel one object from the panel during a job.
-6. M1 with Q6: filament swap and runout share one flow (deferred by Caleb 2026-11-03).
+Most of what is built has never run in a real job. Order:
+
+1. **Q9 new nozzle**: fit it, run `ad4_speed_ramp.gcode`, record the flow
+   ceiling here and in the Orca filament profile (max volumetric speed).
+   Everything below needs extrusion you can trust.
+2. **Q5 bed mesh**: `BED_MESH_CALIBRATE METHOD=manual` with Caleb (the stock
+   mesh has the left edge ~0.25 mm low), then one first-layer square per
+   corner. Two-object plates reach the edges.
+3. **S2 close**: slice one two-object plate in the Orca GUI on the ASRock;
+   check thumbnails (J4), klipper_estimator time and `MATERIAL=` reach Moonraker.
+4. **Validation print** of that plate, watched: TUNE speed and flow once (J6),
+   cancel one object (J7), end card (J8), timelapse frames (C4), chamber fan
+   for PLA (Q7). One job closes five items.
+5. **M1** `ad4_m600_test.gcode`, then **M2**: a real two-colour layer change
+   from Orca. **B4**: a plate-stop job with one REDO.
+6. **Q2** input shaper ringing tower, then **S3** per-filament calibration;
+   only then raise speed modes in real jobs (Q4 tests stay Caleb-present).
+7. Parked: Q6 (runout pin dead, needs wiring check), P5 settings, J9, C6,
+   S4, X2, M3.
